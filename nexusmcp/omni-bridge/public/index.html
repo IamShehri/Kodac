@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OmniBridge — Compliance-Gated MCP Gateway for Regulated Industries</title>
+  <meta name="description" content="Production-ready MCP server gateway with HIPAA audit logs, OAuth2/SAML auth, rate limiting, and FHIR R4 integration. Self-host or buy managed hosting." />
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --surface: #111827;
+      --border: #1f2937;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #10b981;
+      --accent-2: #6366f1;
+      --danger: #ef4444;
+      --warn: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif; line-height: 1.6; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+    header { border-bottom: 1px solid var(--border); padding: 16px 0; position: sticky; top: 0; background: rgba(11,15,25,.8); backdrop-filter: blur(8px); z-index: 10; }
+    header nav { display: flex; justify-content: space-between; align-items: center; }
+    .logo { font-weight: 700; font-size: 18px; letter-spacing: -0.02em; }
+    .logo span { color: var(--accent); }
+    nav a { color: var(--muted); font-size: 14px; margin-left: 20px; }
+    nav a:hover { color: var(--text); }
+    .cta-small { background: var(--accent); color: #000; padding: 6px 14px; border-radius: 6px; font-weight: 600; font-size: 13px; }
+    .cta-small:hover { text-decoration: none; background: #34d399; }
+    .hero { padding: 80px 0 60px; border-bottom: 1px solid var(--border); }
+    .hero h1 { font-size: clamp(28px, 4vw, 52px); line-height: 1.1; letter-spacing: -0.03em; font-weight: 800; }
+    .hero h1 .highlight { background: linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero p { color: var(--muted); font-size: 18px; max-width: 640px; margin: 20px 0; }
+    .hero-cta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
+    .btn { display: inline-block; padding: 12px 22px; border-radius: 8px; font-weight: 600; font-size: 14px; }
+    .btn-primary { background: var(--accent); color: #000; }
+    .btn-primary:hover { background: #34d399; text-decoration: none; }
+    .btn-secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: var(--surface); text-decoration: none; }
+    .section { padding: 60px 0; border-bottom: 1px solid var(--border); }
+    .section h2 { font-size: 26px; font-weight: 700; margin-bottom: 10px; letter-spacing: -0.02em; }
+    .section .subtitle { color: var(--muted); font-size: 15px; max-width: 640px; margin-bottom: 30px; }
+    .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 22px; }
+    .card h3 { font-size: 15px; margin-bottom: 6px; font-weight: 600; }
+    .card p { color: var(--muted); font-size: 13px; }
+    .code { background: #0d1117; border: 1px solid #1f2937; border-radius: 8px; padding: 16px; overflow-x: auto; font-family: ui-monospace, Menlo, monospace; font-size: 13px; line-height: 1.6; color: #e5e7eb; }
+    .code .tag { color: #ff7b72; }
+    .code .attr { color: #79c0ff; }
+    .code .str { color: #a5d6ff; }
+    .section-dark { background: #0a0e17; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+    td { padding: 12px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+    .badge-hipaa { background: rgba(16,185,129,.15); color: var(--accent); }
+    .badge-saml { background: rgba(99,102,241,.15); color: var(--accent-2); }
+    footer { padding: 30px 0; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <nav>
+        <div class="logo">Omni<span>Bridge</span></div>
+        <a href="#features">Features</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#docs">Docs</a>
+        <a href="#launch" class="cta-small">Get Early Access</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="container">
+      <h1>Compliance-gated <span class="highlight">MCP gateway</span><br/>for regulated industries.</h1>
+      <p>Ship AI agents on top of healthcare, legal, and financial data — without building your own HIPAA audit logs, OAuth2 auth, or rate limiting from scratch.</p>
+      <div class="hero-cta">
+        <a href="#docs" class="btn btn-primary">Read the Docs</a>
+        <a href="https://github.com" class="btn btn-secondary">View on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="features">
+    <div class="container">
+      <h2>Why teams choose OmniBridge</h2>
+      <p class="subtitle">Most MCP servers are demos. OmniBridge is infrastructure built for production in regulated environments.</p>
+      <div class="grid">
+        <div class="card">
+          <h3>🔒 HIPAA-Ready Audit Logs</h3>
+          <p>Immutable S3 audit trails with 7-year retention, PII redaction, and export endpoints for compliance officers.</p>
+        </div>
+        <div class="card">
+          <h3>🔐 OAuth2 + SAML + SSO</h3>
+          <p>Drop-in enterprise auth. PKCE flows, SAML 2.0 proxy, and JWT session management out of the box.</p>
+        </div>
+        <div class="card">
+          <h3>📊 Rate Limiting + Cost Control</h3>
+          <p>Per-tenant request quotas via Redis or memory. Prevent runaway agent spend. Export usage metrics.</p>
+        </div>
+        <div class="card">
+          <h3>🏥 FHIR R4 First-Class</h3>
+          <p>FHIR search, read, create, validate, and capability statement — exposed as typed MCP tools with schema validation.</p>
+        </div>
+        <div class="card">
+          <h3>🧪 Sandbox Mode</h3>
+          <p>Mock FHIR responses for development without touching production data. Zero-config dev environment.</p>
+        </div>
+        <div class="card">
+          <h3>📦 Self-Host or Managed</h3>
+          <p>MIT-licensed core. Run it yourself or let us host it — same code, different support tiers.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-dark" id="architecture">
+    <div class="container">
+      <h2>Architecture</h2>
+      <p class="subtitle">A minimal, auditable request path from HTTP to FHIR and back.</p>
+      <div class="code">
+<span class="tag">Client Agent</span>
+  ──► <span class="tag">HTTPS</span> /mcp/v1
+         │
+  ┌──────▼────────────────────┐
+  │ <span class="attr">Fastify Gateway</span>       │
+  │  - CORS + TLS             │
+  │  - OAuth2 / SAML auth     │
+  │  - Per-tenant rate limit  │
+  │  - PII redaction          │
+  └──────┬────────────────────┘
+         │
+  ┌──────▼────────────────────┐
+  │ <span class="attr">MCP Server Core</span>       │
+  │  - Tool definitions       │
+  │  - Zod parameter schema   │
+  │  - FHIR client wrapper    │
+  └──────┬────────────────────┘
+         │
+  ┌──────▼────────────────────┐
+  │ <span class="attr">FHIR Backend</span>          │
+  │  - Customer's HAPI FHIR  │
+  │  - Cloud FHIR (AWS/GCP)  │
+  │  - Or OmniBridge sandbox │
+  └──────────────────────────┘
+         │
+  ┌──────▼────────────────────┐
+  │ <span class="attr">Audit Sink</span>            │
+  │  - Console (dev)          │
+  │  - S3 immutable bucket    │
+  │  - 7-year object lock     │
+  └──────────────────────────┘
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="pricing">
+    <div class="container">
+      <h2>Pricing</h2>
+      <p class="subtitle">Self-host for free. Pay for managed hosting, support, and compliance guarantees.</p>
+      <div style="overflow-x: auto;">
+        <table>
+          <thead>
+            <tr><th>Tier</th><th>Price</th><th>Target</th><th>What's included</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Open Source</strong></td>
+              <td>Free</td>
+              <td>Devs, researchers</td>
+              <td>MIT license, full source, community support</td>
+            </tr>
+            <tr>
+              <td><strong><span class="badge badge-hipaa">Developer</span></strong></td>
+              <td>$99/mo</td>
+              <td>Healthtech AI startups</td>
+              <td>Managed hosting, 5 FHIR resources, basic audit, email support</td>
+            </tr>
+            <tr>
+              <td><strong><span class="badge badge-saml">Production</span></strong></td>
+              <td>$399/mo</td>
+              <td>Series A/B startups</td>
+              <td>All FHIR resources, OAuth + SAML, audit export, 99.5% SLA, Slack support</td>
+            </tr>
+            <tr>
+              <td><strong>Enterprise</strong></td>
+              <td>Custom ($1,500+/mo)</td>
+              <td>Health systems, large vendors</td>
+              <td>BAAs, custom FHIR profiles, 99.9% SLA, priority support, compliance audit, custom onboarding</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top: 14px; color: var(--muted); font-size: 13px;">All paid tiers include SOC 2 Type II audit-ready infrastructure. HIPAA BAA available for Production and Enterprise. Annual billing gives 2 months free.</p>
+    </div>
+  </section>
+
+  <section class="section section-dark" id="docs">
+    <div class="container">
+      <h2>Quick Start</h2>
+      <p class="subtitle">Get a FHIR MCP server running in under 5 minutes.</p>
+      <div class="code">
+<span class="tag"># Clone the repo</span>
+git clone https://github.com/omni-bridge/omni-bridge.git
+cd omni-bridge
+
+<span class="tag"># Install dependencies</span>
+npm install
+
+<span class="tag"># Configure for your FHIR backend</span>
+cp .env.example .env
+<span class="tag"># Edit .env with your FHIR_BASE_URL</span>
+
+<span class="tag"># Start in mock-auth mode (no real OAuth needed)</span>
+AUTH_PROVIDER=mock npm run dev
+
+<span class="tag"># Or build and run production</span>
+npm run build && npm start
+      </div>
+      <p style="margin-top: 14px; color: var(--muted); font-size: 14px;">
+        Docs: <a href="/docs">/docs</a> · Spec: <a href="/schema">/schema</a> · GitHub: <a href="https://github.com">github.com/omni-bridge/omni-bridge</a>
+      </p>
+    </div>
+  </section>
+
+  <section class="section" id="launch">
+    <div class="container">
+      <h2>Get Early Access</h2>
+      <p class="subtitle">We're launching with 10 Founding Customer slots at $99/month for life. Includes onboarding and custom integration support.</p>
+      <div class="grid">
+        <div class="card">
+          <h3>For Healthtech AI Founders</h3>
+          <p>Building an AI agent on FHIR data? We'll set up your compliant MCP gateway and have you querying in 48 hours.</p>
+          <a href="mailto:founding@omnibridge.dev" class="btn btn-primary" style="display:inline-block;margin-top:14px;">Claim Founding Slot</a>
+        </div>
+        <div class="card">
+          <h3>For Developers</h3>
+          <p>MIT-licensed. Self-host now. Star us on GitHub. We'll keep you posted on managed hosting launch.</p>
+          <a href="https://github.com" class="btn btn-secondary" style="display:inline-block;margin-top:14px;">Star on GitHub</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      © 2025 OmniBridge. Open source under MIT. Managed hosting operated separately.
+    </div>
+  </footer>
+</body>
+</html>

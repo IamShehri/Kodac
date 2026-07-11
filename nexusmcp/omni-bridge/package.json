@@ -1,0 +1,55 @@
+{
+  "name": "omni-bridge",
+  "version": "0.1.0",
+  "description": "Compliance-gated MCP server gateway for regulated industries — FHIR R4 integration, HIPAA-ready audit, OAuth2/SAML auth",
+  "main": "dist/gateway/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/gateway/index.ts",
+    "build": "tsc",
+    "start": "node dist/gateway/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/**/*.ts",
+    "typecheck": "tsc --noEmit",
+    "mcp:stdio": "tsx src/mcp/fhir-server.ts",
+    "mcp:sse": "tsx src/mcp/sse-server.ts",
+    "audit:export": "tsx scripts/export-audit-logs.ts",
+    "health": "tsx scripts/health-check.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.1",
+    "express": "^4.21.0",
+    "fastify": "^5.2.0",
+    "@fastify/cors": "^10.0.0",
+    "@fastify/rate-limit": "^9.0.0",
+    "@fastify/jwt": "^8.0.0",
+    "zod": "^3.24.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0",
+    "@aws-sdk/client-s3": "^3.750.0",
+    "@aws-sdk/s3-request-presigner": "^3.750.0",
+    "ioredis": "^5.4.0",
+    "openid-client": "^6.0.0",
+    "@simplewebauthn/server": "^11.0.0",
+    "jose": "^6.0.0",
+    "node-fetch": "^3.3.2",
+    "zod-to-json-schema": "^3.24.0",
+    "p-retry": "^6.2.0",
+    "prom-client": "^15.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+
+    "@typescript-eslint/eslint-plugin": "^8.13.0",
+    "@typescript-eslint/parser": "^8.13.0",
+    "eslint": "^9.16.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0",
+    "@vitest/coverage-v8": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

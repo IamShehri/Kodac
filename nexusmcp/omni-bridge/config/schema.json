@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OmniBridge Configuration",
+  "type": "object",
+  "required": ["environment", "compliance", "auth", "fhir", "rateLimit"],
+  "properties": {
+    "environment": {
+      "type": "string",
+      "enum": ["development", "staging", "production"],
+      "description": "Runtime environment — controls logging verbosity, auth strictness, cache TTLs, and error detail exposure."
+    },
+    "compliance": {
+      "type": "object",
+      "required": ["mode", "auditSink", "piiRedaction"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["strict", "lenient", "off"],
+          "description": "'strict' = all audit logging + PII redaction + immutable retention; 'lenient' = console audit, no redaction; 'off' = dev only."
+        },
+        "auditSink": {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": { "type": "string", "enum": ["console", "s3"] },
+            "s3Bucket": { "type": "string" },
+            "s3Prefix": { "type": "string", "default": "omni-bridge/audit-logs" }
+          }
+        },
+        "piiRedaction": { "type": "boolean", "default": true },
+        "immutableRetentionDays": { "type": "integer", "default": 2555, "description": "7 years for HIPAA" }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "required": ["provider", "jwtSecret"],
+      "properties": {
+        "provider": { "type": "string", "enum": ["oauth2", "saml", "mock"] },
+        "issuer": { "type": "string" },
+        "clientId": { "type": "string" },
+        "clientSecret": { "type": "string" },
+        "samlEntryPoint": { "type": "string" },
+        "samlCert": { "type": "string" },
+        "mockUsers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "tenantId": { "type": "string" },
+              "userId": { "type": "string" },
+              "scopes": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "default": [{"tenantId":"default","userId":"dev_user","scopes":["fhir:read","fhir:write"]}]
+        }
+      }
+    },
+    "fhir": {
+      "type": "object",
+      "required": ["baseUrl"],
+      "properties": {
+        "baseUrl": { "type": "string", "format": "uri", "description": "FHIR server base URL (e.g., https://hapi.fhir.org/baseR4)" },
+        "timeoutMs": { "type": "integer", "default": 30000 },
+        "sandboxMode": { "type": "boolean", "default": false, "description": "Returns mock FHIR responses without hitting upstream" }
+      }
+    },
+    "rateLimit": {
+      "type": "object",
+      "required": ["windowMs", "max"],
+      "properties": {
+        "windowMs": { "type": "integer", "default": 60000 },
+        "max": { "type": "integer", "default": 120 }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "properties": {
+        "transport": { "type": "string", "enum": ["stdio", "sse", "http"], "default": "http" },
+        "httpPath": { "type": "string", "default": "/mcp/v1" },
+        "sandboxEnabled": { "type": "boolean", "default": true }
+      }
+    }
+  }
+}
