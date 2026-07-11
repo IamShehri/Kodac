@@ -1,5 +1,5 @@
 {
-  "name": "omni-bridge",
+  "name": "kernux",
   "version": "0.1.0",
   "description": "Compliance-gated MCP server gateway for regulated industries — FHIR R4 integration, HIPAA-ready audit, OAuth2/SAML auth",
   "main": "dist/gateway/index.js",
