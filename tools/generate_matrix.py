@@ -3,6 +3,9 @@
 Reads canonical YAML profiles, validates them, and emits a stable
 matrix/AGENT_MATRIX.md. No timestamps, no network, no overall score.
 
+Every factual cell visibly exposes claim status, so a change from verified to
+vendor-reported changes the matrix bytes.
+
 Modes:
   default              write matrix/AGENT_MATRIX.md
   --check              fail (exit 1) if committed matrix differs from regenerated
@@ -20,7 +23,6 @@ from tools.profile_io import REPO_ROOT, ProfileFile
 
 MATRIX_PATH = REPO_ROOT / "matrix" / "AGENT_MATRIX.md"
 
-# Stable column order.
 COLUMNS: tuple[tuple[str, str], ...] = (
     ("name", "Agent"),
     ("tracks", "Track(s)"),
@@ -42,20 +44,24 @@ GENERATED_NOTICE = (
 LEGEND = """\
 ## Legend
 
-- **Source availability** — whether the agent's source code is openly available.
-- **Surfaces** — where the agent runs: terminal (TUI), IDE, web, desktop, async, or headless-server.
-- **Local-model status** — `supported` / `partial` / `unsupported` / `unknown`.
-- **MCP / Headless/CI status** — same tri-state vocabulary.
-- **Evidence status**:
-  - `verified` — independently confirmed with evidence.
-  - `partial` — some fields verified, others unknown or vendor-reported.
-  - `vendor-reported-only` — all factual fields are vendor-reported.
-  - `unknown` — no evidence has been established yet.
-- **Last verified** — the most recent source-check date across the profile's fields.
-- `unknown` and `stale` are **different** states. `unknown` means no source found;
-  `stale` means a previously-verified source is past its freshness window (surfaced
-  in the matrix as a `STALE` marker on the affected value). This matrix renders
-  `unknown` literally; stale values are suffixed with ` (STALE)`.
+Each factual cell is rendered as `value \u00b7 claim_status` (for example
+`supported \u00b7 vendor-reported` or `MIT \u00b7 verified`). `unknown` renders plainly
+as `unknown` (no claim-status suffix). Values past their freshness window are
+suffixed `\u00b7 STALE`.
+
+- **Source availability** \u2014 whether the agent's source code is openly available.
+- **Surfaces** \u2014 where the agent runs: terminal (TUI), IDE, web, desktop, async, or headless-server.
+- **Local-model / MCP / Headless/CI status** \u2014 `supported` / `partial` / `unsupported` / `unknown`.
+- **claim_status**:
+  - `verified` \u2014 established from a directly inspectable artifact (repository, LICENSE, release metadata) or independent execution.
+  - `vendor-reported` \u2014 a direct claim from official documentation, vendor website, or marketing; not independently reproduced.
+  - `unknown` \u2014 no acceptable direct source; absence of documentation is not a vendor claim.
+- **Evidence status** (derived):
+  - `verified` \u2014 all factual fields verified.
+  - `vendor-reported-only` \u2014 all non-unknown fields vendor-reported, none verified.
+  - `partial` \u2014 a mixture of verified, vendor-reported, and/or unknown.
+  - `unknown` \u2014 no non-unknown factual values.
+- **Last verified** (derived) \u2014 the maximum verification date among sourced non-unknown factual fields.
 
 No overall "Kernux Score" is computed or shown. Kernux is complementary to
 SWE-bench and other academic benchmarks; this matrix is **not** a benchmark.
@@ -63,16 +69,9 @@ SWE-bench and other academic benchmarks; this matrix is **not** a benchmark.
 
 
 def _tri(value: Any) -> str:
-    """Render a tri-state capability value."""
     if value in (None, "unknown"):
         return "unknown"
     return str(value)
-
-
-def _field_value(profile: dict[str, Any], block: str, field: str) -> Any:
-    block_data = profile.get(block, {}) or {}
-    fv = block_data.get(field, {}) or {}
-    return fv.get("value")
 
 
 def _render_list(values: Any) -> str:
@@ -87,8 +86,18 @@ def _render_list(values: Any) -> str:
 
 def _stale_suffix(field_value: dict[str, Any], *, evaluation_date: _dt.date) -> str:
     if profile_io.field_is_stale(field_value, evaluation_date=evaluation_date):
-        return " (STALE)"
+        return " \u00b7 STALE"
     return ""
+
+
+def _cell_with_claim(
+    field_value: dict[str, Any], *, render_value: str, evaluation_date: _dt.date
+) -> str:
+    if profile_io.field_is_unknown(field_value):
+        return "unknown"
+    cs = field_value.get("claim_status", "unknown")
+    stale = _stale_suffix(field_value, evaluation_date=evaluation_date)
+    return f"{render_value} \u00b7 {cs}{stale}"
 
 
 def _cell_for(profile: dict[str, Any], key: str, *, evaluation_date: _dt.date) -> str:
@@ -98,36 +107,45 @@ def _cell_for(profile: dict[str, Any], key: str, *, evaluation_date: _dt.date) -
         tracks = profile.get("tracks", []) or []
         return ", ".join(tracks) if tracks else "unknown"
     if key == "last_verified":
-        return str((profile.get("evidence", {}) or {}).get("last_verified", "unknown"))
+        return profile_io.derive_last_verified(profile)
     if key == "evidence_status":
-        return str((profile.get("evidence", {}) or {}).get("evidence_status", "unknown"))
+        return profile_io.derive_evidence_status(profile)
     if key == "open_source":
         block = (profile.get("openness", {}) or {}).get("open_source", {}) or {}
-        return _tri(block.get("value")) + _stale_suffix(block, evaluation_date=evaluation_date)
+        return _cell_with_claim(
+            block, render_value=_tri(block.get("value")), evaluation_date=evaluation_date
+        )
     if key == "license":
         block = (profile.get("openness", {}) or {}).get("license", {}) or {}
-        return str(block.get("value", "unknown")) + _stale_suffix(
-            block, evaluation_date=evaluation_date
+        return _cell_with_claim(
+            block,
+            render_value=str(block.get("value", "unknown")),
+            evaluation_date=evaluation_date,
         )
     if key == "surfaces":
         block = (profile.get("compatibility", {}) or {}).get("surfaces", {}) or {}
-        return _render_list(block.get("value")) + _stale_suffix(
-            block, evaluation_date=evaluation_date
+        return _cell_with_claim(
+            block, render_value=_render_list(block.get("value")), evaluation_date=evaluation_date
         )
     if key == "local_model_support":
         block = (profile.get("compatibility", {}) or {}).get("local_model_support", {}) or {}
-        return _tri(block.get("value")) + _stale_suffix(block, evaluation_date=evaluation_date)
+        return _cell_with_claim(
+            block, render_value=_tri(block.get("value")), evaluation_date=evaluation_date
+        )
     if key == "mcp_support":
         block = (profile.get("protocols", {}) or {}).get("mcp_support", {}) or {}
-        return _tri(block.get("value")) + _stale_suffix(block, evaluation_date=evaluation_date)
+        return _cell_with_claim(
+            block, render_value=_tri(block.get("value")), evaluation_date=evaluation_date
+        )
     if key == "headless_or_ci":
         block = (profile.get("protocols", {}) or {}).get("headless_or_ci", {}) or {}
-        return _tri(block.get("value")) + _stale_suffix(block, evaluation_date=evaluation_date)
+        return _cell_with_claim(
+            block, render_value=_tri(block.get("value")), evaluation_date=evaluation_date
+        )
     return "unknown"
 
 
 def render_matrix(profiles: list[ProfileFile], *, evaluation_date: _dt.date) -> str:
-    """Render the full Markdown matrix text (deterministic)."""
     sorted_profiles = sorted(profiles, key=lambda p: p.agent_id)
 
     lines: list[str] = []
@@ -136,19 +154,17 @@ def render_matrix(profiles: list[ProfileFile], *, evaluation_date: _dt.date) -> 
     lines.append(GENERATED_NOTICE.rstrip("\n"))
     lines.append(
         "Comparison of profiled AI coding agents. Every factual cell traces to a "
-        "source record in the agent's profile. This matrix is a decision aid, not a "
-        "ranking — there is no overall score."
+        "source record in the agent's profile and is labeled with its claim status. "
+        "This matrix is a decision aid, not a ranking \u2014 there is no overall score."
     )
     lines.append("")
 
-    # Table header.
     header_cells = [display for _, display in COLUMNS]
     lines.append("| " + " | ".join(header_cells) + " |")
     lines.append("|" + "|".join(["---"] * len(COLUMNS)) + "|")
 
     for p in sorted_profiles:
         cells = [_cell_for(p.data, key, evaluation_date=evaluation_date) for key, _ in COLUMNS]
-        # Escape pipes in cell text.
         cells = [c.replace("|", "/").replace("\n", " ") for c in cells]
         lines.append("| " + " | ".join(cells) + " |")
 
@@ -156,7 +172,6 @@ def render_matrix(profiles: list[ProfileFile], *, evaluation_date: _dt.date) -> 
     lines.append(LEGEND.rstrip("\n"))
     lines.append("")
 
-    # Profile count note — deterministic, no timestamps.
     lines.append(
         f"_{len(sorted_profiles)} profile(s) included. Phase 1 of Kernux: the matrix "
         "grows as profiles are added and verified._"
@@ -166,7 +181,6 @@ def render_matrix(profiles: list[ProfileFile], *, evaluation_date: _dt.date) -> 
 
 
 def generate(*, evaluation_date: _dt.date, profiles: list[ProfileFile] | None = None) -> str:
-    """Validate profiles, then render the matrix. Raises if profiles are invalid."""
     if profiles is None:
         profiles = profile_io.discover_profiles()
     errors = validate_profiles.validate_all(evaluation_date=evaluation_date, profiles=profiles)
@@ -183,11 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="tools.generate_matrix",
         description="Generate the deterministic Kernux agent matrix.",
     )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="fail if the committed matrix differs from regenerated output",
-    )
+    parser.add_argument("--check", action="store_true")
     parser.add_argument(
         "--evaluation-date",
         type=str,

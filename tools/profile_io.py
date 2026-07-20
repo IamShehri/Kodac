@@ -8,7 +8,6 @@ No network access.
 from __future__ import annotations
 
 import datetime as _dt
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,14 +16,9 @@ import yaml
 
 
 class _NoDateSafeLoader(yaml.SafeLoader):
-    """YAML loader that does NOT auto-convert ISO date strings into date objects.
-
-    Profile dates are canonical strings (YYYY-MM-DD); they must remain strings
-    so JSON Schema's `format: date` and our custom checks see them as strings.
-    """
+    """YAML loader that does NOT auto-convert ISO date strings into date objects."""
 
 
-# No date/time constructors registered -> dates stay as raw strings.
 _NoDateSafeLoader.yaml_implicit_resolvers = {
     k: [r for r in v if r[0] != "tag:yaml.org,2002:timestamp"]
     for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()
@@ -39,19 +33,49 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = REPO_ROOT / "schema" / "agent-profile.schema.json"
 AGENTS_DIR = REPO_ROOT / "agents"
 
-# Freshness windows in days, per ratified policy (FOUNDER_DECISIONS.md).
 FRESHNESS_WINDOWS_DAYS: dict[int, int] = {1: 30, 2: 90, 3: 180}
+
+# Ratified field-specific freshness classes (FOUNDER_DECISIONS.md).
+# Class 1 (30d): cost, retention, versions, models, tiers.
+# Class 2 (90d): compatibility, protocols, security, telemetry, opt_out, capabilities.
+# Class 3 (180d): identity, openness.
+FIELD_FRESHNESS_CLASS: dict[str, int] = {}
+for _f in ("pricing_model", "free_tier"):
+    FIELD_FRESHNESS_CLASS[f"cost.{_f}"] = 1
+FIELD_FRESHNESS_CLASS["privacy.data_retention"] = 1
+for _f in ("current_versions", "available_models", "subscription_or_api_tiers"):
+    FIELD_FRESHNESS_CLASS[f"model_and_tier.{_f}"] = 1
+for _f in (
+    "operating_systems",
+    "surfaces",
+    "supported_providers",
+    "local_model_support",
+    "ide_integrations",
+):
+    FIELD_FRESHNESS_CLASS[f"compatibility.{_f}"] = 2
+for _f in ("mcp_support", "agent_skills_support", "headless_or_ci"):
+    FIELD_FRESHNESS_CLASS[f"protocols.{_f}"] = 2
+for _f in ("sandboxing_model", "permission_controls"):
+    FIELD_FRESHNESS_CLASS[f"security.{_f}"] = 2
+FIELD_FRESHNESS_CLASS["privacy.telemetry_behavior"] = 2
+FIELD_FRESHNESS_CLASS["privacy.opt_out"] = 2
+for _f in ("repo_scale_context", "session_persistence", "subagent_support"):
+    FIELD_FRESHNESS_CLASS[f"capabilities.{_f}"] = 2
+for _f in ("vendor_or_maintainer", "official_url", "source_repository"):
+    FIELD_FRESHNESS_CLASS[f"identity.{_f}"] = 3
+for _f in ("open_source", "license"):
+    FIELD_FRESHNESS_CLASS[f"openness.{_f}"] = 3
 
 
 def load_schema() -> dict[str, Any]:
-    """Load the agent-profile JSON Schema from disk."""
     return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+import json  # noqa: E402  (placed after SCHEMA_PATH for readability)
 
 
 @dataclass(frozen=True)
 class ProfileFile:
-    """A loaded profile and its on-disk context."""
-
     path: Path
     data: dict[str, Any]
     agent_id: str
@@ -62,7 +86,6 @@ class ProfileFile:
 
 
 def discover_profiles() -> list[ProfileFile]:
-    """Discover all agents/<id>/profile.yaml files, sorted by agent id."""
     profiles: list[ProfileFile] = []
     if not AGENTS_DIR.is_dir():
         return profiles
@@ -78,7 +101,6 @@ def discover_profiles() -> list[ProfileFile]:
 
 
 def load_profile_by_id(agent_id: str) -> ProfileFile:
-    """Load a single profile by agent id."""
     path = AGENTS_DIR / agent_id / "profile.yaml"
     if not path.is_file():
         raise FileNotFoundError(f"No profile at {path}")
@@ -87,21 +109,15 @@ def load_profile_by_id(agent_id: str) -> ProfileFile:
 
 
 def parse_iso_date(value: str) -> _dt.date:
-    """Parse an ISO 8601 date (YYYY-MM-DD). Raises ValueError on invalid input."""
     return _dt.date.fromisoformat(value)
 
 
 def field_is_unknown(field_value: dict[str, Any]) -> bool:
-    """True if a field's value is the explicit unknown state."""
     v = field_value.get("value")
     return v == "unknown"
 
 
 def field_is_stale(field_value: dict[str, Any], *, evaluation_date: _dt.date) -> bool:
-    """True if a previously-verified field is past its freshness window.
-
-    A field with value 'unknown' is NOT stale (unknown and stale are distinct).
-    """
     if field_is_unknown(field_value):
         return False
     verified = field_value.get("verified")
@@ -119,16 +135,9 @@ def field_is_stale(field_value: dict[str, Any], *, evaluation_date: _dt.date) ->
 
 
 def iter_factual_fields(profile: dict[str, Any]):
-    """Yield (dotted_path, field_value_dict) for every factual field in a profile.
-
-    Walks the known object-valued blocks and their declared field properties.
-    """
+    """Yield (dotted_path, field_value_dict) for every factual field in a profile."""
     field_blocks = {
-        "identity": [
-            "vendor_or_maintainer",
-            "official_url",
-            "source_repository",
-        ],
+        "identity": ["vendor_or_maintainer", "official_url", "source_repository"],
         "openness": ["open_source", "license"],
         "compatibility": [
             "operating_systems",
@@ -156,3 +165,64 @@ def iter_factual_fields(profile: dict[str, Any]):
             fv = block.get(field_name)
             if isinstance(fv, dict):
                 yield f"{block_name}.{field_name}", fv
+
+
+# ---------------------------------------------------------------------------
+# Derived evidence summaries (mechanical, never authored).
+# ---------------------------------------------------------------------------
+
+
+def derive_evidence_status(profile: dict[str, Any]) -> str:
+    """Derive the profile-level evidence status from field-level claim_status values.
+
+    Priority order (from the ratified spec):
+    1. no non-unknown factual values -> unknown
+    2. all non-unknown fields vendor-reported and no verified -> vendor-reported-only
+    3. all factual values verified with no unknown/vendor/disputed -> verified
+    4. any mixture, unknown, or dispute -> partial
+    """
+    statuses: list[str] = []
+    for _path, fv in iter_factual_fields(profile):
+        v = fv.get("value")
+        if v == "unknown":
+            statuses.append("unknown")
+        else:
+            statuses.append(fv.get("claim_status", "unknown"))
+
+    if not statuses:
+        return "unknown"
+
+    non_unknown = [s for s in statuses if s != "unknown"]
+    if not non_unknown:
+        return "unknown"
+
+    has_verified = any(s == "verified" for s in non_unknown)
+    has_vendor = any(s == "vendor-reported" for s in non_unknown)
+    has_unknown = any(s == "unknown" for s in statuses)
+    has_disputed = any(s == "disputed" for s in non_unknown)
+
+    # Rule 3: all verified, no unknown/vendor/disputed.
+    if has_verified and not has_vendor and not has_unknown and not has_disputed:
+        return "verified"
+
+    # Rule 2: all non-unknown are vendor-reported, no verified.
+    if has_vendor and not has_verified and not has_disputed:
+        return "vendor-reported-only"
+
+    # Rule 4: catch-all.
+    return "partial"
+
+
+def derive_last_verified(profile: dict[str, Any]) -> str:
+    """Return the maximum verification date among sourced non-unknown factual fields,
+    or 'unknown' if none exist."""
+    dates: list[str] = []
+    for _path, fv in iter_factual_fields(profile):
+        if field_is_unknown(fv):
+            continue
+        verified = fv.get("verified")
+        if verified and isinstance(verified, str):
+            dates.append(verified)
+    if not dates:
+        return "unknown"
+    return max(dates)

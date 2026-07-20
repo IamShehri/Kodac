@@ -204,11 +204,31 @@ Phase 1 remains bound by the ratified strategy: no overall score, no SWE-bench-r
 
 Legacy archival has been completed locally on `archive/trust-kernel-s0b` (`fd6d805…`) and `archive/omnibridge-pre-reboot` (`60df880…`). The legacy material is preserved and is not mixed into this product identity.
 
+### Phase 1-R — Evidence Contract Correction (authorized 2026-07-21)
+
+Phase 1-R is a correction inside the already authorized Phase 1 scope. It hardens the evidence contract to distinguish evidence from marketing **mechanically**, not merely in prose:
+
+- first-class `unknown` fixed (no overlapping `oneOf` branches);
+- `claim_status` required on every factual field type;
+- `verification_method` added to every evidence record, with a mechanical claim_status compatibility mapping;
+- `content_sha256` required on every evidence record (digest of the actual retrieved response bytes);
+- raw GitHub URLs must be pinned to 40-character commit SHAs;
+- bidirectional `fields_supported` mapping enforced;
+- `evidence_status` and `last_verified` are derived by tooling, not authored;
+- field-specific freshness classes enforced;
+- behavioral documentation fields are `vendor-reported`, not `verified`;
+- absence of documentation produces `unknown`, not a negative vendor claim;
+- matrix exposes claim status per cell (a claim-status change changes matrix bytes).
+
+Phase 1-R is complete locally only after the correction commit. **Final independent acceptance remains pending.** Phase 2 remains unauthorized.
+
 ## Unresolved items
 
 - (Resolved 2026-07-20) The S0-C package is ratified.
 - (Resolved 2026-07-20) Legacy archival completed locally on `archive/trust-kernel-s0b` and `archive/omnibridge-pre-reboot`; trust-kernel/OmniBridge material preserved, not mixed into the new product identity.
 - (Resolved 2026-07-20) Phase 1 (one OpenCode profile vertical slice) authorized.
+- (Resolved 2026-07-21) Phase 1-R evidence contract correction authorized and applied locally.
+- Final independent acceptance of Phase 1-R — pending review of the Phase 1-R review archive.
 - Per-agent sourcing feasibility for the remaining nine launch profiles — to be confirmed under a separately authorized Phase 2.
 - Controlled Evaluation Tasks, Runs, and benchmark execution — remain unauthorized.
 - Concrete launch date, contingent on the "useful sourced data + at least one complete reproducible evidence path" gate.

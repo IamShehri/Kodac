@@ -95,21 +95,39 @@ A field is stale when `today - verified` exceeds its freshness-class window
 Every field that could be mistaken for a verified fact carries a `claim_status`:
 
 - `verified` — independently confirmed by a Kernux contributor (ideally with a reproducing Run; none exist in Phase 1).
-- `vendor-reported` — sourced only from the vendor; not independently confirmed.
-- `unknown` — no acceptable source found.
-- `disputed` — sources conflict; the conflict is documented in `notes.disputes`.
+- `verified` — established from a directly inspectable artifact (repository identity, LICENSE artifact, immutable release metadata) or independent execution. Does **not** mean "a contributor read a vendor documentation page."
+- `vendor-reported` — a direct claim from official documentation, vendor website, or marketing; not independently reproduced or established from a dispositive artifact.
+- `unknown` — no acceptable direct source exists, or only absence of documentation was observed. Absence of documentation is an assessment limitation, not a vendor claim.
+- `disputed` — acceptable sources conflict; documented in `notes.disputes`.
 
-## 7. 30 / 90 / 180-day freshness policy
+### Source authority vs verification method (distinct concepts)
 
-| Class | Window  | Typical fields                                                                 |
-|-------|---------|--------------------------------------------------------------------------------|
-| 1     | 30 days | price; subscription tiers; current versions; available models; data retention. |
-| 2     | 90 days | capabilities; integrations; MCP and skills support; execution modes; sandbox and permission behavior. |
-| 3     | 180 days | lower-volatility historical and organizational fields (identity, license).     |
+- **Source authority** (`official`, `official-repo`, `official-docs`, etc.) classifies the source.
+- **Verification method** (`repository-artifact`, `repository-metadata`, `release-metadata`, `official-documentation`, `vendor-marketing`, `independent-execution`, `secondary-context`) classifies how the evidence was obtained.
 
-Every factual field records its `freshness_class` (1, 2, or 3). The matrix
+The claim_status must be compatible with the verification method:
+- `verified` may use `repository-artifact`, `repository-metadata`, `release-metadata`, or `independent-execution`.
+- `vendor-reported` may use `official-documentation` or `vendor-marketing`.
+- `secondary-context` may never be the sole source of a non-unknown factual field.
+
+"Verified" does **not** mean independently reproduced unless the verification method is `independent-execution`.
+
+### Derived evidence summaries
+
+`evidence_status` and `last_verified` are **not authored** — they are derived mechanically by tooling from field-level claim statuses. The validator rejects profiles that attempt to author these fields.
+
+## 7. 30 / 90 / 180-day freshness policy (field-specific, mechanically enforced)
+
+| Class | Window  | Fields                                                                                  |
+|-------|---------|-----------------------------------------------------------------------------------------|
+| 1     | 30 days | cost.*; privacy.data_retention; model_and_tier.* (current_versions, available_models, subscription_or_api_tiers). |
+| 2     | 90 days | compatibility.*; protocols.*; security.*; privacy.telemetry_behavior; privacy.opt_out; capabilities.*. |
+| 3     | 180 days | identity.*; openness.*.                                                                |
+
+The freshness class is **field-specific and mechanically enforced** — the
+validator rejects a profile that assigns the wrong class to a field. The matrix
 generator computes staleness against an explicit evaluation date and renders
-`(STALE)` next to any value past its window.
+`STALE` next to any value past its window.
 
 ## 8. Vendor-submitted evidence labeling
 

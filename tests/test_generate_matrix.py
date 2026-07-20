@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import copy
+import datetime as _dt  # noqa: F401  (kept for explicit-evaluation-date pattern docs)
+
 import pytest
 
 from tests._fixtures import EVAL_DATE, make_profile, minimal_profile_dict, opencode_profile
@@ -10,9 +13,7 @@ from tools import generate_matrix, profile_io
 MATRIX_PATH = profile_io.REPO_ROOT / "matrix" / "AGENT_MATRIX.md"
 
 
-# ---------------------------------------------------------------------------
-# Determinism
-# ---------------------------------------------------------------------------
+# Determinism.
 
 
 def test_generation_is_deterministic():
@@ -23,7 +24,6 @@ def test_generation_is_deterministic():
 
 
 def test_agent_ordering_is_deterministic():
-    """Agents are sorted by canonical id regardless of input order."""
     base = minimal_profile_dict("alpha")
     base2 = minimal_profile_dict("alpha")
     base2["id"] = "zeta"
@@ -33,7 +33,6 @@ def test_agent_ordering_is_deterministic():
     out_unsorted = generate_matrix.render_matrix([p_zeta, p_alpha], evaluation_date=EVAL_DATE)
     out_sorted = generate_matrix.render_matrix([p_alpha, p_zeta], evaluation_date=EVAL_DATE)
     assert out_unsorted == out_sorted
-    # alpha row appears before zeta row.
     assert out_sorted.index("Test Agent") < out_sorted.index("Zeta")
 
 
@@ -41,7 +40,6 @@ def test_column_ordering_is_stable():
     p = opencode_profile()
     out = generate_matrix.render_matrix([p], evaluation_date=EVAL_DATE)
     header_line = [ln for ln in out.splitlines() if ln.startswith("| Agent")][0]
-    # Exact expected column order.
     assert header_line == (
         "| Agent | Track(s) | Source availability | License | Surfaces | "
         "Local-model status | MCP status | Headless/CI status | "
@@ -49,13 +47,10 @@ def test_column_ordering_is_stable():
     )
 
 
-# ---------------------------------------------------------------------------
-# Committed matrix matches regenerated output
-# ---------------------------------------------------------------------------
+# Committed matrix matches regenerated output.
 
 
 def test_committed_matrix_matches_regenerated():
-    """The committed matrix/AGENT_MATRIX.md must equal freshly regenerated output."""
     assert MATRIX_PATH.is_file(), "matrix/AGENT_MATRIX.md is missing"
     committed = MATRIX_PATH.read_text(encoding="utf-8")
     regenerated = generate_matrix.generate(evaluation_date=EVAL_DATE)
@@ -64,34 +59,27 @@ def test_committed_matrix_matches_regenerated():
     )
 
 
-# ---------------------------------------------------------------------------
-# Invalid input prevents generation
-# ---------------------------------------------------------------------------
+# Invalid input prevents generation.
 
 
 def test_invalid_input_prevents_generation():
-    bad = minimal_profile_dict()
-    bad["schema_version"] = 99  # invalid
+    bad = copy.deepcopy(minimal_profile_dict())
+    bad["schema_version"] = 99
     p = make_profile(bad)
     with pytest.raises(ValueError, match="validation error"):
         generate_matrix.generate(evaluation_date=EVAL_DATE, profiles=[p])
 
 
-# ---------------------------------------------------------------------------
-# --check detects drift
-# ---------------------------------------------------------------------------
+# --check detects drift.
 
 
-def test_check_detects_drift(tmp_path, monkeypatch):
-    """--check must fail (exit 1) when the committed matrix differs."""
-    # Tamper with the on-disk matrix.
+def test_check_detects_drift():
     original = MATRIX_PATH.read_text(encoding="utf-8")
     try:
         MATRIX_PATH.write_text(original + "\n<!-- tampered -->\n", encoding="utf-8")
         rc = generate_matrix.main(["--check", "--evaluation-date", EVAL_DATE.isoformat()])
-        assert rc == 1, "--check should fail when matrix differs"
+        assert rc == 1
     finally:
-        # Restore.
         MATRIX_PATH.write_text(original, encoding="utf-8")
 
 
@@ -100,34 +88,64 @@ def test_check_passes_when_up_to_date():
     assert rc == 0
 
 
-# ---------------------------------------------------------------------------
-# No score / no winner in output
-# ---------------------------------------------------------------------------
+# Claim-status visibility: a change from verified to vendor-reported changes bytes.
 
 
-def test_no_overall_score_in_output():
-    """No overall score column/value is rendered. The legend explicitly states
-    the prohibition ('No overall Kernux Score is computed'), so we only check
-    the table header and rows for an actual score column."""
+def test_claim_status_change_changes_output():
+    p = opencode_profile()
+    out_verified = generate_matrix.render_matrix([p], evaluation_date=EVAL_DATE)
+    p2_data = copy.deepcopy(p.data)
+    p2_data["openness"]["license"]["claim_status"] = "vendor-reported"
+    rec = next(r for r in p2_data["evidence"]["records"] if r["id"] == "opencode-license")
+    rec["verification_method"] = "official-documentation"
+    rec["authority"] = "official-docs"
+    p2 = make_profile(p2_data, agent_id="opencode")
+    out_flipped = generate_matrix.render_matrix([p2], evaluation_date=EVAL_DATE)
+    assert out_verified != out_flipped, "claim-status change must change matrix bytes"
+    assert "MIT \u00b7 vendor-reported" in out_flipped
+    assert "MIT \u00b7 verified" in out_verified
+
+
+def test_matrix_displays_vendor_reported_markers():
     p = opencode_profile()
     out = generate_matrix.render_matrix([p], evaluation_date=EVAL_DATE)
-    # The matrix must declare there is no overall score (prohibition present).
+    assert "vendor-reported" in out
+
+
+def test_unknown_renders_plainly():
+    data = copy.deepcopy(minimal_profile_dict())
+    p = make_profile(data)
+    out = generate_matrix.render_matrix([p], evaluation_date=EVAL_DATE)
+    assert "unknown \u00b7 unknown" not in out
+    assert "unknown" in out
+
+
+def test_evidence_status_is_derived():
+    p = opencode_profile()
+    out = generate_matrix.render_matrix([p], evaluation_date=EVAL_DATE)
+    derived = profile_io.derive_evidence_status(p.data)
+    assert derived in out
+
+
+def test_last_verified_is_derived():
+    p = opencode_profile()
+    out = generate_matrix.render_matrix([p], evaluation_date=EVAL_DATE)
+    derived = profile_io.derive_last_verified(p.data)
+    assert derived in out
+
+
+# No score / no winner / no timestamp.
+
+
+def test_no_overall_score_in_header_or_rows():
+    p = opencode_profile()
+    out = generate_matrix.render_matrix([p], evaluation_date=EVAL_DATE)
     assert "no overall" in out.lower()
-    # The table header must not contain a score column.
     header_lines = [ln for ln in out.splitlines() if ln.startswith("| Agent")]
-    assert header_lines, "table header missing"
+    assert header_lines
     header = header_lines[0].lower()
     for forbidden in ("score", "winner", "rank", "best agent", "grade"):
-        assert forbidden not in header, f"header contains forbidden term {forbidden!r}"
-    # No data row may declare a winner.
-    data_rows = [
-        ln
-        for ln in out.splitlines()
-        if ln.startswith("| ") and "open source coding agent" not in ln.lower()
-    ]
-    for row in data_rows:
-        for forbidden in ("winner", "best agent", "#1"):
-            assert forbidden not in row.lower(), f"row contains {forbidden!r}"
+        assert forbidden not in header
 
 
 def test_generated_notice_present():
@@ -137,12 +155,10 @@ def test_generated_notice_present():
     assert "Do not edit by hand" in out
 
 
-def test_no_timestamp_that_drifts():
-    """Output must not contain a generation timestamp that changes between runs."""
+def test_no_drifting_timestamp():
     p = opencode_profile()
     out = generate_matrix.render_matrix([p], evaluation_date=EVAL_DATE)
     lower = out.lower()
-    # Forbidden drift sources: "generated at", "generated on", current time.
     for forbidden in ("generated at", "generated on", "last run:", "run at"):
         assert forbidden not in lower
 

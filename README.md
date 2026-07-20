@@ -27,29 +27,40 @@ into sourced profiles and decision-oriented comparisons.
 - **Canonical format:** profiles are YAML (`agents/<id>/profile.yaml`), validated
   by a [strict JSON Schema](schema/agent-profile.schema.json) plus a custom
   evidence-policy layer. Markdown is a generated view, not the source of truth.
-- **Evidence before claims:** every non-`unknown` factual field carries a source
-  and a verification date. Vendor-reported facts are labeled `vendor-reported`;
-  independently confirmed facts are labeled `verified`.
+- **Evidence before claims:** every non-`unknown` factual field carries a pinned
+  source with a content digest (`content_sha256`) and a verification date.
+  Vendor-reported facts are labeled `vendor-reported`; artifact-verified facts
+  (repository identity, LICENSE, release metadata) are labeled `verified`.
+- **Claim status is mechanical, not prose.** Each evidence record carries a
+  `verification_method` that must be compatible with its `claim_status`:
+  `verified` requires `repository-artifact`, `repository-metadata`,
+  `release-metadata`, or (future) `independent-execution`;
+  `vendor-reported` requires `official-documentation` or `vendor-marketing`.
+- **Derived evidence summaries:** `evidence_status` and `last_verified` are
+  computed by tooling from field-level claim statuses, never authored by hand.
 - **`unknown` and `stale` are different states.** `unknown` means no source was
-  found; `stale` means a previously-verified source is past its freshness window.
-- **Freshness windows:** 30 days (price/versions/models/retention),
+  found (absence of documentation is not a vendor claim); `stale` means a
+  previously-verified source is past its freshness window.
+- **Freshness windows (field-specific):** 30 days (price/versions/models/retention),
   90 days (capabilities/integrations/protocols/modes/sandbox),
-  180 days (low-volatility fields). Expired values are visibly marked `STALE`.
+  180 days (identity/openness). Expired values are visibly marked `STALE`.
 
-## Verified facts vs unknowns
+## Claim status and evidence semantics
 
-A field is one of:
+A factual field is one of:
 
-| State             | Meaning                                                                |
-|-------------------|------------------------------------------------------------------------|
-| `verified`        | Independently confirmed by a Kernux contributor with a primary source. |
-| `vendor-reported` | Sourced only from the vendor; not independently confirmed.            |
-| `unknown`         | No acceptable primary source found yet.                               |
-| `disputed`        | Primary sources conflict; documented in the profile.                  |
+| State             | Meaning                                                                                       |
+|-------------------|-----------------------------------------------------------------------------------------------|
+| `verified`        | Established from a directly inspectable artifact (repository identity, LICENSE, release metadata) or independent execution. Does **not** mean "a contributor read a vendor documentation page." |
+| `vendor-reported` | A direct claim from official documentation, vendor website, or marketing; not independently reproduced. |
+| `unknown`         | No acceptable direct source found. Absence of documentation is **not** a vendor claim — it is an assessment limitation. |
+| `disputed`        | Acceptable sources conflict; the dispute is documented in the profile.                        |
 
-Phase 1 has **no Run evidence** and **no independent reproduction** of any
-agent's behavior. "Verified" here means "verified against a primary source,"
-not "independently reproduced by Kernux."
+Phase 1 has **no Run evidence** and **no independent behavioral reproduction**.
+Reading a vendor's documentation does not independently verify product behavior;
+behavioral, capability, protocol, pricing, and privacy fields are
+`vendor-reported`. Only repository identity, license, and release metadata are
+`verified` (artifact-based).
 
 ## Complementary to SWE-bench
 
