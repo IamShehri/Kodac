@@ -92,25 +92,62 @@ A field is stale when `today - verified` exceeds its freshness-class window
 
 ## 6. `claim_status`
 
-Every field that could be mistaken for a verified fact carries a `claim_status`:
+Every factual field carries a `claim_status`:
 
-- `verified` — independently confirmed by a Kernux contributor (ideally with a reproducing Run; none exist in Phase 1).
-- `verified` — established from a directly inspectable artifact (repository identity, LICENSE artifact, immutable release metadata) or independent execution. Does **not** mean "a contributor read a vendor documentation page."
+- `verified` — established through a directly inspectable dispositive artifact (repository identity, LICENSE artifact, immutable release metadata) or an authorized independent execution. It does **not** mean that a contributor merely read vendor documentation. Phase 1 contains no independent execution or Run evidence; artifact-verified fields are limited to identity, openness, and release-metadata facts.
 - `vendor-reported` — a direct claim from official documentation, vendor website, or marketing; not independently reproduced or established from a dispositive artifact.
 - `unknown` — no acceptable direct source exists, or only absence of documentation was observed. Absence of documentation is an assessment limitation, not a vendor claim.
 - `disputed` — acceptable sources conflict; documented in `notes.disputes`.
 
 ### Source authority vs verification method (distinct concepts)
 
-- **Source authority** (`official`, `official-repo`, `official-docs`, etc.) classifies the source.
+- **Source authority** (`official`, `official-repo`, `official-docs`, `official-release`, `secondary`, `tertiary`) classifies the source surface.
 - **Verification method** (`repository-artifact`, `repository-metadata`, `release-metadata`, `official-documentation`, `vendor-marketing`, `independent-execution`, `secondary-context`) classifies how the evidence was obtained.
 
-The claim_status must be compatible with the verification method:
-- `verified` may use `repository-artifact`, `repository-metadata`, `release-metadata`, or `independent-execution`.
-- `vendor-reported` may use `official-documentation` or `vendor-marketing`.
+These are mechanically enforced through centralized compatibility rules (see `tools/compatibility.py`):
+
+- **Authority → method compatibility:** each authority maps to exactly its allowed methods. For example, `official-docs` → `official-documentation` only; `official-repo` → `repository-artifact` or `repository-metadata` only; `secondary`/`tertiary` → `secondary-context` only.
+- **Claim → method compatibility:** `verified` requires `repository-artifact`, `repository-metadata`, `release-metadata`, or `independent-execution`; `vendor-reported` requires `official-documentation` or `vendor-marketing`.
+- **Field → method compatibility (Phase 1):** behavioral fields (compatibility, protocols, security, privacy, cost, capabilities) may **not** be `verified` via artifact methods. Only `identity.*`, `openness.*`, and `model_and_tier.current_versions` may be artifact-verified.
 - `secondary-context` may never be the sole source of a non-unknown factual field.
 
 "Verified" does **not** mean independently reproduced unless the verification method is `independent-execution`.
+
+### Evidence record fields
+
+Every evidence record carries:
+
+- `id` — stable identifier referenced by field `source`;
+- `title` — exact description of the URL it stores;
+- `url` — HTTPS-only exact source URL;
+- `authority` — source surface classification;
+- `verification_method` — how the evidence was obtained;
+- `date_accessed` — ISO date the source was accessed;
+- `content_sha256` — 64-character lowercase hex SHA-256 digest of the actual retrieved response bytes;
+- `fields_supported` — dotted field paths this source supports (must match the field-to-source mapping exactly);
+- `immutable` — `true` only for commit-pinned raw GitHub content; `false` for all dynamic endpoints;
+- `revision_or_commit` — the 40-character commit SHA, required and must match the URL SHA for raw GitHub URLs.
+
+### Immutable vs point-in-time dynamic evidence
+
+- **Immutable:** commit-pinned `raw.githubusercontent.com` URLs (40-hex SHA in the path). `immutable: true` required. A digest makes the evidence reproducible at that commit.
+- **Dynamic:** GitHub API responses (`api.github.com`), vendor homepages, documentation subdomains, `github.com/blob/` or `/tree/` web pages. `immutable: false` required. A **digest alone does not make a dynamic URL immutable**; the content may drift between fetches.
+- `github.com/blob/` and `/tree/` URLs are rejected as repository artifacts; commit-pinned `raw.githubusercontent.com` content is required instead.
+- `/releases/latest` cannot support `current_versions`; use `/releases/tags/<exact-tag>`.
+
+### Exact bidirectional evidence mapping
+
+Every non-unknown factual field must resolve to acceptable evidence. Every evidence record must appear in at least one field's complete source set. The `fields_supported` list must match the reverse-reference mapping exactly.
+
+For disputed fields, the **complete source set** is `{field.source}` UNION `{notes.disputes.sources}`. Alternative dispute sources are legitimate reverse references, not orphan records.
+
+`allow_unused_records` is not permitted; evidence mapping must be exact.
+
+### Dispute contract
+
+Every disputed field must have **exactly one** matching `notes.disputes` entry. The entry must name the exact dotted field path, contain at least two unique evidence IDs, include the field's primary source, resolve every source ID, use acceptable primary sources (not secondary-context), declare the field in each source's `fields_supported`, and contain a non-empty neutral note.
+
+Duplicate dispute entries for the same field are rejected.
 
 ### Derived evidence summaries
 

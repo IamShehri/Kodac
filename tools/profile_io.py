@@ -168,6 +168,33 @@ def iter_factual_fields(profile: dict[str, Any]):
 
 
 # ---------------------------------------------------------------------------
+# Complete source set helper (dispute-aware, single source of truth).
+# ---------------------------------------------------------------------------
+
+
+def complete_sources(field_path: str, fv: dict, profile: dict) -> set[str]:
+    """Return the complete set of evidence IDs that support a factual field.
+
+    For non-disputed fields: {field.source}.
+    For unknown fields: empty set.
+    For disputed fields: {field.source} UNION {matching notes.disputes.sources}.
+    """
+    if field_is_unknown(fv):
+        return set()
+    primary = fv.get("source")
+    if primary in (None, "none"):
+        return set()
+    sources = {primary}
+    cs = fv.get("claim_status")
+    if cs == "disputed":
+        for dispute in (profile.get("notes", {}) or {}).get("disputes", []) or []:
+            if dispute.get("field") == field_path:
+                for sid in dispute.get("sources", []) or []:
+                    sources.add(sid)
+    return sources
+
+
+# ---------------------------------------------------------------------------
 # Derived evidence summaries (mechanical, never authored).
 # ---------------------------------------------------------------------------
 

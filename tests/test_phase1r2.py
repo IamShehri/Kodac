@@ -151,7 +151,7 @@ def test_dispute_with_unresolved_source_fails():
 
 
 def test_valid_two_source_dispute_passes():
-    """A valid dispute with two primary sources must pass."""
+    """A valid dispute with two primary sources must pass full validation with zero errors."""
     data = copy.deepcopy(minimal_profile_dict())
     # Make mcp_support disputed.
     data["protocols"]["mcp_support"]["claim_status"] = "disputed"
@@ -169,8 +169,7 @@ def test_valid_two_source_dispute_passes():
         }
     ]
     errs = _run_full(make_profile(data))
-    dispute_errs = [e for e in errs if "disputes" in e.field or "disputed" in e.message]
-    assert dispute_errs == [], _errs_str(dispute_errs)
+    assert errs == [], f"Expected zero validation errors, got:\n{_errs_str(errs)}"
 
 
 # ============================================================================

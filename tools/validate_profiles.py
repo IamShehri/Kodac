@@ -211,13 +211,31 @@ def _derive_official_identities(profile: dict[str, Any]) -> dict[str, str]:
 
 
 def _github_owner_repo(source_repo_url: str) -> tuple[str, str] | None:
+    """Return (owner, repo) only for an exact canonical GitHub repository root.
+
+    Rejects URLs with extra path segments, blob/tree/issues/pull paths,
+    query strings, fragments, .git suffix, non-default ports, or HTTP.
+    """
     parsed = urlparse(source_repo_url)
+    if parsed.scheme != "https":
+        return None
     if parsed.netloc != "github.com":
         return None
+    if parsed.query or parsed.fragment:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    if parsed.port is not None:
+        return None
     parts = [p for p in parsed.path.split("/") if p]
-    if len(parts) >= 2:
-        return parts[0], parts[1]
-    return None
+    if len(parts) != 2:
+        return None
+    owner, repo = parts
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    if not owner or not repo:
+        return None
+    return owner, repo
 
 
 def _check_url_authority_consistency(profile: ProfileFile) -> list[ValidationError]:
@@ -483,7 +501,8 @@ def _check_unknown_handling(profile: ProfileFile) -> list[ValidationError]:
 
 
 def _check_bidirectional_evidence_mapping(profile: ProfileFile) -> list[ValidationError]:
-    """Exact bidirectional evidence mapping — no allow_unused_records."""
+    """Exact bidirectional evidence mapping — no allow_unused_records.
+    Uses complete_sources to account for dispute alternative sources."""
     errors: list[ValidationError] = []
     records = profile.data.get("evidence", {}).get("records", []) or []
 
@@ -499,46 +518,54 @@ def _check_bidirectional_evidence_mapping(profile: ProfileFile) -> list[Validati
 
     evidence_ids = {rec.get("id") for rec in records if rec.get("id")}
 
-    field_to_source: dict[str, str] = {}
+    # Build complete source sets for each field (dispute-aware).
+    field_to_complete_sources: dict[str, set[str]] = {}
     for field_path, fv in iter_factual_fields(profile.data):
         if profile_io.field_is_unknown(fv):
             continue
-        field_to_source[field_path] = fv.get("source")
+        field_to_complete_sources[field_path] = profile_io.complete_sources(
+            field_path, fv, profile.data
+        )
 
     declared: dict[str, set[str]] = {}
     for rec in records:
         rid = rec.get("id")
         declared[rid] = set(rec.get("fields_supported", []) or [])
 
-    # Check: each non-unknown field's source resolves and declares the field.
-    for field_path, source_id in sorted(field_to_source.items()):
-        if source_id in (None, "none"):
-            continue
-        if source_id not in evidence_ids:
-            errors.append(
-                ValidationError(
-                    str(profile.relative_path),
-                    field_path,
-                    f"source {source_id!r} does not resolve to any evidence record id",
+    # Check 1: every source in the complete set resolves and declares the field.
+    for field_path, source_set in sorted(field_to_complete_sources.items()):
+        for source_id in sorted(source_set):
+            if source_id in (None, "none"):
+                continue
+            if source_id not in evidence_ids:
+                errors.append(
+                    ValidationError(
+                        str(profile.relative_path),
+                        field_path,
+                        f"source {source_id!r} does not resolve to any evidence record id",
+                    )
                 )
-            )
-            continue
-        if field_path not in declared.get(source_id, set()):
-            errors.append(
-                ValidationError(
-                    str(profile.relative_path),
-                    field_path,
-                    f"source {source_id!r} does not declare this field in fields_supported",
+                continue
+            if field_path not in declared.get(source_id, set()):
+                errors.append(
+                    ValidationError(
+                        str(profile.relative_path),
+                        field_path,
+                        f"source {source_id!r} does not declare this field in fields_supported",
+                    )
                 )
-            )
 
-    # Check: every declared fields_supported entry must reference back.
-    referenced: set[str] = set(field_to_source.values())
+    # Check 2: every declared fields_supported entry must point back to a field
+    # whose complete source set contains that record.
+    all_referenced: set[str] = set()
+    for src_set in field_to_complete_sources.values():
+        all_referenced |= src_set
+
     for rec in records:
         rid = rec.get("id")
         for declared_field in sorted(declared.get(rid, set())):
-            actual_source = field_to_source.get(declared_field)
-            if declared_field not in field_to_source:
+            src_set = field_to_complete_sources.get(declared_field)
+            if declared_field not in field_to_complete_sources:
                 errors.append(
                     ValidationError(
                         str(profile.relative_path),
@@ -546,21 +573,21 @@ def _check_bidirectional_evidence_mapping(profile: ProfileFile) -> list[Validati
                         f"fields_supported declares {declared_field!r} but no such factual field exists",
                     )
                 )
-            elif actual_source != rid:
+            elif rid not in src_set:
                 errors.append(
                     ValidationError(
                         str(profile.relative_path),
                         f"evidence.records.{rid}",
-                        f"fields_supported declares {declared_field!r} but that field references {actual_source!r}, not {rid!r}",
+                        f"fields_supported declares {declared_field!r} but that field's complete source set does not include {rid!r}",
                     )
                 )
-        # Exact mapping: every record must be referenced (no orphans).
-        if rid not in referenced:
+        # Exact mapping: every record must be in at least one complete source set.
+        if rid not in all_referenced:
             errors.append(
                 ValidationError(
                     str(profile.relative_path),
                     f"evidence.records.{rid}",
-                    "evidence record is not referenced by any field; exact mapping requires no orphans",
+                    "evidence record is not in any field's complete source set; exact mapping requires no orphans",
                 )
             )
     return errors
@@ -588,55 +615,84 @@ def _check_secondary_not_sole_source(profile: ProfileFile) -> list[ValidationErr
 
 
 def _check_dispute_contract(profile: ProfileFile) -> list[ValidationError]:
-    """Every disputed field must have exactly one matching notes.disputes entry,
-    and every dispute entry must be valid."""
+    """Every disputed field must have exactly one matching notes.disputes entry.
+    Uses list-based detection to catch duplicate entries."""
     errors: list[ValidationError] = []
     disputes = profile.data.get("notes", {}).get("disputes", []) or []
-    disputes_by_field: dict[str, dict] = {}
+
+    # Build field_path -> list of dispute entries (NOT dict — catches duplicates).
+    disputes_by_field: dict[str, list] = {}
     for d in disputes:
         f = d.get("field")
         if f:
-            disputes_by_field[f] = d
+            disputes_by_field.setdefault(f, []).append(d)
 
     records = {
         rec.get("id"): rec for rec in (profile.data.get("evidence", {}).get("records", []) or [])
     }
 
-    # Check disputed fields have matching disputes.
-    disputed_fields: list[str] = []
+    # Identify disputed fields.
+    disputed_fields: set[str] = set()
     for field_path, fv in iter_factual_fields(profile.data):
         if profile_io.field_is_unknown(fv):
             continue
-        cs = fv.get("claim_status")
-        if cs == "disputed":
-            disputed_fields.append(field_path)
-            if field_path not in disputes_by_field:
-                errors.append(
-                    ValidationError(
-                        str(profile.relative_path),
-                        field_path,
-                        "claim_status is 'disputed' but no matching notes.disputes entry exists",
-                    )
-                )
+        if fv.get("claim_status") == "disputed":
+            disputed_fields.add(field_path)
 
-    # Check dispute entries are valid and match disputed fields.
-    valid_dispute_fields = set(disputed_fields)
-    for field_path, dispute in sorted(disputes_by_field.items()):
-        # The dispute must correspond to an actual disputed factual field.
-        if field_path not in valid_dispute_fields:
+    # Check: every disputed field has exactly one dispute entry.
+    for field_path in sorted(disputed_fields):
+        entries = disputes_by_field.get(field_path, [])
+        if len(entries) == 0:
+            errors.append(
+                ValidationError(
+                    str(profile.relative_path),
+                    field_path,
+                    "claim_status is 'disputed' but no matching notes.disputes entry exists",
+                )
+            )
+        elif len(entries) > 1:
             errors.append(
                 ValidationError(
                     str(profile.relative_path),
                     f"notes.disputes.{field_path}",
-                    f"dispute entry exists for {field_path!r} but that field is not disputed or does not exist",
+                    f"exactly one dispute entry is required per disputed field; found {len(entries)} entries for {field_path!r}",
                 )
             )
+
+    # Check: every dispute entry matches a real disputed field.
+    all_factual_paths: set[str] = set()
+    for field_path, fv in iter_factual_fields(profile.data):
+        if not profile_io.field_is_unknown(fv):
+            all_factual_paths.add(field_path)
+
+    for field_path, entries in sorted(disputes_by_field.items()):
+        if field_path not in disputed_fields:
+            if field_path not in all_factual_paths:
+                errors.append(
+                    ValidationError(
+                        str(profile.relative_path),
+                        f"notes.disputes.{field_path}",
+                        f"dispute entry exists for {field_path!r} but no such factual field exists",
+                    )
+                )
+            else:
+                errors.append(
+                    ValidationError(
+                        str(profile.relative_path),
+                        f"notes.disputes.{field_path}",
+                        f"dispute entry exists for {field_path!r} but that field is not disputed",
+                    )
+                )
+        # Skip detailed validation if we already flagged duplicates or missing.
+        if len(entries) != 1:
+            continue
+        if field_path not in disputed_fields:
             continue
 
+        dispute = entries[0]
         sources = dispute.get("sources", []) or []
         note = dispute.get("note", "")
 
-        # Require non-empty neutral note.
         if not note or not note.strip():
             errors.append(
                 ValidationError(
@@ -646,7 +702,6 @@ def _check_dispute_contract(profile: ProfileFile) -> list[ValidationError]:
                 )
             )
 
-        # Require at least two unique evidence IDs.
         if len(sources) < 2:
             errors.append(
                 ValidationError(
@@ -664,8 +719,6 @@ def _check_dispute_contract(profile: ProfileFile) -> list[ValidationError]:
                 )
             )
 
-        # Require the field's primary source to be in the dispute sources.
-        # Find the field's current source.
         primary_source = None
         for fp, fv in iter_factual_fields(profile.data):
             if fp == field_path and not profile_io.field_is_unknown(fv):
@@ -680,8 +733,7 @@ def _check_dispute_contract(profile: ProfileFile) -> list[ValidationError]:
                 )
             )
 
-        # Every source must resolve and declare the field in fields_supported.
-        for sid in sources:
+        for sid in sorted(set(sources)):
             rec = records.get(sid)
             if not rec:
                 errors.append(
@@ -710,75 +762,118 @@ def _check_dispute_contract(profile: ProfileFile) -> list[ValidationError]:
     return errors
 
 
+def _classify_source_stability(url: str) -> str:
+    """Classify a URL as 'immutable', 'dynamic', or 'invalid'.
+
+    Conservative: defaults to 'dynamic' for unrecognized patterns.
+    Only commit-pinned raw.githubusercontent.com is 'immutable'.
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    path_parts = [p for p in parsed.path.split("/") if p]
+
+    # Commit-pinned raw GitHub content.
+    if host == "raw.githubusercontent.com":
+        if len(path_parts) >= 3:
+            ref = path_parts[2]
+            if len(ref) == 40 and _is_hex(ref):
+                return "immutable"
+        return "dynamic"  # moving branch or unrecognized ref
+
+    # GitHub API endpoints — always dynamic JSON.
+    if host == "api.github.com":
+        return "dynamic"
+
+    # GitHub web blob/tree URLs — dynamic (moving refs), not artifact sources.
+    if host == "github.com" and len(path_parts) >= 3:
+        if path_parts[2] in ("blob", "tree"):
+            return "dynamic"
+
+    # All other HTTPS URLs default to dynamic.
+    return "dynamic"
+
+
 def _check_immutability_contract(profile: ProfileFile) -> list[ValidationError]:
-    """Mechanically validate immutable flags against URL patterns."""
+    """Centralized conservative immutability classifier."""
     errors: list[ValidationError] = []
     records = profile.data.get("evidence", {}).get("records", []) or []
+    moving_branches = {"main", "master", "dev", "head", "develop", "release"}
+
     for rec in records:
         rid = rec.get("id", "?")
         url = rec.get("url", "")
+        immutable = rec.get("immutable")
         parsed = urlparse(url)
         host = parsed.hostname or ""
-        immutable = rec.get("immutable")
         path_parts = [p for p in parsed.path.split("/") if p]
 
-        # raw.githubusercontent.com pinned to 40-char SHA → immutable must be true.
-        if host == "raw.githubusercontent.com" and len(path_parts) >= 3:
-            ref = path_parts[2]
-            if len(ref) == 40 and _is_hex(ref):
-                if immutable is not True:
-                    errors.append(
-                        ValidationError(
-                            str(profile.relative_path),
-                            f"evidence.records.{rid}.immutable",
-                            "commit-pinned raw.githubusercontent.com URL must have immutable: true",
-                        )
-                    )
-            elif ref.lower() in {"main", "master", "dev", "head", "develop"}:
-                # Moving branch — already rejected by _check_raw_github_pinning, but also flag immutable.
-                if immutable is True:
-                    errors.append(
-                        ValidationError(
-                            str(profile.relative_path),
-                            f"evidence.records.{rid}.immutable",
-                            "moving-branch raw GitHub URL must not be immutable: true",
-                        )
-                    )
+        stability = _classify_source_stability(url)
 
-        # api.github.com → immutable must be false (dynamic JSON responses).
-        if host == "api.github.com":
-            if immutable is True:
+        # Immutable URL must have immutable: true.
+        if stability == "immutable" and immutable is not True:
+            errors.append(
+                ValidationError(
+                    str(profile.relative_path),
+                    f"evidence.records.{rid}.immutable",
+                    "commit-pinned raw.githubusercontent.com URL must have immutable: true",
+                )
+            )
+
+        # Dynamic URL must have immutable: false.
+        if stability == "dynamic" and immutable is True:
+            errors.append(
+                ValidationError(
+                    str(profile.relative_path),
+                    f"evidence.records.{rid}.immutable",
+                    f"dynamic URL must have immutable: false (classified dynamic: {host})",
+                )
+            )
+
+        # Reject github.com blob/tree URLs as evidence sources entirely.
+        if host == "github.com" and len(path_parts) >= 3 and path_parts[2] in ("blob", "tree"):
+            errors.append(
+                ValidationError(
+                    str(profile.relative_path),
+                    f"evidence.records.{rid}.url",
+                    f"github.com/{path_parts[2]}/ URLs are not accepted as repository artifacts; "
+                    "use commit-pinned raw.githubusercontent.com content instead",
+                )
+            )
+
+        # /releases/latest cannot support current_versions.
+        if host == "api.github.com" and "/releases/latest" in url:
+            fields = rec.get("fields_supported", []) or []
+            if "model_and_tier.current_versions" in fields:
                 errors.append(
                     ValidationError(
                         str(profile.relative_path),
-                        f"evidence.records.{rid}.immutable",
-                        "dynamic GitHub API endpoint must have immutable: false",
+                        f"evidence.records.{rid}.url",
+                        "/releases/latest cannot support current_versions; use /releases/tags/<exact-tag>",
                     )
                 )
-            # /releases/latest cannot support current_versions.
-            if "/releases/latest" in url:
-                fields = rec.get("fields_supported", []) or []
-                if "model_and_tier.current_versions" in fields:
-                    errors.append(
-                        ValidationError(
-                            str(profile.relative_path),
-                            f"evidence.records.{rid}.url",
-                            "/releases/latest cannot support current_versions; use /releases/tags/<exact-tag>",
-                        )
-                    )
 
-        # Vendor homepages and mutable docs → immutable must be false.
-        official_host = None
-        ids = _derive_official_identities(profile.data)
-        if ids.get("official_url"):
-            official_host = urlparse(ids["official_url"]).hostname
-        if official_host and host == official_host:
-            if immutable is True:
+        # Moving-branch raw GitHub URLs rejected by _check_raw_github_pinning,
+        # but also flag here if immutable:true was attempted.
+        if host == "raw.githubusercontent.com" and len(path_parts) >= 3:
+            ref = path_parts[2]
+            if ref.lower() in moving_branches and immutable is True:
                 errors.append(
                     ValidationError(
                         str(profile.relative_path),
                         f"evidence.records.{rid}.immutable",
-                        "vendor homepage must have immutable: false",
+                        f"moving-branch raw GitHub URL ({ref!r}) must not be immutable: true",
+                    )
+                )
+
+        # Moving-branch github.com blob URLs with moving ref.
+        if host == "github.com" and len(path_parts) >= 4 and path_parts[2] in ("blob", "tree"):
+            ref = path_parts[3]
+            if ref.lower() in moving_branches and immutable is True:
+                errors.append(
+                    ValidationError(
+                        str(profile.relative_path),
+                        f"evidence.records.{rid}.immutable",
+                        f"moving-branch github.com URL ({ref!r}) must not be immutable: true",
                     )
                 )
     return errors
