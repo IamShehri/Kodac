@@ -1,0 +1,163 @@
+# Profile Sourcing Methodology
+
+*How Kernux sources, verifies, and labels agent-profile facts.*
+
+> This document is normative for Phase 1. It implements the editorial policy
+> defined in [`proposal/EDITORIAL_AND_EVIDENCE_POLICY.md`](../../proposal/EDITORIAL_AND_EVIDENCE_POLICY.md)
+> and the ratified decisions in [`proposal/FOUNDER_DECISIONS.md`](../../proposal/FOUNDER_DECISIONS.md).
+
+## 1. Primary-source requirement
+
+Every factual profile field must be sourced from a **primary** source. A primary
+source is one controlled by the agent's vendor or maintainers:
+
+- the vendor's official website;
+- the vendor's official documentation;
+- the canonical public source repository;
+- the official LICENSE file;
+- official release or repository metadata (tags, releases, package metadata);
+- official privacy, security, or pricing documentation.
+
+The following are **not** acceptable as the sole source for a factual field:
+
+- search-result snippets;
+- Wikipedia;
+- third-party comparison sites;
+- blog summaries not controlled by the agent's vendor;
+- social-media claims;
+- star count (not product-quality evidence);
+- remembered facts without a source.
+
+Secondary sources may appear only for non-factual context and must be marked
+`authority: secondary`.
+
+## 2. Source-authority levels
+
+Each evidence record carries an `authority` field drawn from this controlled
+vocabulary:
+
+| Authority            | Meaning                                                                |
+|----------------------|------------------------------------------------------------------------|
+| `official`           | The vendor's official website or marketing surface.                    |
+| `official-repo`      | The canonical public source repository (files, API metadata).          |
+| `official-docs`      | The vendor's official documentation.                                   |
+| `official-release`   | Official release metadata (tags, GitHub releases, package registry).   |
+| `secondary`          | Independent reputable source (press, conference); context only.        |
+| `tertiary`           | Blogs, social media, forums; context only, never the sole source.      |
+
+A field whose `claim_status` is `verified` must be backed by an `official*`
+authority. A `vendor-reported` field is also normally backed by an `official*`
+authority but is not independently confirmed.
+
+## 3. Evidence record format
+
+Each profile carries an `evidence.records` list. Every record has:
+
+- `id` — stable evidence identifier referenced by `field.source`;
+- `title` — human-readable description of the source;
+- `url` — exact URL (never `none` for an evidence record);
+- `authority` — one of the levels above;
+- `date_accessed` — ISO date a human accessed the URL;
+- `fields_supported` — dotted field paths this source supports;
+- `revision_or_commit` — optional immutable commit SHA when the source is a repo file.
+
+## 4. Field-to-evidence mapping
+
+Every factual field references its source by the evidence `id`:
+
+```yaml
+identity:
+  official_url:
+    value: "https://opencode.ai"
+    source: opencode-repo-readme      # <- evidence id
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 3
+```
+
+A field whose `value` is `unknown` must have `source: none` and no evidence id.
+
+## 5. `unknown` vs `unsupported` vs `stale`
+
+These are three distinct states; conflating them is a validation error.
+
+| State          | Meaning                                                                 |
+|----------------|-------------------------------------------------------------------------|
+| `unknown`      | No primary source could be established. `value: unknown`, `source: none`. |
+| `unsupported`  | A capability explicitly documented as **not** supported (`value: unsupported`). |
+| `stale`        | A previously-verified source is past its freshness window. **Derived**, surfaced in the matrix as `(STALE)`, never written as a value. |
+
+A field is stale when `today - verified` exceeds its freshness-class window
+(see §7). Staleness is computed by the tooling, not authored by hand.
+
+## 6. `claim_status`
+
+Every field that could be mistaken for a verified fact carries a `claim_status`:
+
+- `verified` — independently confirmed by a Kernux contributor (ideally with a reproducing Run; none exist in Phase 1).
+- `vendor-reported` — sourced only from the vendor; not independently confirmed.
+- `unknown` — no acceptable source found.
+- `disputed` — sources conflict; the conflict is documented in `notes.disputes`.
+
+## 7. 30 / 90 / 180-day freshness policy
+
+| Class | Window  | Typical fields                                                                 |
+|-------|---------|--------------------------------------------------------------------------------|
+| 1     | 30 days | price; subscription tiers; current versions; available models; data retention. |
+| 2     | 90 days | capabilities; integrations; MCP and skills support; execution modes; sandbox and permission behavior. |
+| 3     | 180 days | lower-volatility historical and organizational fields (identity, license).     |
+
+Every factual field records its `freshness_class` (1, 2, or 3). The matrix
+generator computes staleness against an explicit evaluation date and renders
+`(STALE)` next to any value past its window.
+
+## 8. Vendor-submitted evidence labeling
+
+Vendor-submitted profiles and runs carry one of:
+
+- `vendor-submitted` — supplied by the vendor;
+- `independently-unreproduced` — submitted by a non-vendor contributor but not yet independently reproduced;
+- `independently-reproduced` — reproduced by Kernux or a trusted second party.
+
+Phase 1 has **no Runs** and **no independent reproduction**. The Phase 1
+OpenCode profile is `community-submitted`, not vendor-submitted.
+
+## 9. Correction process
+
+Corrections are made via pull request:
+
+1. The contributor updates the field's `value` and/or `source`, sets `verified`
+   to the actual check date, and adds a `notes.changes` entry.
+2. `uv run python -m tools.validate_profiles` must pass.
+3. `uv run python -m tools.generate_matrix --check` must detect the drift;
+   the contributor regenerates the matrix and commits both changes.
+4. Reviewers confirm the new source is primary and the freshness class is correct.
+
+## 10. Conflict resolution
+
+If two primary sources disagree, the field is set to `claim_status: disputed`,
+both sources are listed in `notes.disputes`, and the more conservative
+interpretation is used in any generated view.
+
+## 11. Prohibitions
+
+- No paid ranking. No paid placement. No affiliate ranking. No undisclosed sponsorship.
+- No overall "Kernux Score" or league table.
+- No "production-ready," "enterprise-ready," "fully secure," or compliance-certification claims that Kernux cannot source.
+- No AI-generated factual fields; AI may assist prose only.
+
+## 12. Configuration-specific nature of future runs
+
+Any future Run evidence binds to a complete configuration tuple (agent version,
+model, tier, mode, OS, hardware, task revision, fixture commit, execution date,
+cost methodology, evidence-bundle digest). A configuration-specific result is
+**never** attributed to an agent universally. Phase 1 contains no Runs.
+
+## 13. Phase 1 limitation
+
+Phase 1 contains **one profile (OpenCode)** and **no evaluations, Runs, or
+Controlled Evaluation Tasks**. This methodology is exercised on a single
+vertical slice; it will be stress-tested as more profiles are added under
+separately authorized phases.
+
+Do not claim independent reproduction has occurred. It has not.

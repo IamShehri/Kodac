@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kernux.dev/schema/agent-profile.schema.json",
+  "title": "Kernux Agent Profile",
+  "description": "Canonical schema for a Kernux agent profile. YAML is the canonical representation; this JSON Schema (Draft 2020-12) validates it. Profiles must carry evidence for every non-unknown factual field. No overall score field is permitted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "updated",
+    "submission",
+    "tracks",
+    "identity",
+    "openness",
+    "compatibility",
+    "protocols",
+    "security",
+    "privacy",
+    "cost",
+    "evidence",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Profile schema version. Must be 1."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Stable agent ID (slug). Lowercase ASCII, hyphen-separated. Must match the directory name under agents/."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable product name."
+    },
+    "updated": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO 8601 date this profile was last edited."
+    },
+    "submission": {
+      "type": "string",
+      "enum": [
+        "community-submitted",
+        "vendor-submitted",
+        "independently-unreproduced",
+        "independently-reproduced"
+      ],
+      "description": "Who submitted this profile and its independent-reproduction status."
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "terminal-agents",
+          "ide-integrated-agents",
+          "cloud-or-async-agents",
+          "open-source-agent-scaffolds",
+          "privacy-first-or-local-capable-agents"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Product tracks this agent belongs to. An agent may belong to multiple tracks."
+    },
+    "identity": {
+      "$ref": "#/$defs/identityBlock"
+    },
+    "openness": {
+      "$ref": "#/$defs/opennessBlock"
+    },
+    "compatibility": {
+      "$ref": "#/$defs/compatibilityBlock"
+    },
+    "protocols": {
+      "$ref": "#/$defs/protocolsBlock"
+    },
+    "security": {
+      "$ref": "#/$defs/securityBlock"
+    },
+    "privacy": {
+      "$ref": "#/$defs/privacyBlock"
+    },
+    "cost": {
+      "$ref": "#/$defs/costBlock"
+    },
+    "capabilities": {
+      "$ref": "#/$defs/capabilitiesBlock"
+    },
+    "model_and_tier": {
+      "$ref": "#/$defs/modelAndTierBlock"
+    },
+    "evidence": {
+      "$ref": "#/$defs/evidenceBlock"
+    },
+    "notes": {
+      "$ref": "#/$defs/notesBlock"
+    }
+  },
+  "$defs": {
+    "fieldValue": {
+      "description": "A factual field with provenance. Used for free-form string values.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source", "verified", "freshness_class"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "string", "const": "unknown" }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "Evidence ID (key into evidence.records) or 'none' when value is unknown."
+        },
+        "verified": {
+          "type": "string",
+          "format": "date",
+          "description": "ISO 8601 date a human last checked the source."
+        },
+        "claim_status": {
+          "type": "string",
+          "enum": ["verified", "vendor-reported", "unknown", "disputed"],
+          "description": "Required when the field could be mistaken for a verified fact."
+        },
+        "freshness_class": {
+          "type": "integer",
+          "enum": [1, 2, 3],
+          "description": "Freshness window: 1=30d, 2=90d, 3=180d."
+        }
+      }
+    },
+    "fieldValueWithClaim": {
+      "description": "A field where claim_status is always required (identity, cost, security).",
+      "allOf": [
+        { "$ref": "#/$defs/fieldValue" },
+        {
+          "type": "object",
+          "required": ["claim_status"]
+        }
+      ]
+    },
+    "triState": {
+      "description": "A factual field whose value is a capability status.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source", "verified", "freshness_class"],
+      "properties": {
+        "value": {
+          "type": "string",
+          "enum": ["supported", "unsupported", "partial", "unknown"]
+        },
+        "source": { "type": "string" },
+        "verified": { "type": "string", "format": "date" },
+        "claim_status": {
+          "type": "string",
+          "enum": ["verified", "vendor-reported", "unknown", "disputed"]
+        },
+        "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
+      }
+    },
+    "listField": {
+      "description": "A factual field whose value is a list of strings.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source", "verified", "freshness_class"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "string", "const": "unknown" }
+          ]
+        },
+        "source": { "type": "string" },
+        "verified": { "type": "string", "format": "date" },
+        "claim_status": {
+          "type": "string",
+          "enum": ["verified", "vendor-reported", "unknown", "disputed"]
+        },
+        "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
+      }
+    },
+    "identityBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vendor_or_maintainer", "official_url", "source_repository"],
+      "properties": {
+        "vendor_or_maintainer": { "$ref": "#/$defs/fieldValueWithClaim" },
+        "official_url": { "$ref": "#/$defs/fieldValueWithClaim" },
+        "source_repository": { "$ref": "#/$defs/fieldValueWithClaim" },
+        "archived_or_unrelated_repositories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "note"],
+            "properties": {
+              "url": { "type": "string" },
+              "note": { "type": "string" }
+            }
+          },
+          "description": "Repositories that are NOT this agent, recorded to prevent confusion."
+        }
+      }
+    },
+    "opennessBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["open_source", "license"],
+      "properties": {
+        "open_source": { "$ref": "#/$defs/triState" },
+        "license": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value", "source", "verified", "freshness_class"],
+          "properties": {
+            "value": {
+              "oneOf": [
+                { "type": "string", "pattern": "^[A-Za-z0-9.+-]+$" },
+                { "type": "string", "const": "unknown" },
+                { "type": "string", "const": "proprietary" }
+              ],
+              "description": "SPDX identifier, 'proprietary', or 'unknown'."
+            },
+            "source": { "type": "string" },
+            "verified": { "type": "string", "format": "date" },
+            "claim_status": {
+              "type": "string",
+              "enum": ["verified", "vendor-reported", "unknown", "disputed"]
+            },
+            "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
+          }
+        }
+      }
+    },
+    "compatibilityBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operating_systems", "surfaces", "supported_providers", "local_model_support"],
+      "properties": {
+        "operating_systems": { "$ref": "#/$defs/listField" },
+        "surfaces": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value", "source", "verified", "freshness_class"],
+          "properties": {
+            "value": {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["terminal", "ide", "web", "desktop", "async", "headless-server"]
+                  }
+                },
+                { "type": "string", "const": "unknown" }
+              ]
+            },
+            "source": { "type": "string" },
+            "verified": { "type": "string", "format": "date" },
+            "claim_status": {
+              "type": "string",
+              "enum": ["verified", "vendor-reported", "unknown", "disputed"]
+            },
+            "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
+          }
+        },
+        "supported_providers": { "$ref": "#/$defs/listField" },
+        "local_model_support": { "$ref": "#/$defs/triState" },
+        "ide_integrations": { "$ref": "#/$defs/listField" }
+      }
+    },
+    "protocolsBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mcp_support", "agent_skills_support", "headless_or_ci"],
+      "properties": {
+        "mcp_support": { "$ref": "#/$defs/triState" },
+        "agent_skills_support": { "$ref": "#/$defs/triState" },
+        "headless_or_ci": { "$ref": "#/$defs/triState" }
+      }
+    },
+    "securityBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sandboxing_model", "permission_controls"],
+      "properties": {
+        "sandboxing_model": { "$ref": "#/$defs/fieldValueWithClaim" },
+        "permission_controls": { "$ref": "#/$defs/fieldValueWithClaim" }
+      }
+    },
+    "privacyBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["telemetry_behavior", "data_retention"],
+      "properties": {
+        "telemetry_behavior": { "$ref": "#/$defs/fieldValue" },
+        "data_retention": { "$ref": "#/$defs/fieldValue" },
+        "opt_out": { "$ref": "#/$defs/fieldValue" }
+      }
+    },
+    "costBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pricing_model", "free_tier"],
+      "properties": {
+        "pricing_model": { "$ref": "#/$defs/fieldValueWithClaim" },
+        "free_tier": { "$ref": "#/$defs/fieldValueWithClaim" }
+      }
+    },
+    "capabilitiesBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repo_scale_context": { "$ref": "#/$defs/fieldValue" },
+        "session_persistence": { "$ref": "#/$defs/triState" },
+        "subagent_support": { "$ref": "#/$defs/triState" }
+      }
+    },
+    "modelAndTierBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "current_versions": { "$ref": "#/$defs/listField" },
+        "available_models": { "$ref": "#/$defs/listField" },
+        "subscription_or_api_tiers": { "$ref": "#/$defs/listField" }
+      }
+    },
+    "evidenceBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["records", "evidence_status", "last_verified"],
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidenceRecord" },
+          "minItems": 0,
+          "description": "Source records cited by fields."
+        },
+        "evidence_status": {
+          "type": "string",
+          "enum": ["verified", "partial", "vendor-reported-only", "unknown"],
+          "description": "Overall evidence state of this profile."
+        },
+        "last_verified": {
+          "type": "string",
+          "format": "date",
+          "description": "ISO date of the most recent source check across all fields."
+        }
+      }
+    },
+    "evidenceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "url", "authority", "date_accessed", "fields_supported"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "Stable evidence ID referenced by field.source."
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact source URL. 'none' is not permitted for an evidence record."
+        },
+        "authority": {
+          "type": "string",
+          "enum": ["official", "official-repo", "official-docs", "official-release", "secondary", "tertiary"],
+          "description": "Source authority level."
+        },
+        "date_accessed": {
+          "type": "string",
+          "format": "date",
+          "description": "ISO date the source was accessed."
+        },
+        "fields_supported": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Field paths this evidence supports (dotted notation)."
+        },
+        "revision_or_commit": {
+          "type": "string",
+          "description": "Immutable revision/commit SHA when applicable."
+        }
+      }
+    },
+    "notesBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Neutral 3-6 sentence summary."
+        },
+        "disputes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["field", "note"],
+            "properties": {
+              "field": { "type": "string" },
+              "sources": { "type": "array", "items": { "type": "string" } },
+              "note": { "type": "string" }
+            }
+          }
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date", "change"],
+            "properties": {
+              "date": { "type": "string", "format": "date" },
+              "change": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

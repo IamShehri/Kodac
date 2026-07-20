@@ -1,0 +1,347 @@
+schema_version: 1
+id: opencode
+name: OpenCode
+updated: 2026-07-21
+submission: community-submitted
+
+tracks:
+  - terminal-agents
+  - ide-integrated-agents
+  - open-source-agent-scaffolds
+  - privacy-first-or-local-capable-agents
+
+identity:
+  vendor_or_maintainer:
+    value: "Anomaly (github.com/anomalyco)"
+    source: opencode-repo-api
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 3
+  official_url:
+    value: "https://opencode.ai"
+    source: opencode-repo-readme
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 3
+  source_repository:
+    value: "https://github.com/anomalyco/opencode"
+    source: opencode-repo-api
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 3
+  archived_or_unrelated_repositories:
+    - url: "https://github.com/opencode-ai/opencode"
+      note: >
+        Archived, unrelated historical project. Not the canonical OpenCode.
+        The active project lives at github.com/anomalyco/opencode.
+
+openness:
+  open_source:
+    value: supported
+    source: opencode-repo-api
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 3
+  license:
+    value: MIT
+    source: opencode-license
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 3
+
+compatibility:
+  operating_systems:
+    value: ["macOS", "Linux", "Windows"]
+    source: opencode-docs-index
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 2
+  surfaces:
+    value: ["terminal", "ide", "web", "desktop", "async", "headless-server"]
+    source: opencode-docs-surfaces
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 2
+  supported_providers:
+    value:
+      - "Anthropic"
+      - "OpenAI"
+      - "Google (Gemini + Vertex AI)"
+      - "xAI"
+      - "Groq"
+      - "OpenRouter"
+      - "Amazon Bedrock"
+      - "Azure OpenAI"
+      - "Mistral"
+      - "DeepSeek"
+      - "Fireworks AI"
+    source: opencode-docs-providers
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 2
+  local_model_support:
+    value: supported
+    source: opencode-docs-providers
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 2
+  ide_integrations:
+    value: ["VS Code", "Cursor", "Windsurf", "VSCodium", "Zed (via ACP)"]
+    source: opencode-docs-ide
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 2
+
+protocols:
+  mcp_support:
+    value: supported
+    source: opencode-docs-mcp
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 2
+  agent_skills_support:
+    value: supported
+    source: opencode-docs-skills
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 2
+  headless_or_ci:
+    value: supported
+    source: opencode-docs-server
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 2
+
+security:
+  sandboxing_model:
+    value: "Permission system (allow/ask/deny per tool); no documented OS-level sandbox."
+    source: opencode-docs-permissions
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+  permission_controls:
+    value: "Per-tool allow/ask/deny with wildcard patterns; --auto flag auto-approves non-denied actions; experimental policies array."
+    source: opencode-docs-permissions
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+
+privacy:
+  telemetry_behavior:
+    value: "No telemetry documented in official docs; code-level behavior not independently audited. Optional /share feature sends a conversation to opencode.ai CDN (disableable)."
+    source: opencode-docs-enterprise
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+  data_retention:
+    value: "No formal data-retention policy document. Enterprise doc states OpenCode does not store code or context data; session data stored locally on disk."
+    source: opencode-docs-enterprise
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 1
+  opt_out:
+    value: "/share feature disableable via share: disabled; no telemetry opt-out documented (no telemetry documented)."
+    source: opencode-docs-enterprise
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+
+cost:
+  pricing_model:
+    value: "Free and open source (MIT). Bring-your-own model keys. Enterprise tier uses per-seat pricing (contact sales)."
+    source: opencode-site-home
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 1
+  free_tier:
+    value: "Yes — the agent itself is free; some models advertised as included free."
+    source: opencode-site-home
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 1
+
+capabilities:
+  repo_scale_context:
+    value: "Built-in grep/glob/read/lsp tools; Explore and Scout read-only subagents for codebase navigation; automatic context compaction for long sessions."
+    source: opencode-docs-tools
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+  session_persistence:
+    value: supported
+    source: opencode-docs-cli
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 2
+  subagent_support:
+    value: supported
+    source: opencode-docs-agents
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 2
+
+model_and_tier:
+  current_versions:
+    value: ["v1.18.4"]
+    source: opencode-repo-release
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 1
+  available_models:
+    value: ["75+ LLM providers via AI SDK and Models.dev (see supported_providers)."]
+    source: opencode-docs-providers
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 1
+
+evidence:
+  records:
+    - id: opencode-repo-api
+      title: "anomalyco/opencode repository metadata (GitHub API)"
+      url: "https://api.github.com/repos/anomalyco/opencode"
+      authority: official-repo
+      date_accessed: 2026-07-21
+      fields_supported:
+        - identity.vendor_or_maintainer
+        - identity.source_repository
+        - openness.open_source
+    - id: opencode-repo-readme
+      title: "anomalyco/opencode README (dev branch)"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/README.md"
+      authority: official-repo
+      date_accessed: 2026-07-21
+      fields_supported:
+        - identity.official_url
+    - id: opencode-license
+      title: "anomalyco/opencode LICENSE (MIT)"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/LICENSE"
+      authority: official-repo
+      date_accessed: 2026-07-21
+      fields_supported:
+        - openness.license
+    - id: opencode-docs-index
+      title: "OpenCode docs — index/install (operating systems, surfaces overview)"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/index.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - compatibility.operating_systems
+    - id: opencode-docs-surfaces
+      title: "OpenCode docs — tui.mdx, ide.mdx, web.mdx, server.mdx, acp.mdx, github.mdx, gitlab.mdx"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/tui.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - compatibility.surfaces
+        - protocols.headless_or_ci
+    - id: opencode-docs-providers
+      title: "OpenCode docs — providers.mdx"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/providers.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - compatibility.supported_providers
+        - compatibility.local_model_support
+        - model_and_tier.available_models
+    - id: opencode-docs-ide
+      title: "OpenCode docs — ide.mdx (IDE integrations)"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/ide.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - compatibility.ide_integrations
+    - id: opencode-docs-mcp
+      title: "OpenCode docs — mcp-servers.mdx"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/mcp-servers.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - protocols.mcp_support
+    - id: opencode-docs-skills
+      title: "OpenCode docs — skills.mdx (Agent Skills)"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/skills.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - protocols.agent_skills_support
+    - id: opencode-docs-server
+      title: "OpenCode docs — server.mdx (headless HTTP server)"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/server.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - protocols.headless_or_ci
+    - id: opencode-docs-permissions
+      title: "OpenCode docs — permissions.mdx and policies.mdx"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/permissions.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - security.sandboxing_model
+        - security.permission_controls
+    - id: opencode-docs-enterprise
+      title: "OpenCode docs — enterprise.mdx (privacy/retention statements)"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/enterprise.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - privacy.telemetry_behavior
+        - privacy.data_retention
+        - privacy.opt_out
+    - id: opencode-docs-cli
+      title: "OpenCode docs — cli.mdx (session persistence flags)"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/cli.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - capabilities.session_persistence
+    - id: opencode-docs-agents
+      title: "OpenCode docs — agents.mdx (subagents)"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/agents.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - capabilities.subagent_support
+    - id: opencode-docs-tools
+      title: "OpenCode docs — tools.mdx (built-in tools, repo-scale context)"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/web/src/content/docs/tools.mdx"
+      authority: official-docs
+      date_accessed: 2026-07-21
+      fields_supported:
+        - capabilities.repo_scale_context
+    - id: opencode-site-home
+      title: "opencode.ai homepage (pricing model, free tier)"
+      url: "https://opencode.ai"
+      authority: official
+      date_accessed: 2026-07-21
+      fields_supported:
+        - cost.pricing_model
+        - cost.free_tier
+    - id: opencode-repo-release
+      title: "anomalyco/opencode latest release (v1.18.4)"
+      url: "https://api.github.com/repos/anomalyco/opencode/releases/latest"
+      authority: official-release
+      date_accessed: 2026-07-21
+      fields_supported:
+        - model_and_tier.current_versions
+  evidence_status: partial
+  last_verified: 2026-07-21
+
+notes:
+  summary: >
+    OpenCode is an open-source (MIT) AI coding agent maintained by Anomaly
+    (github.com/anomalyco), available as a terminal TUI, desktop app, IDE
+    extension, web UI, and headless HTTP server. It supports 75+ model
+    providers including local models (Ollama, LM Studio), implements the
+    Model Context Protocol and its own Agent Skills system, and ships a
+    per-tool permission system. Many factual fields are sourced from
+    official docs and the canonical repository; privacy, retention, and
+    pricing fields remain vendor-reported because no independent audit or
+    formal policy document is available. The active project is
+    github.com/anomalyco/opencode; github.com/opencode-ai/opencode is an
+    archived, unrelated historical project. This is a Phase 1 vertical
+    slice; no Kernux Run evidence exists yet.
+  disputes: []
+  changes:
+    - date: 2026-07-21
+      change: "Initial Phase 1 profile created from primary sources only."
