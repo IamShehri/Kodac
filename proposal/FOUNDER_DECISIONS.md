@@ -222,13 +222,29 @@ Phase 1-R is a correction inside the already authorized Phase 1 scope. It harden
 
 Phase 1-R is complete locally only after the correction commit. **Final independent acceptance remains pending.** Phase 2 remains unauthorized.
 
+### Phase 1-R2 — Evidence Contract Closure (authorized 2026-07-21)
+
+Phase 1-R2 is a narrowly scoped closure inside the already authorized Phase 1 scope. It fixes six independently reproduced evidence-contract defects that allowed adversarial mutations to pass validation:
+
+1. authority/verification_method relabeling could upgrade vendor docs to `verified`;
+2. secondary authority could use `official-documentation` and support vendor-reported facts;
+3. `claim_status: disputed` passed without a matching `notes.disputes` record;
+4. empty list values passed and could render as `unknown · vendor-reported`;
+5. `identity.official_url` accepted malformed non-URL strings;
+6. dynamic GitHub API endpoints could be marked `immutable: true`.
+
+Phase 1-R2 implements centralized authority/method/field compatibility, a full dispute contract, list/surface invariants, URL-shaped identity fields, a mechanical immutability contract, exact evidence mapping (no `allow_unused_records`), deterministic error ordering, and a document-consistency check. All twelve proposal documents are reconciled to the implemented state.
+
+Phase 1-R2 is complete locally only after the correction commit. **Final independent acceptance requires a new independent review archive.** Phase 2 remains unauthorized.
+
 ## Unresolved items
 
 - (Resolved 2026-07-20) The S0-C package is ratified.
 - (Resolved 2026-07-20) Legacy archival completed locally on `archive/trust-kernel-s0b` and `archive/omnibridge-pre-reboot`; trust-kernel/OmniBridge material preserved, not mixed into the new product identity.
 - (Resolved 2026-07-20) Phase 1 (one OpenCode profile vertical slice) authorized.
 - (Resolved 2026-07-21) Phase 1-R evidence contract correction authorized and applied locally.
-- Final independent acceptance of Phase 1-R — pending review of the Phase 1-R review archive.
+- (Resolved 2026-07-21) Phase 1-R2 evidence contract closure authorized and applied locally.
+- Final independent acceptance of Phase 1-R2 — pending review of the Phase 1-R2 review archive.
 - Per-agent sourcing feasibility for the remaining nine launch profiles — to be confirmed under a separately authorized Phase 2.
 - Controlled Evaluation Tasks, Runs, and benchmark execution — remain unauthorized.
 - Concrete launch date, contingent on the "useful sourced data + at least one complete reproducible evidence path" gate.

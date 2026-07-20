@@ -103,4 +103,4 @@ Tasks are **"Controlled Evaluation Tasks."** Never call them real-world benchmar
 
 ## Implementation authorization
 
-**Phase 1 authorized (2026-07-20)** for exactly: one OpenCode profile, agent-profile JSON Schema, validation tooling, deterministic Markdown generation, tests, and root README integration. Everything else in this plan (the remaining nine profiles, Controlled Evaluation Tasks, Runs, CI beyond local tooling, website, launch) remains unauthorized; Phase 2 requires separate founder authorization.
+**Phase 1 authorized (2026-07-20)** for exactly: one OpenCode profile, agent-profile JSON Schema, validation tooling, deterministic Markdown generation, tests, and root README integration. **Phase 1-R2 authorized (2026-07-21)** for closing the remaining evidence-contract and documentation defects inside the Phase 1 scope. Everything else in this plan (the remaining nine profiles, Controlled Evaluation Tasks, Runs, CI beyond local tooling, website, launch) remains unauthorized; Phase 2 requires separate founder authorization.
