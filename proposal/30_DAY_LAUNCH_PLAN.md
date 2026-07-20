@@ -37,7 +37,7 @@ If either is missing on D, **delay launch** rather than ship incomplete.
 ## Phase plan
 
 ### Phase A — Foundation (D − 30 to D − 21)
-- Founder approved the S0-C strategy package on 2026-07-20; Phase 1 implementation begins only after it is separately authorized.
+- Founder approved the S0-C strategy package on 2026-07-20; **Phase 1 (Agent Profile Vertical Slice) was authorized on 2026-07-20** for exactly: one OpenCode profile, agent-profile JSON Schema, validation tooling, deterministic Markdown generation, tests, and root README integration. All other profiles, Controlled Evaluation Tasks, Runs, CI, website, and launch remain unauthorized; Phase 2 requires separate authorization.
 - Create `data/profiles/`, `data/runs/`, `data/tasks/`, `data/schema/`, `matrix/`, `reports/`, `proof/`, `policy/`, `tools/`, `docs/legacy/`.
 - Add `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, `policy/EDIT.md`.
 - Implement `data/schema/profile.schema.json`, `data/schema/run.schema.json`.
@@ -103,4 +103,4 @@ Tasks are **"Controlled Evaluation Tasks."** Never call them real-world benchmar
 
 ## Implementation authorization
 
-**Not authorized.** Legacy archival and the Phase 1 vertical-slice kickoff require separate authorization. This document records the plan; no `data/`, `tools/`, schema files, or fixtures are created in this pass.
+**Phase 1 authorized (2026-07-20)** for exactly: one OpenCode profile, agent-profile JSON Schema, validation tooling, deterministic Markdown generation, tests, and root README integration. Everything else in this plan (the remaining nine profiles, Controlled Evaluation Tasks, Runs, CI beyond local tooling, website, launch) remains unauthorized; Phase 2 requires separate founder authorization.

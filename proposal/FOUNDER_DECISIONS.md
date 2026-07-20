@@ -172,13 +172,43 @@ A coordinated, **non-spam** launch. The launch package may include tailored subm
 
 ## Implementation authorization status
 
-> **Not authorized.** Legacy archival and the Phase 1 vertical-slice kickoff require separate authorization.
+> **Phase 1 authorized (2026-07-20).** Everything outside Phase 1 remains unauthorized.
 
-No implementation code, schemas, fixtures, profiles, CI workflows, package manifests, websites, databases, or runtime tooling may be created. This pass updates the eleven existing proposal documents and creates exactly one new file: this one.
+### Phase 1 — Agent Profile Vertical Slice (authorized 2026-07-20)
+
+Authorized scope:
+
+> One OpenCode profile, agent-profile JSON Schema, validation tooling, deterministic Markdown generation, tests, and root README integration.
+
+Phase 1 produces one complete, deterministic path:
+
+```
+official OpenCode sources
+→ canonical profile.yaml
+→ JSON Schema validation
+→ custom evidence-policy validation
+→ generated Markdown comparison matrix
+→ automated tests
+→ updated root README
+```
+
+Phase 1 remains bound by the ratified strategy: no overall score, no SWE-bench-replacement language, evidence before claims, `unknown` and `stale` as distinct first-class states, 30/90/180-day freshness policy, and no paid ranking/placement.
+
+### Still unauthorized
+
+- All other agent profiles (the remaining nine of the v1 set).
+- Controlled Evaluation Tasks.
+- Runs and benchmark execution.
+- Website, CI (beyond the local Python toolchain), API, database, registry, badges, and launch.
+- Phase 2 requires separate founder authorization.
+
+Legacy archival has been completed locally on `archive/trust-kernel-s0b` (`fd6d805…`) and `archive/omnibridge-pre-reboot` (`60df880…`). The legacy material is preserved and is not mixed into this product identity.
 
 ## Unresolved items
 
-- (Resolved 2026-07-20) The S0-C package is ratified; product implementation remains separately gated.
-- The separately authorized legacy-archival operation (branch/commit) for trust-kernel and OmniBridge material — explicitly out of scope here.
-- Per-agent sourcing feasibility for each of the ten launch profiles (to be confirmed when profiles are actually authored under a separately authorized pass).
-- Concrete launch date, contingent on the "useful sourced data + one complete reproducible evidence path" gate.
+- (Resolved 2026-07-20) The S0-C package is ratified.
+- (Resolved 2026-07-20) Legacy archival completed locally on `archive/trust-kernel-s0b` and `archive/omnibridge-pre-reboot`; trust-kernel/OmniBridge material preserved, not mixed into the new product identity.
+- (Resolved 2026-07-20) Phase 1 (one OpenCode profile vertical slice) authorized.
+- Per-agent sourcing feasibility for the remaining nine launch profiles — to be confirmed under a separately authorized Phase 2.
+- Controlled Evaluation Tasks, Runs, and benchmark execution — remain unauthorized.
+- Concrete launch date, contingent on the "useful sourced data + at least one complete reproducible evidence path" gate.
