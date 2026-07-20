@@ -1,17 +1,17 @@
 # Run Evidence Schema — Kernux Runs
 
-*Status: Ratified — S0-C Founder Ratification (2026-07-20). Implementation not authorized.*
+*Status: Ratified — S0-C Founder Ratification (2026-07-20). Phase 1 implemented locally; independent acceptance pending. Runs are not part of Phase 1 — this schema describes the future Phase 2 run-evidence contract.*
 
 > Authoritative decisions live in [FOUNDER_DECISIONS.md](FOUNDER_DECISIONS.md). On conflict, FOUNDER_DECISIONS.md wins.
 
-A **Run** is a single execution of one agent on one Controlled Evaluation Task, captured as an immutable evidence bundle. **YAML is the canonical representation** (`data/runs/<agent-slug>/<task-slug>/<run-id>/RUN.yml`), validated by **JSON Schema** (`data/schema/run.schema.json`). Markdown summaries are a **generated view**.
+A **Run** is a single execution of one agent on one Controlled Evaluation Task, captured as an immutable evidence bundle. **YAML is the canonical representation** (`runs/<agent-slug>/<task-slug>/<run-id>/RUN.yml`, future), validated by **JSON Schema** (`schema/run.schema.json`, future). Markdown summaries are a **generated view**. Runs and `schema/run.schema.json` are not implemented in Phase 1.
 
 `run-id` is `<YYYYMMDD>-<short-hash>` where the short hash is derived from the canonical Run YAML, so two identical runs share an id. A Run is **never edited after publication**; corrections are a new Run that supersedes it via `supersedes:`.
 
 ## Directory contents of a Run
 
 ```
-data/runs/<agent-slug>/<task-slug>/<run-id>/
+runs/<agent-slug>/<task-slug>/<run-id>/     # future — not implemented in Phase 1
 ├── RUN.yml            # Canonical record (validated by run.schema.json)
 ├── logs/              # Truncated, redacted agent output
 ├── artifacts/         # Diff/patch, generated files (license-permitting)
@@ -51,7 +51,7 @@ agent:
 
 task:
   slug: <task-slug>
-  task_set_revision: <repo commit-sha of data/tasks/<task-slug> at run time>
+  task_set_revision: <repo commit-sha of tasks/<task-slug> at run time>
   fixture_commit: <commit-sha or digest>
 
 environment:
@@ -88,7 +88,7 @@ cost:
 verification:
   status: pass | fail | error
   criteria: <exact text of acceptance criteria from the Task>
-  script: data/tasks/<task-slug>/VERIFY.<ext>
+  script: tasks/<task-slug>/VERIFY.<ext>
   output_hash: <sha256 of normalized verification output>
 
 evidence:
@@ -172,4 +172,4 @@ To correct a Run, publish a new Run with `supersedes: <old-run-id>` and a note. 
 
 ## Implementation authorization
 
-**Not authorized.** Legacy archival and the Phase 1 vertical-slice kickoff require separate authorization. This document specifies the schema; no `data/schema/run.schema.json` file is created in this pass.
+**Phase 1 implemented locally.** Independent acceptance pending. Phase 2 remains unauthorized. This document specifies the future run schema; no `schema/run.schema.json` file is created yet, and no Runs are implemented in Phase 1.

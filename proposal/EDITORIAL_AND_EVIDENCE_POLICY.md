@@ -79,7 +79,7 @@ The following are **forbidden** as positive claims (allowed only inside explicit
 - "guaranteed", "unbreakable", "zero-trust" (as a Kernux claim)
 - any compliance/certification claim Kernux itself cannot back
 
-`validate_profile.py` fails on any occurrence as a positive claim.
+`validate_profiles.py` fails on any occurrence as a positive claim.
 
 ## SWE-bench positioning discipline (permanent)
 
@@ -142,9 +142,9 @@ Infrastructure and report sponsorship may be considered later only with clear di
 
 ## Enforcement
 
-- `validate_profile.py` and `validate_run.py` enforce machine-checkable rules in CI (added before launch, under separately authorized implementation).
+- `validate_profiles.py` enforces machine-checkable rules for profiles (implemented in Phase 1); `validate_run.py` is future, added before launch under separately authorized implementation.
 - A human editor (initially the founder) is the final authority on disputes.
 
 ## Implementation authorization
 
-**Not authorized.** Legacy archival and the Phase 1 vertical-slice kickoff require separate authorization. This document records policy; no validators or CI are created in this pass.
+**Phase 1 implemented locally.** Independent acceptance pending. Phase 2 remains unauthorized. The profile validator (`tools/validate_profiles.py`) is implemented; the run validator and CI remain future work.

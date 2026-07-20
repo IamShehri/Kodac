@@ -95,6 +95,27 @@
         "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
       }
     },
+    "urlField": {
+      "description": "A URL-shaped factual field. Accepts either the exact reserved string 'unknown' or a valid HTTPS URI. claim_status is REQUIRED.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source", "verified", "claim_status", "freshness_class"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "string", "format": "uri", "pattern": "^https://" },
+            { "type": "string", "const": "unknown" }
+          ]
+        },
+        "source": { "type": "string" },
+        "verified": { "type": "string", "format": "date" },
+        "claim_status": {
+          "type": "string",
+          "enum": ["verified", "vendor-reported", "unknown", "disputed"]
+        },
+        "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
+      }
+    },
     "triStateField": {
       "description": "A factual capability field with a controlled value vocabulary. claim_status is REQUIRED.",
       "type": "object",
@@ -124,7 +145,9 @@
           "oneOf": [
             {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "uniqueItems": true
             },
             { "type": "string", "const": "unknown" }
           ]
@@ -167,7 +190,9 @@
               "items": {
                 "type": "string",
                 "enum": ["terminal", "ide", "web", "desktop", "async", "headless-server"]
-              }
+              },
+              "minItems": 1,
+              "uniqueItems": true
             },
             { "type": "string", "const": "unknown" }
           ]
@@ -187,8 +212,8 @@
       "required": ["vendor_or_maintainer", "official_url", "source_repository"],
       "properties": {
         "vendor_or_maintainer": { "$ref": "#/$defs/freeFormField" },
-        "official_url": { "$ref": "#/$defs/freeFormField" },
-        "source_repository": { "$ref": "#/$defs/freeFormField" },
+        "official_url": { "$ref": "#/$defs/urlField" },
+        "source_repository": { "$ref": "#/$defs/urlField" },
         "archived_or_unrelated_repositories": {
           "type": "array",
           "items": {
@@ -281,7 +306,7 @@
       }
     },
     "evidenceBlock": {
-      "description": "Evidence records only. evidence_status and last_verified are NOT authored here; they are derived by tooling and surfaced in generated views.",
+      "description": "Evidence records only. evidence_status and last_verified are NOT authored here; they are derived by tooling and surfaced in generated views. allow_unused_records is not permitted; evidence mapping must be exact.",
       "type": "object",
       "additionalProperties": false,
       "required": ["records"],
@@ -289,17 +314,13 @@
         "records": {
           "type": "array",
           "items": { "$ref": "#/$defs/evidenceRecord" }
-        },
-        "allow_unused_records": {
-          "type": "boolean",
-          "default": false
         }
       }
     },
     "evidenceRecord": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "url", "authority", "verification_method", "date_accessed", "content_sha256", "fields_supported"],
+      "required": ["id", "title", "url", "authority", "verification_method", "date_accessed", "content_sha256", "fields_supported", "immutable"],
       "properties": {
         "id": {
           "type": "string",

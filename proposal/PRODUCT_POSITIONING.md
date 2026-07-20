@@ -1,6 +1,6 @@
 # Product Positioning — Kernux Agent Index
 
-*Status: Ratified — S0-C Founder Ratification (2026-07-20). Implementation not authorized.*
+*Status: Ratified — S0-C Founder Ratification (2026-07-20). Phase 1 implemented locally; independent acceptance pending.*
 
 > Authoritative decisions live in [FOUNDER_DECISIONS.md](FOUNDER_DECISIONS.md). If this document ever disagrees with FOUNDER_DECISIONS.md, FOUNDER_DECISIONS.md wins.
 
@@ -96,4 +96,4 @@ The earlier "trust kernel / OmniBridge" direction is **historical** and is **not
 
 ## Implementation authorization
 
-**Not authorized.** Legacy archival and the Phase 1 vertical-slice kickoff require separate authorization. This document is positioning text; no product implementation is created from it.
+**Phase 1 implemented locally.** Independent acceptance pending. Phase 2 remains unauthorized. This document is positioning text; no product implementation is created from it.

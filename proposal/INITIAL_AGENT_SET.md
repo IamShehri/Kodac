@@ -1,6 +1,6 @@
 # Initial Agent Set — Kernux Index (V1, ratified)
 
-*Status: Ratified — S0-C Founder Ratification (2026-07-20). Implementation not authorized.*
+*Status: Ratified — S0-C Founder Ratification (2026-07-20). Phase 1 implemented locally; independent acceptance pending.*
 
 > Authoritative decisions live in [FOUNDER_DECISIONS.md](FOUNDER_DECISIONS.md). On conflict, FOUNDER_DECISIONS.md wins.
 
@@ -69,8 +69,8 @@ No factual field is populated in this document. Each profile is created only whe
 - No factual field is populated.
 - No `verified` date is set to a real source check.
 - No claim is made about capability, pricing, or licensing for any agent.
-- No profile file is created (implementation not authorized).
+- No profile file is created by this document. The OpenCode profile (`agents/opencode/profile.yaml`) exists from the separately authorized Phase 1 vertical slice; the other nine profiles are not yet authored.
 
 ## Implementation authorization
 
-**Not authorized.** Legacy archival and the Phase 1 vertical-slice kickoff require separate authorization. This document records the v1 set; no profile YAML is created in this pass.
+**Phase 1 implemented locally.** Independent acceptance pending. Phase 2 remains unauthorized. This document records the v1 set; the OpenCode profile YAML (`agents/opencode/profile.yaml`) is implemented in Phase 1. The remaining nine profiles await Phase 2.

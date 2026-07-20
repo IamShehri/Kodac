@@ -27,8 +27,12 @@ into sourced profiles and decision-oriented comparisons.
 - **Canonical format:** profiles are YAML (`agents/<id>/profile.yaml`), validated
   by a [strict JSON Schema](schema/agent-profile.schema.json) plus a custom
   evidence-policy layer. Markdown is a generated view, not the source of truth.
-- **Evidence before claims:** every non-`unknown` factual field carries a pinned
-  source with a content digest (`content_sha256`) and a verification date.
+- **Evidence before claims:** every non-`unknown` factual field carries a source
+  with a content digest (`content_sha256`) and a verification date. Immutable
+  sources are pinned where technically possible (raw GitHub URLs pinned to exact
+  commit SHAs); dynamic sources (GitHub API, vendor homepages) carry a
+  point-in-time digest and may drift. A digest alone does not make a dynamic
+  URL immutable.
   Vendor-reported facts are labeled `vendor-reported`; artifact-verified facts
   (repository identity, LICENSE, release metadata) are labeled `verified`.
 - **Claim status is mechanical, not prose.** Each evidence record carries a

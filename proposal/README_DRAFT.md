@@ -18,10 +18,10 @@ Kernux is **complementary to SWE-bench** and other academic benchmarks. SWE-benc
 
 ## What's inside
 
-- **Kernux Index** — source-cited agent profiles (`data/profiles/*.yml`).
-- **Kernux Matrix** — generated comparison tables across capabilities, platforms, pricing, privacy, licensing, sandboxing, telemetry, MCP, skills, automation, and CI (`matrix/`, generated from `data/`).
-- **Kernux Lab** — **Controlled Evaluation Tasks** with deterministic acceptance criteria (`data/tasks/`).
-- **Kernux Runs** — configuration-specific evidence bundles: config, versions, timestamps, logs, artifacts, cost, duration, verification results (`data/runs/`).
+- **Kernux Index** — source-cited agent profiles (`agents/<id>/profile.yaml`). One profile (OpenCode) is implemented in Phase 1; the remaining nine are future.
+- **Kernux Matrix** — generated comparison tables across capabilities, platforms, pricing, privacy, licensing, sandboxing, telemetry, MCP, skills, automation, and CI (`matrix/`, generated from `agents/`).
+- **Kernux Lab** — **Controlled Evaluation Tasks** with deterministic acceptance criteria (future; `tasks/` is not yet implemented).
+- **Kernux Runs** — configuration-specific evidence bundles: config, versions, timestamps, logs, artifacts, cost, duration, verification results (future; `runs/` is not yet implemented).
 - **Kernux Reports** — dated analytical reports based only on documented evidence (`reports/`).
 - **Kernux Proof** — a future evidence schema and verification utility. **Not built in v1** (`proof/`).
 
@@ -31,9 +31,9 @@ Kernux **does not** publish an overall "Kernux Score" or league table. Compariso
 
 ## How to use it (zero-install)
 
-1. Read a profile in `data/profiles/` (rendered as Markdown). Every factual field cites a source and a verification date.
+1. Read a profile in `agents/<id>/profile.yaml` (rendered as Markdown). Every factual field cites a source and a verification date.
 2. Open `matrix/` to compare agents side by side.
-3. Open `data/runs/` to see exactly how a specific configuration performed on a Controlled Evaluation Task — what it cost, how long it took, and whether it passed.
+3. Open `runs/` (future) to see exactly how a specific configuration performed on a Controlled Evaluation Task — what it cost, how long it took, and whether it passed.
 4. Open `reports/` for a dated, defensible summary, with every claim cited.
 
 You do **not** need to install anything to read any of the above.

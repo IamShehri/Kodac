@@ -1,6 +1,6 @@
 # 30-Day Launch Plan — Kernux Agent Index
 
-*Status: Ratified — S0-C Founder Ratification (2026-07-20). Implementation not authorized.*
+*Status: Ratified — S0-C Founder Ratification (2026-07-20). Phase 1 implemented locally; independent acceptance pending.*
 
 > Authoritative decisions live in [FOUNDER_DECISIONS.md](FOUNDER_DECISIONS.md). On conflict, FOUNDER_DECISIONS.md wins.
 
@@ -38,17 +38,17 @@ If either is missing on D, **delay launch** rather than ship incomplete.
 
 ### Phase A — Foundation (D − 30 to D − 21)
 - Founder approved the S0-C strategy package on 2026-07-20; **Phase 1 (Agent Profile Vertical Slice) was authorized on 2026-07-20** for exactly: one OpenCode profile, agent-profile JSON Schema, validation tooling, deterministic Markdown generation, tests, and root README integration. All other profiles, Controlled Evaluation Tasks, Runs, CI, website, and launch remain unauthorized; Phase 2 requires separate authorization.
-- Create `data/profiles/`, `data/runs/`, `data/tasks/`, `data/schema/`, `matrix/`, `reports/`, `proof/`, `policy/`, `tools/`, `docs/legacy/`.
+- Create `agents/<id>/profile.yaml` (implemented), `matrix/`, `reports/`, `proof/`, `policy/`, `tools/`, `docs/legacy/`. (`data/runs/`, `data/tasks/` remain future/unimplemented until Phase 2.)
 - Add `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, `policy/EDIT.md`.
-- Implement `data/schema/profile.schema.json`, `data/schema/run.schema.json`.
-- Implement `tools/validate_profile.py`, `tools/validate_run.py`, `tools/generate_matrix.py` (Python stdlib where possible).
+- Implement `schema/agent-profile.schema.json` (implemented). `schema/run.schema.json` is future (no Runs in Phase 1).
+- Implement `tools/validate_profiles.py`, `tools/generate_matrix.py` (implemented). `tools/validate_run.py` is future (no Runs in Phase 1).
 - Write the ten Controlled Evaluation Tasks with original fixtures under Apache-2.0; verify each `VERIFY.*` runs green on a known-good solution.
 
 ### Phase B — Profiles (D − 21 to D − 10)
 - Source and write the ratified **ten** profiles (see [INITIAL_AGENT_SET.md](INITIAL_AGENT_SET.md)).
 - Pin `opencode` to https://github.com/anomalyco/opencode, distinct from the archived https://github.com/opencode-ai/opencode.
 - Every non-`unknown` field has a primary source + `verified` date + `freshness_class` + `claim_status`.
-- Run `validate_profile.py` on each; fail the PR if any field lacks sourcing or violates freshness/claim rules.
+- Run `validate_profiles.py` on each; fail the PR if any field lacks sourcing or violates freshness/claim rules.
 
 ### Phase C — Runs (D − 10 to D − 4)
 - For each of the ten Controlled Evaluation Tasks, produce at least one Run on at least one agent (preferably two for contrast).
@@ -58,7 +58,7 @@ If either is missing on D, **delay launch** rather than ship incomplete.
 - Run `validate_run.py`; ensure every Run has a verification result.
 
 ### Phase D — Matrix + Report (D − 4 to D − 1)
-- Generate `matrix/*.md` deterministically from `data/profiles/*.yml`. **No overall score.**
+- Generate `matrix/*.md` deterministically from `agents/<id>/profile.yaml`. **No overall score.**
 - Write `reports/YYYY-MM.md` derived **only** from committed Runs; cite each Run by relative path.
 - Include a "what changed / what's still `unknown`" section.
 

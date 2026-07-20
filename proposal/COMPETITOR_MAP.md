@@ -86,4 +86,4 @@ These are focus choices. They are **not** a claim that no one else does any of t
 
 ## Implementation authorization
 
-**Not authorized.** Legacy archival and the Phase 1 vertical-slice kickoff require separate authorization. This document is positioning/risk analysis; it creates no product.
+**Phase 1 implemented locally.** Independent acceptance pending. Phase 2 remains unauthorized. This document is positioning/risk analysis; it creates no product.

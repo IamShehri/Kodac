@@ -377,12 +377,12 @@ evidence:
         - cost.free_tier
       immutable: false
     - id: opencode-repo-release
-      title: "anomalyco/opencode latest release metadata (GitHub API)"
-      url: "https://api.github.com/repos/anomalyco/opencode/releases/latest"
+      title: "anomalyco/opencode release metadata for tag v1.18.4 (GitHub API)"
+      url: "https://api.github.com/repos/anomalyco/opencode/releases/tags/v1.18.4"
       authority: official-release
       verification_method: release-metadata
       date_accessed: 2026-07-21
-      content_sha256: "0e525b9f13d2ef33c23e673a7f92a61bc5e424b62df0595ca62253799b27db18"
+      content_sha256: "a8976b46418c2d111d1f53d8f5752c79e6c28ed2bb720c3fac2e5a3ee4fcfa83"
       fields_supported:
         - model_and_tier.current_versions
       immutable: false

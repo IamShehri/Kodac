@@ -1,6 +1,6 @@
 # Controlled Evaluation Tasks — Kernux Lab (V1, ratified)
 
-*Status: Ratified — S0-C Founder Ratification (2026-07-20). Implementation not authorized.*
+*Status: Ratified — S0-C Founder Ratification (2026-07-20). Phase 1 implemented locally; independent acceptance pending.*
 
 > Authoritative decisions live in [FOUNDER_DECISIONS.md](FOUNDER_DECISIONS.md). On conflict, FOUNDER_DECISIONS.md wins.
 
@@ -24,7 +24,7 @@ Kernux is explicitly **complementary to SWE-bench** and other academic benchmark
 
 ## Required fields for every controlled task (ratified)
 
-Every `data/tasks/<task-slug>/TASK.yml` must contain:
+Every `tasks/<task-slug>/TASK.yml` must contain:
 
 - **provenance** — origin of the fixture (original, or upstream commit + URL).
 - **license** — SPDX identifier for the fixture.
@@ -131,4 +131,4 @@ Controlled-task results are **configuration-specific Run evidence**, never aggre
 
 ## Implementation authorization
 
-**Not authorized.** Legacy archival and the Phase 1 vertical-slice kickoff require separate authorization. This document records the controlled-task set; no `data/tasks/` files or fixtures are created in this pass.
+**Phase 1 implemented locally.** Independent acceptance pending. Phase 2 remains unauthorized. This document records the controlled-task set; no `data/tasks/` files or fixtures are created yet (tasks and Runs are future work pending Phase 2).

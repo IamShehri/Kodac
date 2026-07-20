@@ -1,10 +1,10 @@
 # Agent Profile Schema — Kernux Index
 
-*Status: Ratified — S0-C Founder Ratification (2026-07-20). Implementation not authorized.*
+*Status: Ratified — S0-C Founder Ratification (2026-07-20). Phase 1 implemented locally; independent acceptance pending.*
 
 > Authoritative decisions live in [FOUNDER_DECISIONS.md](FOUNDER_DECISIONS.md). On conflict, FOUNDER_DECISIONS.md wins.
 
-This defines the canonical shape of a Kernux agent profile. **YAML is the canonical representation** (`data/profiles/<agent-slug>.yml`), validated by **JSON Schema** (`data/schema/profile.schema.json`). Markdown profiles are a **generated view**. This document specifies the schema; it does **not** create the JSON Schema file in this pass.
+This defines the canonical shape of a Kernux agent profile. **YAML is the canonical representation** (`agents/<id>/profile.yaml`), validated by **JSON Schema** (`schema/agent-profile.schema.json`). Markdown profiles are a **generated view**. The schema and validator are implemented in Phase 1.
 
 ## Slug rules
 
@@ -102,9 +102,9 @@ model_and_tier:
 
 evidence:
   official_benchmarks: { value: <url or none>, source, verified, freshness_class }
-  kernux_runs: [data/runs/<agent-slug>/<task-slug>/<run-id>/RUN.yml, ...]    # generator-curated
-  evidence_status: verified | partial | vendor-reported-only | unknown
-  last_verified: <ISO date>
+  kernux_runs: [<agent-slug>/<task-slug>/<run-id>/RUN.yml, ...]    # generator-curated, paths relative to a future runs/ root (Runs are not implemented in Phase 1)
+  evidence_status: verified | partial | vendor-reported-only | unknown    # DERIVED by tooling, never authored
+  last_verified: <ISO date>                                          # DERIVED by tooling, never authored
 
 notes:
   summary: <neutral 3–6 sentence summary>
@@ -114,11 +114,14 @@ notes:
 
 ## Field semantics
 
-- `claim_status` is **required** on any field that could be mistaken for a verified fact; default to `vendor-reported` when sourced only from the vendor.
-- `freshness_class` is **required** on every factual field and must match one of the three classes above.
+- `claim_status` is **required** on every factual field; default to `vendor-reported` when sourced only from the vendor.
+- `freshness_class` is **required** on every factual field and must match one of the three classes above (field-specific freshness, not a single profile-wide value).
 - `verified` is the date a human last checked the source.
 - `unknown` is a first-class value; `stale` is a **derived** state computed from `verified` + `freshness_class`, surfaced in generated views.
-- `kernux_runs` is generator-curated; humans should not hand-edit it.
+- `kernux_runs` is generator-curated; humans should not hand-edit it. The evidence mapping is **exactly bidirectional**: every referenced Run record must appear under the agent's directory, and every Run record present must be referenced — there is no `allow_unused_records` escape hatch.
+- `evidence_status` and `last_verified` are **derived by tooling**, never authored by hand; they are computed from the underlying evidence records.
+- `verification_method` and `content_sha256` are required on every evidence record, giving each record an immutable, point-in-time identity: the verification method pins how the record was checked, and the content digest pins exactly what was checked.
+- Where sources conflict, the field must be `disputed` with a `notes.disputes[]` entry naming every conflicting source (dispute requirements are enforced mechanically).
 
 ## No overall score
 
@@ -126,7 +129,7 @@ The schema deliberately contains **no** field for an overall score, ranking, or 
 
 ## Validation contract
 
-`data/schema/profile.schema.json` (to be created under a separately authorized implementation pass) enforces:
+`schema/agent-profile.schema.json` (implemented in Phase 1; validated by `tools/validate_profiles.py`) enforces:
 1. `schema_version: 1`.
 2. Every non-`unknown` field has `source` and `verified`.
 3. `verified` is a valid ISO date.
@@ -134,10 +137,12 @@ The schema deliberately contains **no** field for an overall score, ranking, or 
 5. `freshness_class` is one of `1`, `2`, `3`.
 6. Slug matches filename.
 7. No unsupported phrase appears as a positive claim (see [EDITORIAL_AND_EVIDENCE_POLICY.md](EDITORIAL_AND_EVIDENCE_POLICY.md)).
+8. Evidence records carry `verification_method` and `content_sha256`, with exact bidirectional mapping and no `allow_unused_records`.
+9. `evidence_status` and `last_verified` are not authored and are recomputed by the validator.
 
 ## Unsupported-phrase policy (carried from editorial policy)
 
-Forbidden as positive claims: "production-ready," "enterprise-ready," "fully secure," "HIPAA-ready," "HIPAA-compliant," "SOC 2 certified" (unless the vendor publishes the actual cert and we link it, still labeled `vendor-reported`), "guaranteed," "unbreakable." `validate_profile.py` fails on any occurrence as a positive claim.
+Forbidden as positive claims: "production-ready," "enterprise-ready," "fully secure," "HIPAA-ready," "HIPAA-compliant," "SOC 2 certified" (unless the vendor publishes the actual cert and we link it, still labeled `vendor-reported`), "guaranteed," "unbreakable." `validate_profiles.py` fails on any occurrence as a positive claim.
 
 ## Example (stub only — NOT a populated profile)
 
@@ -174,4 +179,4 @@ The above is a **stub**. Per the founder-review package, no factual field is pop
 
 ## Implementation authorization
 
-**Not authorized.** Legacy archival and the Phase 1 vertical-slice kickoff require separate authorization. This document specifies the schema; no `data/schema/profile.schema.json` file is created in this pass.
+**Phase 1 implemented locally.** Independent acceptance pending. Phase 2 remains unauthorized. The schema (`schema/agent-profile.schema.json`), validator (`tools/validate_profiles.py`), deterministic Markdown generation (`tools/generate_matrix.py`), the OpenCode profile (`agents/opencode/profile.yaml`), and root README integration are all in place; Runs and `schema/run.schema.json` remain future work pending Phase 2.
