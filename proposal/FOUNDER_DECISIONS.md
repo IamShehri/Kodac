@@ -235,7 +235,21 @@ Phase 1-R2 is a narrowly scoped closure inside the already authorized Phase 1 sc
 
 Phase 1-R2 implements centralized authority/method/field compatibility, a full dispute contract, list/surface invariants, URL-shaped identity fields, a mechanical immutability contract, exact evidence mapping (no `allow_unused_records`), deterministic error ordering, and a document-consistency check. All twelve proposal documents are reconciled to the implemented state.
 
-Phase 1-R2 is complete locally only after the correction commit. **Final independent acceptance requires a new independent review archive.** Phase 2 remains unauthorized.
+Phase 1-R2 is complete locally only after the correction commit. **Phase 1-R2 independent acceptance was not granted.** Phase 2 remains unauthorized.
+
+### Phase 1-R2A — Dispute and Immutability Closure (authorized 2026-07-21)
+
+Phase 1-R2 independent acceptance failed because seven defects remained:
+
+1. A structurally valid two-primary-source dispute could not pass full validation.
+2. Duplicate dispute entries for one field were silently accepted.
+3. A canonical GitHub repository URL with unrelated extra path segments was accepted.
+4. Dynamic official documentation could be marked `immutable: true`.
+5. A `github.com` blob URL using a moving branch could be marked `immutable: true`.
+6. `PROFILE_SOURCING.md` was reported as updated but was not actually changed.
+7. The review archive's `PHASE1R2-DIFF.patch` was a combined diff, not the exact implementation-only diff it claimed to be.
+
+Phase 1-R2A is authorized solely to fix these defects. Phase 2 remains unauthorized. Final independent acceptance requires a new independent review archive.
 
 ## Unresolved items
 
@@ -244,7 +258,8 @@ Phase 1-R2 is complete locally only after the correction commit. **Final indepen
 - (Resolved 2026-07-20) Phase 1 (one OpenCode profile vertical slice) authorized.
 - (Resolved 2026-07-21) Phase 1-R evidence contract correction authorized and applied locally.
 - (Resolved 2026-07-21) Phase 1-R2 evidence contract closure authorized and applied locally.
-- Final independent acceptance of Phase 1-R2 — pending review of the Phase 1-R2 review archive.
+- (Resolved 2026-07-21) Phase 1-R2 independent acceptance **not granted**; Phase 1-R2A authorized to fix remaining defects.
+- Final independent acceptance of Phase 1-R2A — pending review of the Phase 1-R2A review archive.
 - Per-agent sourcing feasibility for the remaining nine launch profiles — to be confirmed under a separately authorized Phase 2.
 - Controlled Evaluation Tasks, Runs, and benchmark execution — remain unauthorized.
 - Concrete launch date, contingent on the "useful sourced data + at least one complete reproducible evidence path" gate.
