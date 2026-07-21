@@ -251,6 +251,15 @@ Phase 1-R2 independent acceptance failed because seven defects remained:
 
 Phase 1-R2A is authorized solely to fix these defects. Phase 2 remains unauthorized. Final independent acceptance requires a new independent review archive.
 
+### Phase 1-R2B — Canonical Repository and Schema Closure (authorized 2026-07-21)
+
+Phase 1-R2A was implemented locally. Independent acceptance found two remaining contract gaps:
+
+1. Canonical `source_repository` validation can be bypassed: malformed GitHub repository identities (`.git` suffix, extra path segments, query strings, fragments, explicit ports) do not produce a direct validation error on `identity.source_repository.value`; they merely disable downstream GitHub authority checks.
+2. The JSON Schema dispute contract is incomplete: `notes.disputes` entries do not structurally require `field`, `sources` (minItems: 2, uniqueItems), and `note` (non-empty) with `additionalProperties: false`.
+
+Phase 1-R2B is authorized only for this narrow local correction. Phase 1 acceptance remains pending. Phase 2 remains unauthorized. No remote publication is authorized.
+
 ## Unresolved items
 
 - (Resolved 2026-07-20) The S0-C package is ratified.
@@ -259,7 +268,8 @@ Phase 1-R2A is authorized solely to fix these defects. Phase 2 remains unauthori
 - (Resolved 2026-07-21) Phase 1-R evidence contract correction authorized and applied locally.
 - (Resolved 2026-07-21) Phase 1-R2 evidence contract closure authorized and applied locally.
 - (Resolved 2026-07-21) Phase 1-R2 independent acceptance **not granted**; Phase 1-R2A authorized to fix remaining defects.
-- Final independent acceptance of Phase 1-R2A — pending review of the Phase 1-R2A review archive.
+- (Resolved 2026-07-21) Phase 1-R2A implemented locally; independent acceptance found remaining canonical-repository and schema-contract defects.
+- Final independent acceptance of Phase 1-R2B — pending review of the Phase 1-R2B review archive.
 - Per-agent sourcing feasibility for the remaining nine launch profiles — to be confirmed under a separately authorized Phase 2.
 - Controlled Evaluation Tasks, Runs, and benchmark execution — remain unauthorized.
 - Concrete launch date, contingent on the "useful sourced data + at least one complete reproducible evidence path" gate.
