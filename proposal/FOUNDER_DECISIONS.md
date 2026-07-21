@@ -281,6 +281,16 @@ R2C review packaging also exposed two defects: the review metadata directory was
 
 Phase 1-R2D is authorized only for: total generic identity URL validation; field-specific deterministic errors; correct separation of generic and GitHub error messages; focused tests; narrowly necessary methodology reconciliation; and clean, privacy-preserving review packaging. Phase 1 acceptance remains pending. Phase 2 remains unauthorized. No remote publication is authorized.
 
+### Phase 1-R2E — Evidence Integrity Recovery (authorized 2026-07-21)
+
+Phase 1-R2D closed the generic identity URL validation defect technically at commit `58ecf783`. However, the R2D report was not accepted for final ZIP review.
+
+R2D preflight found ten unexpected untracked `_review/` files inside the implementation worktree (a packaging residue carried over from R2C, since R2C's task wording asked for `_review/` inside the worktree whereas R2D prohibited it). Those files were removed and execution continued. No exact independent user authorization for overriding the original R2D stop condition ("stop without editing if any unexpected untracked path exists") could be proven under a strict standard: the only instruction was a selection from a constrained, executor-authored option set, not a free-text user authorization message. The purported clean baseline was therefore captured *after* deletion, and the R2D report's later claim that `_review/` "never existed in a Git worktree" is false and is retracted here. The external R2D staging directory was also retained, contrary to the cleanup intent.
+
+The R2D commits (`f3cdd305`, `58ecf783`) and the R2D review ZIP are preserved unchanged; they remain valid historical and technical evidence, but are procedurally insufficient for final acceptance on their own.
+
+Phase 1-R2E is authorized only to: record this procedural truth; clean the external R2D staging residue safely; freshly verify the immutable R2D implementation; reconstruct its commit chain; and issue a clean, privacy-safe, independently verifiable R2E review package. R2E authorizes no code, test, schema, profile, matrix, dispute-file, or nexusmcp change. Phase 1 acceptance remains pending. Phase 2 remains unauthorized. No remote publication is authorized.
+
 ## Unresolved items
 
 - (Resolved 2026-07-20) The S0-C package is ratified.
@@ -292,7 +302,8 @@ Phase 1-R2D is authorized only for: total generic identity URL validation; field
 - (Resolved 2026-07-21) Phase 1-R2A implemented locally; independent acceptance found remaining canonical-repository and schema-contract defects.
 - (Resolved 2026-07-21) Phase 1-R2B implemented locally; independent review did not accept; four URL/parser defects remain.
 - (Resolved 2026-07-21) Phase 1-R2C implemented locally; independent review confirmed the four R2B defects closed and the dispute schema unchanged, but did not accept — generic non-GitHub identity URL validation remained incomplete.
-- Final independent acceptance of Phase 1-R2C — pending review of the Phase 1-R2C review archive.
+- (Resolved 2026-07-21) Phase 1-R2D implemented locally; the generic URL validation defect was closed technically at commit `58ecf783`, but the R2D execution boundary was breached (untracked `_review/` deleted during preflight without strict proven user authorization) and the report was not accepted.
+- Final independent acceptance of Phase 1 — pending external review of the Phase 1-R2E evidence-recovery archive.
 - Per-agent sourcing feasibility for the remaining nine launch profiles — to be confirmed under a separately authorized Phase 2.
 - Controlled Evaluation Tasks, Runs, and benchmark execution — remain unauthorized.
 - Concrete launch date, contingent on the "useful sourced data + at least one complete reproducible evidence path" gate.
