@@ -165,6 +165,12 @@ Malformed URL **parsing** — including a nonnumeric, negative, or out-of-range 
 
 An **invalid GitHub repository identity** (e.g., extra path segments, `.git` suffix) is different from a **non-GitHub repository host** (e.g., `gitlab.com`, `bitbucket.org`). Non-GitHub hosts receive generic HTTPS and URL-safety validation but do not have GitHub owner/repository semantics applied.
 
+### Generic identity-URL validation
+
+Both `identity.source_repository.value` and `identity.official_url.value` are validated by an exception-safe generic public-HTTPS contract that runs *before* the GitHub canonical check and applies to every value. GitHub owner/repository semantics are applied only to a host genuinely attributable to `github.com`; every other host is judged solely by the generic contract. `identity.official_url.value` always uses the generic contract (it has no GitHub canonicalization), even when its host is `github.com`.
+
+The generic contract requires a valid public HTTPS URL and produces a direct `ValidationError` on the exact field for: non-string values; leading, trailing, or embedded whitespace; ASCII C0 control characters (including NUL, tab, newline, carriage return) and DEL; a non-HTTPS scheme; a missing hostname; embedded credentials; an invalid, empty, negative, or out-of-range explicit port; a parser or hostname-parse failure; `localhost`; and private, loopback, link-local, or reserved IP addresses. Whitespace and control characters are rejected against the raw value *before* parsing, so normalization by the URL library cannot mask them. The stable generic message contains `valid public HTTPS URL` and never contains `canonical GitHub repository root`; a malformed non-GitHub URL is therefore never mislabeled as a GitHub canonicalization failure. Safe non-GitHub HTTPS roots (e.g., `gitlab.com`, `codeberg.org`) and any valid non-default port permitted by current policy are accepted. The validator never raises on malformed input.
+
 ### Derived evidence summaries
 
 `evidence_status` and `last_verified` are **not authored** — they are derived mechanically by tooling from field-level claim statuses. The validator rejects profiles that attempt to author these fields.

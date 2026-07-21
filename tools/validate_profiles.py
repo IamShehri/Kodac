@@ -261,44 +261,123 @@ def _check_path_id_match(profile: ProfileFile) -> list[ValidationError]:
 
 
 def _check_identity_url_fields(profile: ProfileFile) -> list[ValidationError]:
-    """Validate identity URL fields for credentials, localhost, and private IPs.
+    """Validate both identity URL fields against the generic public-HTTPS contract.
 
-    Uses the exception-safe parser so malformed URLs produce ``ValidationError``
-    objects rather than crashing the validator.
+    This is the *generic* layer. It runs on both ``identity.official_url.value``
+    and ``identity.source_repository.value`` and rejects anything that is not a
+    valid public HTTPS URL: non-string values, leading/trailing/embedded
+    whitespace, control characters (incl. NUL, newline, tab, DEL), non-HTTPS
+    schemes, missing hostname, credentials, malformed/empty/out-of-range ports,
+    parser failures, localhost, and private/loopback/link-local/reserved IPs.
+    The GitHub canonical-repository contract is applied separately by
+    ``_check_canonical_source_repository`` for github.com hosts only.
+
+    Every malformed value produces a direct error on its exact field. The
+    validator never raises: ``urlparse``/``.hostname``/``.port`` are accessed
+    only inside ``_safe_parse_url``'s guarded boundary.
+
+    Messages: structural failures use the stable generic fragment
+    "valid public HTTPS URL" (never "canonical GitHub repository root"). The
+    existing private/local IP message family is preserved as a documented
+    address-class policy that is more specific than the generic message.
     """
     errors: list[ValidationError] = []
     ident = profile.data.get("identity", {}) or {}
     for field_name in ("official_url", "source_repository"):
         fv = ident.get(field_name, {}) or {}
         value = fv.get("value")
+        field = f"identity.{field_name}.value"
         if not isinstance(value, str) or value == "unknown":
             continue
-        parsed = _safe_parse_url(value)
-        field = f"identity.{field_name}.value"
-        if parsed.username or parsed.password:
+        errors += _check_generic_identity_url(profile, value, field)
+    return errors
+
+
+# Stable generic message fragment used for all non-GitHub / structural
+# identity-URL failures. Section 7.E requires "valid public HTTPS URL"; it must
+# NEVER contain "canonical GitHub repository root".
+_GENERIC_URL_MSG = (
+    "identity URL must be a valid public HTTPS URL "
+    "(https scheme, non-empty public host, no credentials, no localhost/private/loopback IP, "
+    "no invalid/empty/out-of-range port, no whitespace or control characters)"
+)
+
+
+def _has_disallowed_raw_chars(value: str) -> bool:
+    """Reject whitespace and control characters in the RAW value, before parsing.
+
+    urllib may strip or normalize some characters (e.g. leading/trailing
+    whitespace, tabs, newlines) before exposing parsed components, so structural
+    checks on parsed components alone are insufficient. Per Section 7.C this is
+    checked against the original raw value. Disallowed: ASCII C0 controls
+    (0x00-0x1F incl. NUL, tab, newline, carriage return), DEL (0x7F), and the
+    space character (0x20) anywhere in the value.
+    """
+    return any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in value)
+
+
+def _check_generic_identity_url(
+    profile: ProfileFile, value: str, field: str
+) -> list[ValidationError]:
+    """Total generic public-HTTPS validation for one identity URL field.
+
+    Never raises. Returns direct ``ValidationError`` objects on ``field``.
+    """
+    errors: list[ValidationError] = []
+
+    # Pre-parse raw character rejection (Section 7.C). Whitespace/control chars
+    # are rejected before parsing so urllib's stripping cannot mask them.
+    if _has_disallowed_raw_chars(value):
+        errors.append(ValidationError(str(profile.relative_path), field, _GENERIC_URL_MSG))
+        return errors
+
+    parsed = _safe_parse_url(value)
+
+    # Catastrophic parse failure (urlparse itself raised).
+    if parsed.parse_failed:
+        errors.append(ValidationError(str(profile.relative_path), field, _GENERIC_URL_MSG))
+        return errors
+
+    # Non-HTTPS (including bare scheme / empty scheme).
+    if parsed.scheme != "https":
+        errors.append(ValidationError(str(profile.relative_path), field, _GENERIC_URL_MSG))
+        return errors
+
+    # Embedded credentials.
+    if parsed.username or parsed.password:
+        errors.append(ValidationError(str(profile.relative_path), field, _GENERIC_URL_MSG))
+        return errors
+
+    # Invalid / empty / out-of-range explicit port.
+    if parsed.port_invalid:
+        errors.append(ValidationError(str(profile.relative_path), field, _GENERIC_URL_MSG))
+        return errors
+
+    host = parsed.hostname
+    # Missing hostname.
+    if not host:
+        errors.append(ValidationError(str(profile.relative_path), field, _GENERIC_URL_MSG))
+        return errors
+
+    # Localhost.
+    if host == "localhost":
+        errors.append(ValidationError(str(profile.relative_path), field, _GENERIC_URL_MSG))
+        return errors
+
+    # Private / loopback / link-local / reserved IP addresses (existing
+    # documented address-class policy; keep the more specific message).
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
             errors.append(
                 ValidationError(
-                    str(profile.relative_path), field, "URL must not contain embedded credentials"
+                    str(profile.relative_path), field, f"URL targets private/local IP {host}"
                 )
             )
-        host = parsed.hostname or ""
-        if host == "localhost":
-            errors.append(
-                ValidationError(str(profile.relative_path), field, "URL must not target localhost")
-            )
-        if host:
-            try:
-                ip = ipaddress.ip_address(host)
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                    errors.append(
-                        ValidationError(
-                            str(profile.relative_path),
-                            field,
-                            f"URL targets private/local IP {host}",
-                        )
-                    )
-            except ValueError:
-                pass
+            return errors
+    except ValueError:
+        pass
+
     return errors
 
 
@@ -405,24 +484,21 @@ def _check_canonical_source_repository(profile: ProfileFile) -> list[ValidationE
 
     parsed = _safe_parse_url(value)
 
-    # If urlparse itself failed catastrophically, treat as a malformed URL.
+    # IMPORTANT (R2D): a catastrophic parse failure, a missing host, or a
+    # non-GitHub host must NOT be labeled with the GitHub canonical message.
+    # These cases are handled by the generic identity-URL check
+    # (_check_identity_url_fields -> _check_generic_identity_url), which emits
+    # the stable "valid public HTTPS URL" message. This function only emits the
+    # GitHub message for a host that is genuinely attributable to github.com.
     if parsed.parse_failed:
-        errors.append(ValidationError(str(profile.relative_path), field, msg))
-        return errors
-
+        return errors  # generic check handles it with the generic message
     host = parsed.hostname
-    # Only apply GitHub canonical rules to a github.com host (or an obvious
-    # non-canonical spelling of one). ``parsed.hostname`` is lowercased by
-    # urllib, so we use it only to *detect* that this is a GitHub URL; the
-    # literal byte-for-byte comparison below then rejects any non-canonical
-    # spelling (e.g. "GitHub.com", "github.com.", "GITHUB.COM"). A trailing
-    # dot is a DNS-label separator and yields "github.com." — treated as a
-    # GitHub host variant and rejected as non-canonical below.
     if host is None:
-        return errors  # handled by urlField schema
+        return errors  # generic check handles missing-host with the generic message
     # Normalize by stripping a single trailing dot (DNS root label) so that
     # "github.com." is still recognized as a GitHub URL for the purposes of
-    # enforcing the canonical form (which it then fails).
+    # enforcing the canonical form (which it then fails). Any other host is
+    # non-GitHub and is handled by the generic check.
     host_no_trailing_dot = host[:-1] if host.endswith(".") else host
     if host_no_trailing_dot != "github.com":
         return errors  # non-GitHub: generic HTTPS checks apply (in _check_identity_url_fields)
