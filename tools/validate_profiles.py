@@ -67,6 +67,169 @@ def _today() -> _dt.date:
     return _dt.date.today()
 
 
+# ---------------------------------------------------------------------------
+# Exception-safe URL parsing
+# ---------------------------------------------------------------------------
+#
+# urlparse() itself does not raise on malformed ports or hosts, but the
+# ``.port`` and ``.hostname`` properties of its result raise ``ValueError`` on
+# nonnumeric ports, out-of-range ports, and malformed IPv6 brackets. Every URL
+# the validator inspects flows through ``_safe_parse_url`` so that malformed
+# user data produces ``ValidationError`` objects instead of crashing the
+# validator. ``.port`` and ``.hostname`` are accessed only inside this guarded
+# boundary.
+
+
+@dataclass(frozen=True)
+class _ParsedURL:
+    """Exception-safe URL parse result.
+
+    Mirrors the relevant urllib ``ParseResult`` attributes
+    (``scheme``, ``netloc``, ``username``, ``password``, ``hostname``,
+    ``port``, ``path``, ``query``, ``fragment``) so call sites read identically
+    to a raw ``urlparse`` result, but ``hostname`` and ``port`` never raise.
+
+    Additional safety flags:
+      ``has_explicit_port`` — a ``:port`` separator was present after the host.
+      ``port_invalid``       — that port was empty, nonnumeric, or out of range.
+      ``parse_failed``       — urlparse itself raised (catastrophic input).
+    """
+
+    scheme: str
+    netloc: str
+    username: str | None
+    password: str | None
+    hostname: str | None  # lowercased host, or None if missing/unparseable
+    port: int | None  # valid port in [0, 65535], or None
+    path: str
+    query: str
+    fragment: str
+    has_explicit_port: bool
+    port_invalid: bool
+    parse_failed: bool
+
+
+_FAILED_PARSE = _ParsedURL(
+    scheme="",
+    netloc="",
+    username=None,
+    password=None,
+    hostname=None,
+    port=None,
+    path="",
+    query="",
+    fragment="",
+    has_explicit_port=False,
+    port_invalid=True,
+    parse_failed=True,
+)
+
+
+def _manual_host(netloc: str) -> str | None:
+    """Best-effort host extraction when ``ParseResult.hostname`` raises.
+
+    Strips userinfo and IPv6 brackets and lowercases. Never raises. Used only
+    as a fallback so a malformed netloc still yields a comparable host string
+    (which will simply fail to match ``github.com``).
+    """
+    if not netloc:
+        return None
+    hostport = netloc.rsplit("@", 1)[-1]
+    if hostport.startswith("["):
+        rb = hostport.find("]")
+        inner = hostport[1:rb] if rb != -1 else hostport[1:]
+        return inner.lower() or None
+    # Without brackets at most one ':' may separate host and port.
+    if hostport.count(":") <= 1:
+        return hostport.rsplit(":", 1)[0].lower() or None
+    return hostport.lower() or None
+
+
+def _safe_extract_port(netloc: str) -> tuple[bool, int | None, bool]:
+    """Inspect ``netloc`` for an explicit ``:port`` without ever raising.
+
+    Returns ``(has_explicit_port, port, port_invalid)``:
+
+      * no port separator after the host  -> ``(False, None, False)``
+      * a valid port in ``[0, 65535]``     -> ``(True, int, False)``
+      * empty / nonnumeric / out-of-range  -> ``(True, None, True)``
+      * a malformed/ambiguous host tail    -> ``(False, None, True)``
+    """
+    hostport = netloc.rsplit("@", 1)[-1] if netloc else ""
+    if hostport.startswith("["):
+        rb = hostport.find("]")
+        if rb == -1:
+            return False, None, True  # unterminated IPv6 bracket
+        tail = hostport[rb + 1 :]
+        if tail == "":
+            return False, None, False
+        if not tail.startswith(":"):
+            return False, None, True  # garbage after the closing bracket
+        port_str = tail[1:]
+    else:
+        colons = hostport.count(":")
+        if colons == 0:
+            return False, None, False
+        if colons > 1:
+            # A bracketless multi-colon host is an invalid bare IPv6 literal.
+            return False, None, True
+        port_str = hostport.rsplit(":", 1)[1]
+    # An explicit port string is present.
+    if port_str == "":
+        return True, None, True
+    try:
+        port_int = int(port_str)
+    except ValueError:
+        return True, None, True
+    if port_int < 0 or port_int > 65535:
+        return True, None, True
+    return True, port_int, False
+
+
+def _safe_parse_url(value: str) -> _ParsedURL:
+    """Parse a URL without ever raising.
+
+    ``urlparse`` does not raise on malformed ports/hosts, but ``.port`` and
+    ``.hostname`` can. Those properties are accessed only here, inside a
+    guarded boundary; ``.port`` is never used and the port is instead derived
+    manually from the netloc so its validity is fully under our control.
+    """
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return _FAILED_PARSE
+
+    username: str | None = None
+    password: str | None = None
+    try:
+        username = parsed.username
+        password = parsed.password
+    except ValueError:
+        pass
+
+    try:
+        host: str | None = parsed.hostname
+    except ValueError:
+        host = _manual_host(parsed.netloc)
+
+    has_explicit_port, port, port_invalid = _safe_extract_port(parsed.netloc)
+
+    return _ParsedURL(
+        scheme=parsed.scheme,
+        netloc=parsed.netloc,
+        username=username,
+        password=password,
+        hostname=host,
+        port=port,
+        path=parsed.path,
+        query=parsed.query,
+        fragment=parsed.fragment,
+        has_explicit_port=has_explicit_port,
+        port_invalid=port_invalid,
+        parse_failed=False,
+    )
+
+
 def validate_against_json_schema(
     profile: ProfileFile, schema: dict[str, Any], validator_cls
 ) -> list[ValidationError]:
@@ -98,7 +261,11 @@ def _check_path_id_match(profile: ProfileFile) -> list[ValidationError]:
 
 
 def _check_identity_url_fields(profile: ProfileFile) -> list[ValidationError]:
-    """Validate identity URL fields for credentials, localhost, and private IPs."""
+    """Validate identity URL fields for credentials, localhost, and private IPs.
+
+    Uses the exception-safe parser so malformed URLs produce ``ValidationError``
+    objects rather than crashing the validator.
+    """
     errors: list[ValidationError] = []
     ident = profile.data.get("identity", {}) or {}
     for field_name in ("official_url", "source_repository"):
@@ -106,7 +273,7 @@ def _check_identity_url_fields(profile: ProfileFile) -> list[ValidationError]:
         value = fv.get("value")
         if not isinstance(value, str) or value == "unknown":
             continue
-        parsed = urlparse(value)
+        parsed = _safe_parse_url(value)
         field = f"identity.{field_name}.value"
         if parsed.username or parsed.password:
             errors.append(
@@ -135,14 +302,91 @@ def _check_identity_url_fields(profile: ProfileFile) -> list[ValidationError]:
     return errors
 
 
+def _github_canonical_segments(
+    value: str,
+) -> tuple[str, str] | tuple[None, None]:
+    """Return ``(owner, repo)`` for an *exact* canonical GitHub repository root.
+
+    The canonical stored representation is the literal::
+
+        https://github.com/<owner>/<repository>
+
+    and only that. This helper is the single source of truth used by both the
+    canonical-source-repository check and ``_github_owner_repo`` (the
+    evidence-authority helper), so a URL rejected here can never be
+    reinterpreted as canonical elsewhere.
+
+    Returns ``(None, None)`` for any non-canonical value — including a missing
+    host, a non-GitHub host, credentials, an explicit port, percent encoding,
+    a ``.git`` suffix, ``.``/``..`` segments, a trailing slash, a query, a
+    fragment, or any deviation from the literal lowercase scheme and host. The
+    caller decides whether ``(None, None)`` means "non-canonical GitHub" (an
+    error) or simply "not a canonical GitHub repo" (no opinion, e.g. GitLab).
+    """
+    parsed = _safe_parse_url(value)
+    if parsed.parse_failed:
+        return None, None
+    # Structural prerequisites. We require the scheme and host to be literally
+    # lowercase so that "HTTPS" or "GitHub.com" are rejected before any further
+    # reasoning (the canonical form is a literal, not a normalized one).
+    if parsed.scheme != "https":
+        return None, None
+    if parsed.hostname != "github.com":
+        return None, None
+    if parsed.username or parsed.password:
+        return None, None
+    if parsed.has_explicit_port:
+        return None, None
+    if parsed.query or parsed.fragment:
+        return None, None
+
+    # The canonical form has no backslash, no control character, no percent
+    # sign, and no whitespace anywhere in the path; and no trailing slash.
+    path = parsed.path
+    if not path or path == "/":
+        return None, None
+    if path.endswith("/"):
+        return None, None
+    if any(ch in path for ch in (chr(92), "%")):
+        return None, None
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in path):
+        return None, None
+    if any(ch in path for ch in (" ", "\t", "\n", "\r")):
+        return None, None
+
+    parts = path.split("/")
+    # A leading "/" yields an empty first element; filter to real segments.
+    segments = [p for p in parts if p]
+    if len(segments) != 2:
+        return None, None
+    owner, repo = segments
+    if not owner or not repo:
+        return None, None
+    if owner in (".", "..") or repo in (".", ".."):
+        return None, None
+    if repo.endswith(".git"):
+        return None, None
+    if repo in ("blob", "tree", "issues", "pull", "releases"):
+        return None, None
+
+    return owner, repo
+
+
 def _check_canonical_source_repository(profile: ProfileFile) -> list[ValidationError]:
     """Direct, invariant-specific validation of identity.source_repository.value.
 
-    For GitHub repository URLs, requires the exact canonical root:
-    https://github.com/<owner>/<repository>
+    For GitHub repository URLs, requires the exact canonical root::
 
-    Emits a direct error on identity.source_repository.value for any deviation.
-    Does NOT rely on downstream evidence-authority failures.
+        https://github.com/<owner>/<repository>
+
+    The canonical representation is enforced *literally*: after structural
+    validation, the value is required to equal
+    ``https://github.com/{owner}/{repository}`` byte-for-byte. Any deviation —
+    host casing, scheme casing, an explicit port (including 443), a trailing
+    slash, percent encoding, a query/fragment, credentials, a ``.git`` suffix,
+    or redundant path syntax — produces a single direct error on
+    ``identity.source_repository.value``. The validator never raises, even on a
+    malformed port or netloc.
     """
     errors: list[ValidationError] = []
     ident = profile.data.get("identity", {}) or {}
@@ -152,125 +396,54 @@ def _check_canonical_source_repository(profile: ProfileFile) -> list[ValidationE
         return errors
 
     field = "identity.source_repository.value"
-    parsed = urlparse(value)
-
-    # Only apply canonical GitHub rules to github.com URLs.
-    if parsed.hostname is None:
-        return errors  # handled by urlField schema
-    if parsed.hostname.lower() != "github.com":
-        return (
-            errors  # non-GitHub: generic HTTPS checks apply (already in _check_identity_url_fields)
-        )
-
-    # --- GitHub-specific canonical checks ---
-    msg_prefix = (
-        "canonical GitHub repository root must be https://github.com/<owner>/<repository>; "
+    msg = (
+        "canonical GitHub repository root must be "
+        "https://github.com/<owner>/<repository> (literal lowercase scheme and host, "
+        "no port, no credentials, no trailing slash, no query/fragment, no percent encoding, "
+        "no .git suffix)"
     )
 
-    if parsed.scheme != "https":
-        errors.append(
-            ValidationError(str(profile.relative_path), field, msg_prefix + "must use HTTPS")
-        )
-        return errors
-    if parsed.port is not None:
-        errors.append(
-            ValidationError(
-                str(profile.relative_path),
-                field,
-                msg_prefix + f"explicit port {parsed.port} is not allowed",
-            )
-        )
-        return errors
-    if parsed.username or parsed.password:
-        errors.append(
-            ValidationError(
-                str(profile.relative_path),
-                field,
-                msg_prefix + "embedded credentials are not allowed",
-            )
-        )
-        return errors
-    if parsed.query:
-        errors.append(
-            ValidationError(
-                str(profile.relative_path), field, msg_prefix + "query strings are not allowed"
-            )
-        )
-        return errors
-    if parsed.fragment:
-        errors.append(
-            ValidationError(
-                str(profile.relative_path), field, msg_prefix + "fragments are not allowed"
-            )
-        )
+    parsed = _safe_parse_url(value)
+
+    # If urlparse itself failed catastrophically, treat as a malformed URL.
+    if parsed.parse_failed:
+        errors.append(ValidationError(str(profile.relative_path), field, msg))
         return errors
 
-    # Reject backslashes and percent-encoded slashes/backslashes.
-    if chr(92) in value:  # backslash
-        errors.append(
-            ValidationError(
-                str(profile.relative_path), field, msg_prefix + "backslashes are not allowed"
-            )
-        )
-        return errors
-    if "%2f" in value.lower() or "%2F" in value or "%5c" in value.lower() or "%5C" in value:
-        errors.append(
-            ValidationError(
-                str(profile.relative_path),
-                field,
-                msg_prefix + "percent-encoded slashes or backslashes are not allowed",
-            )
-        )
+    host = parsed.hostname
+    # Only apply GitHub canonical rules to a github.com host (or an obvious
+    # non-canonical spelling of one). ``parsed.hostname`` is lowercased by
+    # urllib, so we use it only to *detect* that this is a GitHub URL; the
+    # literal byte-for-byte comparison below then rejects any non-canonical
+    # spelling (e.g. "GitHub.com", "github.com.", "GITHUB.COM"). A trailing
+    # dot is a DNS-label separator and yields "github.com." — treated as a
+    # GitHub host variant and rejected as non-canonical below.
+    if host is None:
+        return errors  # handled by urlField schema
+    # Normalize by stripping a single trailing dot (DNS root label) so that
+    # "github.com." is still recognized as a GitHub URL for the purposes of
+    # enforcing the canonical form (which it then fails).
+    host_no_trailing_dot = host[:-1] if host.endswith(".") else host
+    if host_no_trailing_dot != "github.com":
+        return errors  # non-GitHub: generic HTTPS checks apply (in _check_identity_url_fields)
+
+    # Malformed port on a GitHub URL is a direct error, not an exception.
+    if parsed.port_invalid:
+        errors.append(ValidationError(str(profile.relative_path), field, msg))
         return errors
 
-    # Check for trailing slash (non-canonical even with 2 segments).
-    if parsed.path.endswith("/") and parsed.path != "/":
-        errors.append(
-            ValidationError(
-                str(profile.relative_path), field, msg_prefix + "trailing slash is not allowed"
-            )
-        )
+    owner, repo = _github_canonical_segments(value)
+    if owner is None:
+        errors.append(ValidationError(str(profile.relative_path), field, msg))
         return errors
 
-    parts = [p for p in parsed.path.split("/") if p]
-    if len(parts) != 2:
-        errors.append(
-            ValidationError(
-                str(profile.relative_path),
-                field,
-                msg_prefix + f"expected exactly 2 path segments (owner/repo), got {len(parts)}",
-            )
-        )
-        return errors
-
-    owner, repo = parts
-    if not owner:
-        errors.append(
-            ValidationError(str(profile.relative_path), field, msg_prefix + "owner is empty")
-        )
-        return errors
-    if not repo:
-        errors.append(
-            ValidationError(
-                str(profile.relative_path), field, msg_prefix + "repository name is empty"
-            )
-        )
-        return errors
-    if repo.endswith(".git"):
-        errors.append(
-            ValidationError(
-                str(profile.relative_path), field, msg_prefix + ".git suffix is not allowed"
-            )
-        )
-        return errors
-    if repo in ("blob", "tree", "issues", "pull", "releases"):
-        errors.append(
-            ValidationError(
-                str(profile.relative_path),
-                field,
-                msg_prefix + f"{repo!r} is a subpath, not a repository name",
-            )
-        )
+    # Byte-for-byte canonical reconstruction. If the original value is not
+    # exactly the canonical form, reject it. This is what rejects host casing,
+    # scheme casing, redundant percent encoding that happens to decode to the
+    # same character, and any other silent normalization.
+    canonical = f"https://github.com/{owner}/{repo}"
+    if value != canonical:
+        errors.append(ValidationError(str(profile.relative_path), field, msg))
         return errors
 
     return errors
@@ -304,7 +477,7 @@ def _check_evidence_url_validity(profile: ProfileFile) -> list[ValidationError]:
         rid = rec.get("id", "?")
         url = rec.get("url", "")
         field = f"evidence.records.{rid}.url"
-        parsed = urlparse(url)
+        parsed = _safe_parse_url(url)
         if parsed.scheme != "https":
             errors.append(
                 ValidationError(
@@ -352,29 +525,18 @@ def _derive_official_identities(profile: dict[str, Any]) -> dict[str, str]:
 
 
 def _github_owner_repo(source_repo_url: str) -> tuple[str, str] | None:
-    """Return (owner, repo) only for an exact canonical GitHub repository root.
+    """Return ``(owner, repo)`` only for an exact canonical GitHub repository root.
 
-    Rejects URLs with extra path segments, blob/tree/issues/pull paths,
-    query strings, fragments, .git suffix, non-default ports, or HTTP.
+    Delegates to ``_github_canonical_segments``, the single source of truth for
+    the canonical GitHub identity. A URL rejected there (any structural
+    deviation, percent encoding, ``.git`` suffix, explicit port, credentials,
+    non-literal host/scheme) can therefore never be reinterpreted as a
+    canonical repository root by the evidence-authority layer. In particular
+    this helper does **not** strip a ``.git`` suffix and then treat the
+    remainder as canonical.
     """
-    parsed = urlparse(source_repo_url)
-    if parsed.scheme != "https":
-        return None
-    if parsed.netloc != "github.com":
-        return None
-    if parsed.query or parsed.fragment:
-        return None
-    if parsed.username or parsed.password:
-        return None
-    if parsed.port is not None:
-        return None
-    parts = [p for p in parsed.path.split("/") if p]
-    if len(parts) != 2:
-        return None
-    owner, repo = parts
-    if repo.endswith(".git"):
-        repo = repo[:-4]
-    if not owner or not repo:
+    owner, repo = _github_canonical_segments(source_repo_url)
+    if owner is None:
         return None
     return owner, repo
 
@@ -387,7 +549,7 @@ def _check_url_authority_consistency(profile: ProfileFile) -> list[ValidationErr
 
     official_host: str | None = None
     if official_url:
-        official_host = urlparse(official_url).hostname
+        official_host = _safe_parse_url(official_url).hostname
 
     canonical_gh: tuple[str, str] | None = None
     if source_repo:
@@ -398,7 +560,7 @@ def _check_url_authority_consistency(profile: ProfileFile) -> list[ValidationErr
         rid = rec.get("id", "?")
         authority = rec.get("authority", "")
         url = rec.get("url", "")
-        parsed = urlparse(url)
+        parsed = _safe_parse_url(url)
         host = parsed.hostname or ""
         path_parts = [p for p in parsed.path.split("/") if p]
 
@@ -486,7 +648,7 @@ def _check_raw_github_pinning(profile: ProfileFile) -> list[ValidationError]:
     for rec in records:
         rid = rec.get("id", "?")
         url = rec.get("url", "")
-        parsed = urlparse(url)
+        parsed = _safe_parse_url(url)
         if parsed.hostname == "raw.githubusercontent.com":
             parts = [p for p in parsed.path.split("/") if p]
             if len(parts) < 3:
@@ -909,7 +1071,7 @@ def _classify_source_stability(url: str) -> str:
     Conservative: defaults to 'dynamic' for unrecognized patterns.
     Only commit-pinned raw.githubusercontent.com is 'immutable'.
     """
-    parsed = urlparse(url)
+    parsed = _safe_parse_url(url)
     host = parsed.hostname or ""
     path_parts = [p for p in parsed.path.split("/") if p]
 
@@ -944,7 +1106,7 @@ def _check_immutability_contract(profile: ProfileFile) -> list[ValidationError]:
         rid = rec.get("id", "?")
         url = rec.get("url", "")
         immutable = rec.get("immutable")
-        parsed = urlparse(url)
+        parsed = _safe_parse_url(url)
         host = parsed.hostname or ""
         path_parts = [p for p in parsed.path.split("/") if p]
 

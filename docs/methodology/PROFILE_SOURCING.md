@@ -159,6 +159,10 @@ For GitHub repository URLs, `identity.source_repository.value` must be the exact
 
 Requirements: HTTPS only; no trailing slash; no `.git` suffix; no extra path segments (blob/tree/issues/pull/releases are subpaths, not repository names); no query string; no fragment; no credentials; no explicit port (including 443); no backslashes; no percent-encoded path manipulation. A malformed GitHub repository URL produces a **direct** validation error on `identity.source_repository.value`, independent of downstream evidence-authority checks.
 
+The canonical form is enforced **literally**, not as a normalized target: the scheme and host must be the exact lowercase spelling `https://github.com/...`, and the value must equal `https://github.com/{owner}/{repository}` byte-for-byte. Non-canonical spellings that normalize to the same value — such as `https://GitHub.com/owner/repo` (host casing), `HTTPS://github.com/owner/repo` (scheme casing), `https://github.com./owner/repo` (trailing DNS dot), or any percent encoding that decodes to a canonical character — are **rejected**, not silently rewritten. GitHub path segments containing a percent sign (`%`) are rejected rather than percent-decoded and re-canonicalized.
+
+Malformed URL **parsing** — including a nonnumeric, negative, or out-of-range port, unterminated IPv6 brackets, or a malformed netloc — produces an ordinary `ValidationError` on `identity.source_repository.value`. The validator never raises an exception (no traceback) because of malformed user data; the underlying `urlparse` port/hostname access happens only inside an exception-safe parsing boundary.
+
 An **invalid GitHub repository identity** (e.g., extra path segments, `.git` suffix) is different from a **non-GitHub repository host** (e.g., `gitlab.com`, `bitbucket.org`). Non-GitHub hosts receive generic HTTPS and URL-safety validation but do not have GitHub owner/repository semantics applied.
 
 ### Derived evidence summaries
