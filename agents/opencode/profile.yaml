@@ -1,0 +1,413 @@
+schema_version: 1
+id: opencode
+name: OpenCode
+updated: 2026-07-21
+submission: community-submitted
+
+tracks:
+  - terminal-agents
+  - ide-integrated-agents
+  - open-source-agent-scaffolds
+  - privacy-first-or-local-capable-agents
+
+identity:
+  vendor_or_maintainer:
+    value: "Anomaly (github.com/anomalyco)"
+    source: opencode-repo-api
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 3
+  official_url:
+    value: "https://opencode.ai"
+    source: opencode-repo-readme
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 3
+  source_repository:
+    value: "https://github.com/anomalyco/opencode"
+    source: opencode-repo-api
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 3
+  archived_or_unrelated_repositories:
+    - url: "https://github.com/opencode-ai/opencode"
+      note: >
+        Archived, unrelated historical project. Not the canonical OpenCode.
+        The active project lives at github.com/anomalyco/opencode.
+
+openness:
+  open_source:
+    value: supported
+    source: opencode-repo-api
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 3
+  license:
+    value: MIT
+    source: opencode-license
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 3
+
+compatibility:
+  operating_systems:
+    value: ["macOS", "Linux", "Windows"]
+    source: opencode-docs-index
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+  surfaces:
+    value: ["terminal", "desktop", "ide"]
+    source: opencode-docs-index
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+  supported_providers:
+    value:
+      - "Anthropic"
+      - "OpenAI"
+      - "Google (Gemini + Vertex AI)"
+      - "xAI"
+      - "Groq"
+      - "OpenRouter"
+      - "Amazon Bedrock"
+      - "Azure OpenAI"
+      - "Mistral"
+      - "DeepSeek"
+      - "Fireworks AI"
+    source: opencode-docs-providers
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+  local_model_support:
+    value: supported
+    source: opencode-docs-providers
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+  ide_integrations:
+    value: ["VS Code", "Cursor", "Windsurf", "VSCodium", "Zed (via ACP)"]
+    source: opencode-docs-ide
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+
+protocols:
+  mcp_support:
+    value: supported
+    source: opencode-docs-mcp
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+  agent_skills_support:
+    value: supported
+    source: opencode-docs-skills
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+  headless_or_ci:
+    value: supported
+    source: opencode-docs-server
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+
+security:
+  sandboxing_model:
+    value: unknown
+    source: none
+    verified: 2026-07-21
+    claim_status: unknown
+    freshness_class: 2
+  permission_controls:
+    value: "Per-tool allow/ask/deny permission system with wildcard patterns and an --auto flag."
+    source: opencode-docs-permissions
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+
+privacy:
+  telemetry_behavior:
+    value: unknown
+    source: none
+    verified: 2026-07-21
+    claim_status: unknown
+    freshness_class: 2
+  data_retention:
+    value: "The vendor states that OpenCode does not store code or context data and that processing occurs locally or through direct calls to the configured AI provider."
+    source: opencode-docs-enterprise
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 1
+  opt_out:
+    value: "The optional share feature can be disabled with share: disabled; this does not establish a general telemetry opt-out."
+    source: opencode-docs-share
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+
+cost:
+  pricing_model:
+    value: "Enterprise tier uses a per-seat pricing model (contact sales)."
+    source: opencode-docs-enterprise
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 1
+  free_tier:
+    value: "The homepage states that free models are included."
+    source: opencode-site-home
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 1
+
+capabilities:
+  repo_scale_context:
+    value: "Built-in bash, edit, read, grep, glob, and lsp tools for navigating and editing a codebase."
+    source: opencode-docs-tools
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+  session_persistence:
+    value: supported
+    source: opencode-docs-cli
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+  subagent_support:
+    value: supported
+    source: opencode-docs-agents
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 2
+
+model_and_tier:
+  current_versions:
+    value: ["v1.18.4"]
+    source: opencode-repo-release
+    verified: 2026-07-21
+    claim_status: verified
+    freshness_class: 1
+  available_models:
+    value: ["75+ LLM providers via AI SDK and Models.dev"]
+    source: opencode-docs-providers
+    verified: 2026-07-21
+    claim_status: vendor-reported
+    freshness_class: 1
+
+evidence:
+  records:
+    - id: opencode-repo-api
+      title: "anomalyco/opencode repository metadata (GitHub API)"
+      url: "https://api.github.com/repos/anomalyco/opencode"
+      authority: official-repo
+      verification_method: repository-metadata
+      date_accessed: 2026-07-21
+      content_sha256: "12e40d3aa98dd7acbbfb1e2a1a75c4258aa0abe601d14742b39c71bbe1ff0cf5"
+      fields_supported:
+        - identity.vendor_or_maintainer
+        - identity.source_repository
+        - openness.open_source
+      immutable: false
+    - id: opencode-repo-readme
+      title: "anomalyco/opencode README.md at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/README.md"
+      authority: official-repo
+      verification_method: repository-artifact
+      date_accessed: 2026-07-21
+      content_sha256: "400890a3082e225c440561825270a911cd7df90a9f64f85166aed330201e50ba"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - identity.official_url
+      immutable: true
+    - id: opencode-license
+      title: "anomalyco/opencode LICENSE (MIT) at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/LICENSE"
+      authority: official-repo
+      verification_method: repository-artifact
+      date_accessed: 2026-07-21
+      content_sha256: "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - openness.license
+      immutable: true
+    - id: opencode-docs-index
+      title: "OpenCode docs index.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/index.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "24965a7337d45325edb9ba6ca44e4b528b7e1ead00134794b3202745f1e1bd9d"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - compatibility.operating_systems
+        - compatibility.surfaces
+      immutable: true
+    - id: opencode-docs-providers
+      title: "OpenCode docs providers.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/providers.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "cc8c93289d5c908e66f58fbdd5ed75139513f9fa64f40db87026c62ce244fc08"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - compatibility.supported_providers
+        - compatibility.local_model_support
+        - model_and_tier.available_models
+      immutable: true
+    - id: opencode-docs-ide
+      title: "OpenCode docs ide.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/ide.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "0ef1c720c3be3585eae0709b5c9479566048d43be841cc03511e30ffa41c26c9"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - compatibility.ide_integrations
+      immutable: true
+    - id: opencode-docs-mcp
+      title: "OpenCode docs mcp-servers.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/mcp-servers.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "3e99f66ed4a4a40d238b539497bb8739a140e94aa7ab27fd08e4ee0c3a0c6102"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - protocols.mcp_support
+      immutable: true
+    - id: opencode-docs-skills
+      title: "OpenCode docs skills.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/skills.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "7ff4df3a1a4909fa0e0025a6f086c3dbc63d09fdd578bc13f3f4ae30fcfe4627"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - protocols.agent_skills_support
+      immutable: true
+    - id: opencode-docs-server
+      title: "OpenCode docs server.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/server.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "56aac4ea75990012a9ebf838d074760aa91e198f3b5859b38d6786b5e2d14c39"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - protocols.headless_or_ci
+      immutable: true
+    - id: opencode-docs-permissions
+      title: "OpenCode docs permissions.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/permissions.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "e929098f6f772186eeb4f0eb55e332c477d88e30cb1efc45d0839dfa333b5163"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - security.permission_controls
+      immutable: true
+    - id: opencode-docs-enterprise
+      title: "OpenCode docs enterprise.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/enterprise.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "d0f723fce09479dbeb419c111dd838de9858b94a7dd96b4374ef27096cf45ac1"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - privacy.data_retention
+        - cost.pricing_model
+      immutable: true
+    - id: opencode-docs-share
+      title: "OpenCode docs share.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/share.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "c9f9aa1d348c3da5a2e2591004983558b66d7bb56a2bdad9313e5d01d62dd11d"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - privacy.opt_out
+      immutable: true
+    - id: opencode-docs-cli
+      title: "OpenCode docs cli.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/cli.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "a6ed4d307713067695a7cfc141c2f4f0b25f9ac95ac252f651eb0bb6d1b591ef"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - capabilities.session_persistence
+      immutable: true
+    - id: opencode-docs-agents
+      title: "OpenCode docs agents.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/agents.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "0941601a02a57c97aa2072bd8accb15900dc6c78e78d99de44435c17e62e6b32"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - capabilities.subagent_support
+      immutable: true
+    - id: opencode-docs-tools
+      title: "OpenCode docs tools.mdx at commit 849c2598"
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/849c2598abc7d2b40261e74b5826bc74ffc78308/packages/web/src/content/docs/tools.mdx"
+      authority: official-docs
+      verification_method: official-documentation
+      date_accessed: 2026-07-21
+      content_sha256: "776d7e2c15171fcbcd0f5df8a17b6b3d25058d13efc316fa73f9d3af89cdaa30"
+      revision_or_commit: "849c2598abc7d2b40261e74b5826bc74ffc78308"
+      fields_supported:
+        - capabilities.repo_scale_context
+      immutable: true
+    - id: opencode-site-home
+      title: "opencode.ai homepage HTML"
+      url: "https://opencode.ai"
+      authority: official
+      verification_method: vendor-marketing
+      date_accessed: 2026-07-21
+      content_sha256: "4c1ae2e02afa888f4fd53a8b0c42722669e70abb159b147e990d904975b99900"
+      fields_supported:
+        - cost.free_tier
+      immutable: false
+    - id: opencode-repo-release
+      title: "anomalyco/opencode release metadata for tag v1.18.4 (GitHub API)"
+      url: "https://api.github.com/repos/anomalyco/opencode/releases/tags/v1.18.4"
+      authority: official-release
+      verification_method: release-metadata
+      date_accessed: 2026-07-21
+      content_sha256: "a8976b46418c2d111d1f53d8f5752c79e6c28ed2bb720c3fac2e5a3ee4fcfa83"
+      fields_supported:
+        - model_and_tier.current_versions
+      immutable: false
+
+notes:
+  summary: >
+    OpenCode is an open-source (MIT) AI coding agent maintained by Anomaly
+    (github.com/anomalyco), available as a terminal TUI, desktop app, and IDE
+    extension. Repository identity, license, and release metadata are
+    artifact-verified; all behavioral, capability, protocol, pricing, and
+    privacy fields are vendor-reported from official documentation, not
+    independently reproduced. Telemetry behavior and the OS-level sandbox
+    model are unknown because no acceptable direct source establishes them.
+    This is a Phase 1 vertical slice: there is no Run evidence and no
+    independent behavioral reproduction. The active project is
+    github.com/anomalyco/opencode; github.com/opencode-ai/opencode is an
+    archived, unrelated historical project.
+  disputes: []
+  changes:
+    - date: 2026-07-21
+      change: >
+        Phase 1-R correction: pinned all raw GitHub URLs to commit
+        849c2598abc7d2b40261e74b5826bc74ffc78308; added content_sha256 to every
+        evidence record; relabeled all behavioral fields vendor-reported;
+        set telemetry_behavior and sandboxing_model to unknown (absence of
+        documentation is not a vendor claim); removed authored
+        evidence_status and last_verified (now derived); split compound
+        claims into one-record-per-source; removed unsupported surfaces.

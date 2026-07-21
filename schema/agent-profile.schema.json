@@ -1,0 +1,409 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kernux.dev/schema/agent-profile.schema.json",
+  "title": "Kernux Agent Profile",
+  "description": "Canonical schema for a Kernux agent profile (Draft 2020-12). YAML is the canonical representation; this schema validates it. Evidence status and last_verified are DERIVED by tooling, not authored. No overall score field is permitted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "updated",
+    "submission",
+    "tracks",
+    "identity",
+    "openness",
+    "compatibility",
+    "protocols",
+    "security",
+    "privacy",
+    "cost",
+    "evidence",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "updated": {
+      "type": "string",
+      "format": "date"
+    },
+    "submission": {
+      "type": "string",
+      "enum": [
+        "community-submitted",
+        "vendor-submitted",
+        "independently-unreproduced",
+        "independently-reproduced"
+      ]
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "terminal-agents",
+          "ide-integrated-agents",
+          "cloud-or-async-agents",
+          "open-source-agent-scaffolds",
+          "privacy-first-or-local-capable-agents"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "identity": { "$ref": "#/$defs/identityBlock" },
+    "openness": { "$ref": "#/$defs/opennessBlock" },
+    "compatibility": { "$ref": "#/$defs/compatibilityBlock" },
+    "protocols": { "$ref": "#/$defs/protocolsBlock" },
+    "security": { "$ref": "#/$defs/securityBlock" },
+    "privacy": { "$ref": "#/$defs/privacyBlock" },
+    "cost": { "$ref": "#/$defs/costBlock" },
+    "capabilities": { "$ref": "#/$defs/capabilitiesBlock" },
+    "model_and_tier": { "$ref": "#/$defs/modelAndTierBlock" },
+    "evidence": { "$ref": "#/$defs/evidenceBlock" },
+    "notes": { "$ref": "#/$defs/notesBlock" }
+  },
+  "$defs": {
+    "freeFormField": {
+      "description": "A factual field with a free-form string value. The reserved string 'unknown' is permitted as a normal string; policy validation enforces its source/claim_status consequences. claim_status is REQUIRED.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source", "verified", "claim_status", "freshness_class"],
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": { "type": "string" },
+        "verified": { "type": "string", "format": "date" },
+        "claim_status": {
+          "type": "string",
+          "enum": ["verified", "vendor-reported", "unknown", "disputed"]
+        },
+        "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
+      }
+    },
+    "urlField": {
+      "description": "A URL-shaped factual field. Accepts either the exact reserved string 'unknown' or a valid HTTPS URI. claim_status is REQUIRED.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source", "verified", "claim_status", "freshness_class"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "string", "format": "uri", "pattern": "^https://" },
+            { "type": "string", "const": "unknown" }
+          ]
+        },
+        "source": { "type": "string" },
+        "verified": { "type": "string", "format": "date" },
+        "claim_status": {
+          "type": "string",
+          "enum": ["verified", "vendor-reported", "unknown", "disputed"]
+        },
+        "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
+      }
+    },
+    "triStateField": {
+      "description": "A factual capability field with a controlled value vocabulary. claim_status is REQUIRED.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source", "verified", "claim_status", "freshness_class"],
+      "properties": {
+        "value": {
+          "type": "string",
+          "enum": ["supported", "unsupported", "partial", "unknown"]
+        },
+        "source": { "type": "string" },
+        "verified": { "type": "string", "format": "date" },
+        "claim_status": {
+          "type": "string",
+          "enum": ["verified", "vendor-reported", "unknown", "disputed"]
+        },
+        "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
+      }
+    },
+    "listField": {
+      "description": "A factual field whose value is a list of strings, or the reserved string 'unknown'. claim_status is REQUIRED.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source", "verified", "claim_status", "freshness_class"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            { "type": "string", "const": "unknown" }
+          ]
+        },
+        "source": { "type": "string" },
+        "verified": { "type": "string", "format": "date" },
+        "claim_status": {
+          "type": "string",
+          "enum": ["verified", "vendor-reported", "unknown", "disputed"]
+        },
+        "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
+      }
+    },
+    "licenseField": {
+      "description": "License field. The value may be an SPDX-like identifier, the reserved string 'proprietary', or the reserved string 'unknown'. No overlapping oneOf branches. claim_status is REQUIRED.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source", "verified", "claim_status", "freshness_class"],
+      "properties": {
+        "value": { "type": "string", "minLength": 1 },
+        "source": { "type": "string" },
+        "verified": { "type": "string", "format": "date" },
+        "claim_status": {
+          "type": "string",
+          "enum": ["verified", "vendor-reported", "unknown", "disputed"]
+        },
+        "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
+      }
+    },
+    "surfacesField": {
+      "description": "Surfaces field: a list of controlled surface values, or 'unknown'. claim_status is REQUIRED.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source", "verified", "claim_status", "freshness_class"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["terminal", "ide", "web", "desktop", "async", "headless-server"]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            { "type": "string", "const": "unknown" }
+          ]
+        },
+        "source": { "type": "string" },
+        "verified": { "type": "string", "format": "date" },
+        "claim_status": {
+          "type": "string",
+          "enum": ["verified", "vendor-reported", "unknown", "disputed"]
+        },
+        "freshness_class": { "type": "integer", "enum": [1, 2, 3] }
+      }
+    },
+    "identityBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vendor_or_maintainer", "official_url", "source_repository"],
+      "properties": {
+        "vendor_or_maintainer": { "$ref": "#/$defs/freeFormField" },
+        "official_url": { "$ref": "#/$defs/urlField" },
+        "source_repository": { "$ref": "#/$defs/urlField" },
+        "archived_or_unrelated_repositories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["url", "note"],
+            "properties": {
+              "url": { "type": "string" },
+              "note": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "opennessBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["open_source", "license"],
+      "properties": {
+        "open_source": { "$ref": "#/$defs/triStateField" },
+        "license": { "$ref": "#/$defs/licenseField" }
+      }
+    },
+    "compatibilityBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operating_systems", "surfaces", "supported_providers", "local_model_support"],
+      "properties": {
+        "operating_systems": { "$ref": "#/$defs/listField" },
+        "surfaces": { "$ref": "#/$defs/surfacesField" },
+        "supported_providers": { "$ref": "#/$defs/listField" },
+        "local_model_support": { "$ref": "#/$defs/triStateField" },
+        "ide_integrations": { "$ref": "#/$defs/listField" }
+      }
+    },
+    "protocolsBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mcp_support", "agent_skills_support", "headless_or_ci"],
+      "properties": {
+        "mcp_support": { "$ref": "#/$defs/triStateField" },
+        "agent_skills_support": { "$ref": "#/$defs/triStateField" },
+        "headless_or_ci": { "$ref": "#/$defs/triStateField" }
+      }
+    },
+    "securityBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sandboxing_model", "permission_controls"],
+      "properties": {
+        "sandboxing_model": { "$ref": "#/$defs/freeFormField" },
+        "permission_controls": { "$ref": "#/$defs/freeFormField" }
+      }
+    },
+    "privacyBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["telemetry_behavior", "data_retention"],
+      "properties": {
+        "telemetry_behavior": { "$ref": "#/$defs/freeFormField" },
+        "data_retention": { "$ref": "#/$defs/freeFormField" },
+        "opt_out": { "$ref": "#/$defs/freeFormField" }
+      }
+    },
+    "costBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pricing_model", "free_tier"],
+      "properties": {
+        "pricing_model": { "$ref": "#/$defs/freeFormField" },
+        "free_tier": { "$ref": "#/$defs/freeFormField" }
+      }
+    },
+    "capabilitiesBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repo_scale_context": { "$ref": "#/$defs/freeFormField" },
+        "session_persistence": { "$ref": "#/$defs/triStateField" },
+        "subagent_support": { "$ref": "#/$defs/triStateField" }
+      }
+    },
+    "modelAndTierBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "current_versions": { "$ref": "#/$defs/listField" },
+        "available_models": { "$ref": "#/$defs/listField" },
+        "subscription_or_api_tiers": { "$ref": "#/$defs/listField" }
+      }
+    },
+    "evidenceBlock": {
+      "description": "Evidence records only. evidence_status and last_verified are NOT authored here; they are derived by tooling and surfaced in generated views. allow_unused_records is not permitted; evidence mapping must be exact.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["records"],
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidenceRecord" }
+        }
+      }
+    },
+    "evidenceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "url", "authority", "verification_method", "date_accessed", "content_sha256", "fields_supported", "immutable"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$"
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "authority": {
+          "type": "string",
+          "enum": ["official", "official-repo", "official-docs", "official-release", "secondary", "tertiary"]
+        },
+        "verification_method": {
+          "type": "string",
+          "enum": [
+            "repository-artifact",
+            "repository-metadata",
+            "release-metadata",
+            "official-documentation",
+            "vendor-marketing",
+            "independent-execution",
+            "secondary-context"
+          ]
+        },
+        "date_accessed": { "type": "string", "format": "date" },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "fields_supported": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "revision_or_commit": {
+          "type": "string"
+        },
+        "immutable": {
+          "type": "boolean",
+          "description": "True when the URL points to an immutable artifact (commit-pinned raw file, specific release). False for dynamic endpoints."
+        }
+      }
+    },
+    "notesBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "disputes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["field", "sources", "note"],
+            "properties": {
+              "field": { "type": "string", "minLength": 1 },
+              "sources": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "minItems": 2,
+                "uniqueItems": true
+              },
+              "note": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date", "change"],
+            "properties": {
+              "date": { "type": "string", "format": "date" },
+              "change": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
