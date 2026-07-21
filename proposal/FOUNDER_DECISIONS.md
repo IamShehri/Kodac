@@ -303,6 +303,14 @@ The R2C, R2D, and R2E commits and ZIPs remain immutable historical evidence; non
 
 Phase 1-R2F is authorized only for: governance truth; fresh verification; exact reconstruction (proven via Git object equality, not LF-normalized file comparison); and a new independently verifiable R2F evidence package. R2F authorizes no code, schema, profile, matrix, test, tool, nexusmcp, lockfile, dependency, or methodology change. Phase 1 acceptance remains pending independent review. Phase 2 and remote publication remain unauthorized.
 
+### Phase 1-R2G — Evidence Recovery (authorized 2026-07-21)
+
+Phase 1-R2F correctly preserved earlier failures and produced a technically correct repository state, but R2F independent acceptance failed because `_review/TEST-COLLECTION.txt` in the R2F archive falsely recorded `TOTAL COLLECTED: 0` and `TOTAL PASSED: 0`, left the per-file section empty, and omitted the required 105 R2D focused-test names. The independently recomputed truth at the same repository state was 367 collected, 367 passed, nine per-file counts (19, 24, 15, 32, 23, 34, 83, 105, 32), and 105 R2D node IDs. The defect was an evidence-generation failure (the collection command was run through an unsuitable wrapper/location and empty stdout was accepted as valid evidence), not a newly detected product-code defect. The separate "131 total, before MANIFEST add" phrase was found only in the executor's user-facing report and not in the immutable R2F ZIP; it is recorded as a report-only defect.
+
+The R2F commit and ZIP remain immutable historical evidence; R2G preserves rather than repairs R2F.
+
+Phase 1-R2G is authorized only for: governance truth; fresh validation; fail-closed test-evidence generation (making the R2F failure mode impossible by aborting unless collection stdout is non-empty and the parsed total equals the mechanically observed count); exact reconstruction (proven via Git object equality); and a new independently verifiable R2G evidence package. R2G authorizes no code, test, schema, profile, matrix, tool, nexusmcp, lockfile, dependency, or methodology change. Phase 1 acceptance remains pending independent review. Phase 2 and remote publication remain unauthorized.
+
 ## Unresolved items
 
 - (Resolved 2026-07-20) The S0-C package is ratified.
@@ -315,7 +323,9 @@ Phase 1-R2F is authorized only for: governance truth; fresh verification; exact 
 - (Resolved 2026-07-21) Phase 1-R2B implemented locally; independent review did not accept; four URL/parser defects remain.
 - (Resolved 2026-07-21) Phase 1-R2C implemented locally; independent review confirmed the four R2B defects closed and the dispute schema unchanged, but did not accept — generic non-GitHub identity URL validation remained incomplete.
 - (Resolved 2026-07-21) Phase 1-R2D implemented locally; the generic URL validation defect was closed technically at commit `58ecf783`, but the R2D execution boundary was breached (untracked `_review/` deleted during preflight without strict proven user authorization) and the report was not accepted.
-- Final independent acceptance of Phase 1 — pending external review of the Phase 1-R2E evidence-recovery archive.
+- (Resolved 2026-07-21) Phase 1-R2E implemented locally; preserved the R2D failure and produced a recovery archive, but the R2E archive was rejected for source-inventory, validation, reconstruction-wording, and probe-coverage defects.
+- (Resolved 2026-07-21) Phase 1-R2F implemented locally; preserved earlier failures and produced a technically correct repository state, but the R2F archive was rejected because `_review/TEST-COLLECTION.txt` falsely recorded zero counts and omitted mandatory collection evidence.
+- Final independent acceptance of Phase 1 — pending external review of the Phase 1-R2G evidence-recovery archive.
 - Per-agent sourcing feasibility for the remaining nine launch profiles — to be confirmed under a separately authorized Phase 2.
 - Controlled Evaluation Tasks, Runs, and benchmark execution — remain unauthorized.
 - Concrete launch date, contingent on the "useful sourced data + at least one complete reproducible evidence path" gate.
