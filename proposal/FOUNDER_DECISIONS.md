@@ -271,6 +271,16 @@ Phase 1-R2B was implemented locally. Independent review did not accept it. The d
 
 Phase 1-R2C is authorized only for parser safety, exact canonicalization, tests, necessary methodology reconciliation, and clean review packaging. Phase 1 acceptance remains pending. Phase 2 remains unauthorized. No remote publication is authorized.
 
+### Phase 1-R2D — Generic URL Validation and Review-Evidence Closure (authorized 2026-07-21)
+
+Phase 1-R2C was implemented locally. Independent review confirmed the four R2B defects were closed (nonnumeric GitHub port, percent-encoded unreserved path, percent-encoded `.git`, noncanonical GitHub host casing) and that the dispute schema remained closed and unchanged. However, R2C was not accepted.
+
+The remaining blocking defect is generic non-GitHub identity URL validation. Malformed values on `identity.source_repository.value` (e.g., `https://gitlab.com:notaport/o/r`, `https://gitlab.com:99999/o/r`, `https://gitlab.com:/o/r`, `https:///o/r`, trailing space, NUL) and on `identity.official_url.value` returned no direct field error. R2C did not consistently reject parse failure, invalid/empty ports, missing hostname, whitespace, or control characters, and a malformed non-GitHub IPv6/netloc input could be mislabeled with the GitHub canonical message.
+
+R2C review packaging also exposed two defects: the review metadata directory was left as an untracked path inside the implementation worktree while claiming the worktree was clean, and a review file contained a local absolute Windows path despite the archive prohibition.
+
+Phase 1-R2D is authorized only for: total generic identity URL validation; field-specific deterministic errors; correct separation of generic and GitHub error messages; focused tests; narrowly necessary methodology reconciliation; and clean, privacy-preserving review packaging. Phase 1 acceptance remains pending. Phase 2 remains unauthorized. No remote publication is authorized.
+
 ## Unresolved items
 
 - (Resolved 2026-07-20) The S0-C package is ratified.
@@ -281,7 +291,8 @@ Phase 1-R2C is authorized only for parser safety, exact canonicalization, tests,
 - (Resolved 2026-07-21) Phase 1-R2 independent acceptance **not granted**; Phase 1-R2A authorized to fix remaining defects.
 - (Resolved 2026-07-21) Phase 1-R2A implemented locally; independent acceptance found remaining canonical-repository and schema-contract defects.
 - (Resolved 2026-07-21) Phase 1-R2B implemented locally; independent review did not accept; four URL/parser defects remain.
-- Final independent acceptance of Phase 1-R2B — pending review of the Phase 1-R2B review archive.
+- (Resolved 2026-07-21) Phase 1-R2C implemented locally; independent review confirmed the four R2B defects closed and the dispute schema unchanged, but did not accept — generic non-GitHub identity URL validation remained incomplete.
+- Final independent acceptance of Phase 1-R2C — pending review of the Phase 1-R2C review archive.
 - Per-agent sourcing feasibility for the remaining nine launch profiles — to be confirmed under a separately authorized Phase 2.
 - Controlled Evaluation Tasks, Runs, and benchmark execution — remain unauthorized.
 - Concrete launch date, contingent on the "useful sourced data + at least one complete reproducible evidence path" gate.
