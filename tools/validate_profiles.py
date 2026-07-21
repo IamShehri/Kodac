@@ -135,6 +135,147 @@ def _check_identity_url_fields(profile: ProfileFile) -> list[ValidationError]:
     return errors
 
 
+def _check_canonical_source_repository(profile: ProfileFile) -> list[ValidationError]:
+    """Direct, invariant-specific validation of identity.source_repository.value.
+
+    For GitHub repository URLs, requires the exact canonical root:
+    https://github.com/<owner>/<repository>
+
+    Emits a direct error on identity.source_repository.value for any deviation.
+    Does NOT rely on downstream evidence-authority failures.
+    """
+    errors: list[ValidationError] = []
+    ident = profile.data.get("identity", {}) or {}
+    sr = ident.get("source_repository", {}) or {}
+    value = sr.get("value")
+    if not isinstance(value, str) or value == "unknown":
+        return errors
+
+    field = "identity.source_repository.value"
+    parsed = urlparse(value)
+
+    # Only apply canonical GitHub rules to github.com URLs.
+    if parsed.hostname is None:
+        return errors  # handled by urlField schema
+    if parsed.hostname.lower() != "github.com":
+        return (
+            errors  # non-GitHub: generic HTTPS checks apply (already in _check_identity_url_fields)
+        )
+
+    # --- GitHub-specific canonical checks ---
+    msg_prefix = (
+        "canonical GitHub repository root must be https://github.com/<owner>/<repository>; "
+    )
+
+    if parsed.scheme != "https":
+        errors.append(
+            ValidationError(str(profile.relative_path), field, msg_prefix + "must use HTTPS")
+        )
+        return errors
+    if parsed.port is not None:
+        errors.append(
+            ValidationError(
+                str(profile.relative_path),
+                field,
+                msg_prefix + f"explicit port {parsed.port} is not allowed",
+            )
+        )
+        return errors
+    if parsed.username or parsed.password:
+        errors.append(
+            ValidationError(
+                str(profile.relative_path),
+                field,
+                msg_prefix + "embedded credentials are not allowed",
+            )
+        )
+        return errors
+    if parsed.query:
+        errors.append(
+            ValidationError(
+                str(profile.relative_path), field, msg_prefix + "query strings are not allowed"
+            )
+        )
+        return errors
+    if parsed.fragment:
+        errors.append(
+            ValidationError(
+                str(profile.relative_path), field, msg_prefix + "fragments are not allowed"
+            )
+        )
+        return errors
+
+    # Reject backslashes and percent-encoded slashes/backslashes.
+    if chr(92) in value:  # backslash
+        errors.append(
+            ValidationError(
+                str(profile.relative_path), field, msg_prefix + "backslashes are not allowed"
+            )
+        )
+        return errors
+    if "%2f" in value.lower() or "%2F" in value or "%5c" in value.lower() or "%5C" in value:
+        errors.append(
+            ValidationError(
+                str(profile.relative_path),
+                field,
+                msg_prefix + "percent-encoded slashes or backslashes are not allowed",
+            )
+        )
+        return errors
+
+    # Check for trailing slash (non-canonical even with 2 segments).
+    if parsed.path.endswith("/") and parsed.path != "/":
+        errors.append(
+            ValidationError(
+                str(profile.relative_path), field, msg_prefix + "trailing slash is not allowed"
+            )
+        )
+        return errors
+
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) != 2:
+        errors.append(
+            ValidationError(
+                str(profile.relative_path),
+                field,
+                msg_prefix + f"expected exactly 2 path segments (owner/repo), got {len(parts)}",
+            )
+        )
+        return errors
+
+    owner, repo = parts
+    if not owner:
+        errors.append(
+            ValidationError(str(profile.relative_path), field, msg_prefix + "owner is empty")
+        )
+        return errors
+    if not repo:
+        errors.append(
+            ValidationError(
+                str(profile.relative_path), field, msg_prefix + "repository name is empty"
+            )
+        )
+        return errors
+    if repo.endswith(".git"):
+        errors.append(
+            ValidationError(
+                str(profile.relative_path), field, msg_prefix + ".git suffix is not allowed"
+            )
+        )
+        return errors
+    if repo in ("blob", "tree", "issues", "pull", "releases"):
+        errors.append(
+            ValidationError(
+                str(profile.relative_path),
+                field,
+                msg_prefix + f"{repo!r} is a subpath, not a repository name",
+            )
+        )
+        return errors
+
+    return errors
+
+
 def _check_evidence_ids_unique(profile: ProfileFile) -> list[ValidationError]:
     errors: list[ValidationError] = []
     records = profile.data.get("evidence", {}).get("records", []) or []
@@ -1086,6 +1227,7 @@ def validate_profile(
     errors += _check_schema_version(profile)
     errors += _check_path_id_match(profile)
     errors += _check_identity_url_fields(profile)
+    errors += _check_canonical_source_repository(profile)
     errors += _check_evidence_ids_unique(profile)
     errors += _check_evidence_url_validity(profile)
     errors += _check_url_authority_consistency(profile)

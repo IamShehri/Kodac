@@ -149,6 +149,18 @@ Every disputed field must have **exactly one** matching `notes.disputes` entry. 
 
 Duplicate dispute entries for the same field are rejected.
 
+The JSON Schema structurally requires each `notes.disputes` item to have `field` (non-empty string), `sources` (array, minItems: 2, uniqueItems, non-empty string items), and `note` (non-empty string), with `additionalProperties: false`. Cross-reference resolution, evidence-record mapping, and authority compatibility remain policy-validator responsibilities.
+
+### Canonical repository identity
+
+For GitHub repository URLs, `identity.source_repository.value` must be the exact canonical root:
+
+`https://github.com/<owner>/<repository>`
+
+Requirements: HTTPS only; no trailing slash; no `.git` suffix; no extra path segments (blob/tree/issues/pull/releases are subpaths, not repository names); no query string; no fragment; no credentials; no explicit port (including 443); no backslashes; no percent-encoded path manipulation. A malformed GitHub repository URL produces a **direct** validation error on `identity.source_repository.value`, independent of downstream evidence-authority checks.
+
+An **invalid GitHub repository identity** (e.g., extra path segments, `.git` suffix) is different from a **non-GitHub repository host** (e.g., `gitlab.com`, `bitbucket.org`). Non-GitHub hosts receive generic HTTPS and URL-safety validation but do not have GitHub owner/repository semantics applied.
+
 ### Derived evidence summaries
 
 `evidence_status` and `last_verified` are **not authored** — they are derived mechanically by tooling from field-level claim statuses. The validator rejects profiles that attempt to author these fields.

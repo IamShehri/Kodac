@@ -378,11 +378,16 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["field", "note"],
+            "required": ["field", "sources", "note"],
             "properties": {
-              "field": { "type": "string" },
-              "sources": { "type": "array", "items": { "type": "string" } },
-              "note": { "type": "string" }
+              "field": { "type": "string", "minLength": 1 },
+              "sources": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "minItems": 2,
+                "uniqueItems": true
+              },
+              "note": { "type": "string", "minLength": 1 }
             }
           }
         },
