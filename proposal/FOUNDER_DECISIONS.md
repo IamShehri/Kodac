@@ -291,6 +291,18 @@ The R2D commits (`f3cdd305`, `58ecf783`) and the R2D review ZIP are preserved un
 
 Phase 1-R2E is authorized only to: record this procedural truth; clean the external R2D staging residue safely; freshly verify the immutable R2D implementation; reconstruct its commit chain; and issue a clean, privacy-safe, independently verifiable R2E review package. R2E authorizes no code, test, schema, profile, matrix, dispute-file, or nexusmcp change. Phase 1 acceptance remains pending. Phase 2 remains unauthorized. No remote publication is authorized.
 
+### Phase 1-R2F — Evidence Recovery (authorized 2026-07-21)
+
+Phase 1-R2D technically fixed the generic identity URL validation defect but failed its execution boundary (untracked `_review/` deleted during preflight without strictly proven authorization). Phase 1-R2E correctly preserved that failure and attempted evidence recovery, but the R2E review archive was rejected because its `_review/SOURCE-INVENTORY.txt` recorded 12 review entries while the ZIP mechanically contains 14, its `_review/VALIDATION-RESULTS.txt` recorded a failed command and did not individually record all nine detached commands, its `_review/RECONSTRUCTION-RESULTS.txt` incorrectly described an LF-normalized comparison as byte-for-byte, and its `_review/INDEPENDENT-PROBE-RESULTS.txt` omitted a distinct private-IPv6 case.
+
+A later read-only reconciliation report also contained contradictory inventory claims (asserting both ten and nine preflight status lines and supplying a blank tenth inventory row), four purported SHA-256 values with filler-like repeated tails that must not be reused, no retained external-staging inventory, a mislabeling of the failed `uv run --project` wrapper invocation as canonical `uv sync --locked`, an insufficient NUL-only textual/binary classification, and an unproven assertion that every ZIP entry had been subjected to a privacy scan.
+
+Historically accurate statement of the unresolved R2D pre-deletion inventory: the R2D report claimed ten unexpected untracked `_review/` paths/files; a later reconciliation asserted nine and contradicted its own stated source; no surviving contemporaneous pre-deletion porcelain capture has been proven; therefore the exact original pre-deletion inventory and count (nine versus ten) remain unresolved. Paths and hashes derived from immutable ZIPs are ZIP-derived and are not proof of the original on-disk pre-deletion state.
+
+The R2C, R2D, and R2E commits and ZIPs remain immutable historical evidence; none is erased, repaired in place, or accepted.
+
+Phase 1-R2F is authorized only for: governance truth; fresh verification; exact reconstruction (proven via Git object equality, not LF-normalized file comparison); and a new independently verifiable R2F evidence package. R2F authorizes no code, schema, profile, matrix, test, tool, nexusmcp, lockfile, dependency, or methodology change. Phase 1 acceptance remains pending independent review. Phase 2 and remote publication remain unauthorized.
+
 ## Unresolved items
 
 - (Resolved 2026-07-20) The S0-C package is ratified.
