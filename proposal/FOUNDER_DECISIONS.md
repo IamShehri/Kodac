@@ -260,6 +260,17 @@ Phase 1-R2A was implemented locally. Independent acceptance found two remaining 
 
 Phase 1-R2B is authorized only for this narrow local correction. Phase 1 acceptance remains pending. Phase 2 remains unauthorized. No remote publication is authorized.
 
+### Phase 1-R2C — Parser Safety and Canonicalization Closure (authorized 2026-07-21)
+
+Phase 1-R2B was implemented locally. Independent review did not accept it. The dispute JSON Schema closure passed. However, four URL/parser defects remain:
+
+1. Invalid-port crash: `https://github.com:notaport/owner/repo` raises `ValueError` instead of producing a deterministic `ValidationError`.
+2. Percent-encoded unreserved path bypass: `https://github.com/owner/%72epo` is accepted.
+3. Percent-encoded `.git` bypass: `https://github.com/owner/repo%2Egit` is accepted.
+4. Noncanonical host casing: `https://GitHub.com/owner/repo` is accepted.
+
+Phase 1-R2C is authorized only for parser safety, exact canonicalization, tests, necessary methodology reconciliation, and clean review packaging. Phase 1 acceptance remains pending. Phase 2 remains unauthorized. No remote publication is authorized.
+
 ## Unresolved items
 
 - (Resolved 2026-07-20) The S0-C package is ratified.
@@ -269,6 +280,7 @@ Phase 1-R2B is authorized only for this narrow local correction. Phase 1 accepta
 - (Resolved 2026-07-21) Phase 1-R2 evidence contract closure authorized and applied locally.
 - (Resolved 2026-07-21) Phase 1-R2 independent acceptance **not granted**; Phase 1-R2A authorized to fix remaining defects.
 - (Resolved 2026-07-21) Phase 1-R2A implemented locally; independent acceptance found remaining canonical-repository and schema-contract defects.
+- (Resolved 2026-07-21) Phase 1-R2B implemented locally; independent review did not accept; four URL/parser defects remain.
 - Final independent acceptance of Phase 1-R2B — pending review of the Phase 1-R2B review archive.
 - Per-agent sourcing feasibility for the remaining nine launch profiles — to be confirmed under a separately authorized Phase 2.
 - Controlled Evaluation Tasks, Runs, and benchmark execution — remain unauthorized.
