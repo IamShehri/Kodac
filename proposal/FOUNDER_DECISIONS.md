@@ -1,6 +1,6 @@
 # Founder Decisions — Kernux S0-C Ratification
 
-*Status: Ratified — S0-C Founder Ratification (2026-07-20).*
+*Status: Ratified — S0-C Founder Ratification (2026-07-20). Phase 1 governance-closed (2026-07-22); Phase 2 unauthorized.*
 
 ## Decision date
 
@@ -172,7 +172,7 @@ A coordinated, **non-spam** launch. The launch package may include tailored subm
 
 ## Implementation authorization status
 
-> **Phase 1 authorized (2026-07-20).** Everything outside Phase 1 remains unauthorized.
+> **Current status (2026-07-22): Phase 1 governance-closed.** Phase 2 and everything outside the completed Phase 1 boundary remain unauthorized.
 
 ### Phase 1 — Agent Profile Vertical Slice (authorized 2026-07-20)
 
@@ -311,6 +311,44 @@ The R2F commit and ZIP remain immutable historical evidence; R2G preserves rathe
 
 Phase 1-R2G is authorized only for: governance truth; fresh validation; fail-closed test-evidence generation (making the R2F failure mode impossible by aborting unless collection stdout is non-empty and the parsed total equals the mechanically observed count); exact reconstruction (proven via Git object equality); and a new independently verifiable R2G evidence package. R2G authorizes no code, test, schema, profile, matrix, tool, nexusmcp, lockfile, dependency, or methodology change. Phase 1 acceptance remains pending independent review. Phase 2 and remote publication remain unauthorized.
 
+### Phase 1 post-merge truth-closeout (recorded 2026-07-22)
+
+This section supersedes only the **current-state** acceptance, publication, and authorization statements in the historical Phase 1-R through Phase 1-R2G sections above. Those sections remain accurate snapshots of what was known and authorized when their commits were created; they are not rewritten as if later events had already occurred.
+
+#### Independent acceptance and accepted archive
+
+Phase 1-R2G independent acceptance passed. The accepted archive identity was:
+
+- Name: `Kernux-Phase1R2G-Review.zip`
+- Size: `339021` bytes
+- SHA-256: `1ee6ed1de3147f024da9ecb5ba8b709fa767dbf7d674929bd7a84558944867f8`
+
+#### Remote publication and normal merge
+
+The accepted head `68b392bb5819fdb3b5e9447b548deff35f8ce993` was published through [PR #1](https://github.com/IamShehri/kernux/pull/1). PR #1 was merged using a normal merge commit on `2026-07-21T23:59:51Z`:
+
+- Merge commit: `a6978f4659a866d81b3ff7fd92ab1af4e2c64ac2`
+- Ordered parent 1: `60df880f34e343d15da4864e7e1eee201d7c9de3`
+- Ordered parent 2: `68b392bb5819fdb3b5e9447b548deff35f8ce993`
+- Merge tree: `960d7ec924296d09e833c9691a8bdf63ab7a3f1c`
+
+#### Post-merge verification
+
+Read-only post-merge verification passed and established that:
+
+- `main` resolves exactly to merge commit `a6978f4659a866d81b3ff7fd92ab1af4e2c64ac2`;
+- the merge tree equals the accepted Phase 1-R2G tree `960d7ec924296d09e833c9691a8bdf63ab7a3f1c`;
+- all 17 accepted commits remain in ancestry;
+- the merge introduced no content beyond the accepted head;
+- the repository contains exactly 116 tracked entries; and
+- no committed `_review/` paths, symlinks, or submodules exist.
+
+No GitHub Actions workflows or commit statuses were configured. Their absence is **not** a passing or green CI result.
+
+#### Governance closeout and authorization boundary
+
+Phase 1 is independently accepted, remotely published, normally merged, post-merge verified, and governance-closed. Phase 2 remains unauthorized. Controlled Evaluation Tasks, Runs, the remaining nine profiles, website, CI, API, database, product launch, and all other post-Phase-1 implementation remain unauthorized pending separate founder authorization.
+
 ## Unresolved items
 
 - (Resolved 2026-07-20) The S0-C package is ratified.
@@ -325,7 +363,10 @@ Phase 1-R2G is authorized only for: governance truth; fresh validation; fail-clo
 - (Resolved 2026-07-21) Phase 1-R2D implemented locally; the generic URL validation defect was closed technically at commit `58ecf783`, but the R2D execution boundary was breached (untracked `_review/` deleted during preflight without strict proven user authorization) and the report was not accepted.
 - (Resolved 2026-07-21) Phase 1-R2E implemented locally; preserved the R2D failure and produced a recovery archive, but the R2E archive was rejected for source-inventory, validation, reconstruction-wording, and probe-coverage defects.
 - (Resolved 2026-07-21) Phase 1-R2F implemented locally; preserved earlier failures and produced a technically correct repository state, but the R2F archive was rejected because `_review/TEST-COLLECTION.txt` falsely recorded zero counts and omitted mandatory collection evidence.
-- Final independent acceptance of Phase 1 — pending external review of the Phase 1-R2G evidence-recovery archive.
+- (Resolved 2026-07-22) Phase 1-R2G independent acceptance passed for `Kernux-Phase1R2G-Review.zip` (`339021` bytes; SHA-256 `1ee6ed1de3147f024da9ecb5ba8b709fa767dbf7d674929bd7a84558944867f8`).
+- (Resolved 2026-07-22) The accepted head was published through PR #1, normally merged as `a6978f4659a866d81b3ff7fd92ab1af4e2c64ac2`, and post-merge verified against accepted tree `960d7ec924296d09e833c9691a8bdf63ab7a3f1c`.
+- (Resolved 2026-07-22) Phase 1 governance closeout recorded; Phase 1 is closed.
 - Per-agent sourcing feasibility for the remaining nine launch profiles — to be confirmed under a separately authorized Phase 2.
 - Controlled Evaluation Tasks, Runs, and benchmark execution — remain unauthorized.
-- Concrete launch date, contingent on the "useful sourced data + at least one complete reproducible evidence path" gate.
+- Website, CI, API, database, and all other post-Phase-1 implementation — remain unauthorized.
+- Concrete launch date and product launch — remain unauthorized and contingent on the "useful sourced data + at least one complete reproducible evidence path" gate.
