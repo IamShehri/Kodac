@@ -24,19 +24,24 @@ export class RuntimeSession {
     return event
   }
 
-  async start(input: { workspace: string; command: string }): Promise<void> {
+  async start(input: { workspace: string; command: string; runtimeSlice?: string }): Promise<void> {
     await this.emit("session.started", {
       workspace: input.workspace,
       command: input.command,
-      runtimeSlice: "k2-s2",
+      runtimeSlice: input.runtimeSlice ?? "k2-s2",
     })
   }
 
-  async complete(input: { receiptId: string; tool: string }): Promise<void> {
+  async complete(input: {
+    receiptId?: string
+    tool?: string
+    mode?: "tool" | "model_turn"
+    provider?: string
+    model?: string
+  } = {}): Promise<void> {
     await this.emit("session.completed", {
-      status: "proven_ready",
-      receiptId: input.receiptId,
-      tool: input.tool,
+      status: input.receiptId ? "proven_ready" : "complete",
+      ...input,
     })
   }
 
