@@ -41,6 +41,8 @@ interface AskArgs extends CommonArgs {
 
 type CliArgs = ApplyPatchArgs | AskArgs
 
+type ActivateSession = (session: RuntimeSession) => void
+
 function workspaceKey(workspace: string): string {
   return createHash("sha256").update(resolve(workspace), "utf8").digest("hex").slice(0, 16)
 }
@@ -117,11 +119,12 @@ function sessionPaths(args: CommonArgs, sessionId: string): { eventPath: string;
   }
 }
 
-async function runApplyPatch(args: ApplyPatchArgs, io: CliIO): Promise<{ code: number; session: RuntimeSession }> {
+async function runApplyPatch(args: ApplyPatchArgs, io: CliIO, activateSession: ActivateSession): Promise<number> {
   const patchText = await readFile(args.patchFile, "utf8")
   const sessionId = randomUUID()
   const { eventPath, receiptPath } = sessionPaths(args, sessionId)
   const session = new RuntimeSession(new JsonlEventSink(eventPath), sessionId)
+  activateSession(session)
   const receipts = new JsonlReceiptLedger(receiptPath)
   const fs = new NodeWorkspaceFileSystem(args.workspace)
   const gateway = new ExecutionGateway(fs, fixedPolicy("allow", "human-cli-explicit-apply-patch"))
@@ -152,13 +155,14 @@ async function runApplyPatch(args: ApplyPatchArgs, io: CliIO): Promise<{ code: n
     io.stdout(`✓ receipt written: ${receiptPath}`)
     io.stdout("PROVEN READY")
   }
-  return { code: 0, session }
+  return 0
 }
 
-async function runAsk(args: AskArgs, io: CliIO): Promise<{ code: number; session: RuntimeSession }> {
+async function runAsk(args: AskArgs, io: CliIO, activateSession: ActivateSession): Promise<number> {
   const sessionId = randomUUID()
   const { eventPath } = sessionPaths(args, sessionId)
   const session = new RuntimeSession(new JsonlEventSink(eventPath), sessionId)
+  activateSession(session)
   const tools = new ToolRegistry()
   const orchestrator = new RuntimeOrchestrator(tools, session)
   const providers = new ProviderRegistry()
@@ -188,17 +192,20 @@ async function runAsk(args: AskArgs, io: CliIO): Promise<{ code: number; session
     io.stdout(result.assistant)
     io.stdout(`Evidence: ${eventPath}`)
   }
-  return { code: 0, session }
+  return 0
 }
 
 export async function runCli(argv: string[], io: CliIO = defaultIO(), cwd = process.cwd()): Promise<number> {
   let session: RuntimeSession | undefined
+  const activateSession: ActivateSession = (created) => {
+    session = created
+  }
 
   try {
     const args = parseCliArgs(argv, cwd)
-    const result = args.command === "apply-patch" ? await runApplyPatch(args, io) : await runAsk(args, io)
-    session = result.session
-    return result.code
+    return args.command === "apply-patch"
+      ? await runApplyPatch(args, io, activateSession)
+      : await runAsk(args, io, activateSession)
   } catch (error) {
     if (session) {
       try {
