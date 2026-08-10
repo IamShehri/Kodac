@@ -20,3 +20,21 @@ export function fixedPolicy(decision: PolicyDecision, reason = `fixed:${decision
     evaluate: () => ({ decision, reason }),
   }
 }
+
+const READ_ONLY_AGENT_CAPABILITIES = new Set(["repo.read", "repo.list", "repo.search", "git.diff"])
+
+export function workspaceAgentPolicy(approveWrites: boolean): PolicyEngine {
+  return {
+    evaluate(intent) {
+      if (READ_ONLY_AGENT_CAPABILITIES.has(intent.capability)) {
+        return { decision: "allow", reason: `bounded read-only capability: ${intent.capability}` }
+      }
+      if (intent.capability === "repo.apply_patch") {
+        return approveWrites
+          ? { decision: "allow", reason: "explicit --approve-writes authorization" }
+          : { decision: "ask", reason: "agent workspace mutation requires explicit --approve-writes authorization" }
+      }
+      return { decision: "deny", reason: `capability not authorized for K2-S5 agent workspace: ${intent.capability}` }
+    },
+  }
+}

@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import type { WorkspaceFileSystem } from "../edit/filesystem.ts"
 import { applyHunks, parsePatch } from "../edit/patch.ts"
@@ -68,6 +69,35 @@ async function persistReceipt(observer: ExecutionObserver | undefined, receipt: 
   }
 }
 
+function runGitDiffProcess(
+  cwd: string,
+  paths: string[],
+  options: { signal?: AbortSignal; maxOutputBytes: number; timeoutMs: number },
+): Promise<string> {
+  const args = ["diff", "--no-ext-diff", "--no-color", "--", ...paths]
+  return new Promise((resolvePromise, rejectPromise) => {
+    execFile(
+      "git",
+      args,
+      {
+        cwd,
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: options.timeoutMs,
+        maxBuffer: options.maxOutputBytes,
+        signal: options.signal,
+      },
+      (error, stdout) => {
+        if (error) {
+          rejectPromise(error)
+          return
+        }
+        resolvePromise(stdout)
+      },
+    )
+  })
+}
+
 export class ExecutionGateway {
   private readonly fs: WorkspaceFileSystem
   private readonly policy: PolicyEngine
@@ -136,5 +166,75 @@ export class ExecutionGateway {
     })
     await persistReceipt(observer, receipt)
     return { affected, receipt }
+  }
+
+  async gitDiff(
+    requestedPaths: string[] = [],
+    observer?: ExecutionObserver,
+    options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number } = {},
+  ): Promise<{ diff: string; receipt: ExecutionReceipt }> {
+    const startedAt = new Date().toISOString()
+    const paths = uniquePaths(requestedPaths)
+    const maxOutputBytes = options.maxOutputBytes ?? 256 * 1024
+    const timeoutMs = options.timeoutMs ?? 5_000
+    if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) throw new Error("maxOutputBytes must be a positive integer")
+    if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive integer")
+
+    const intent: ExecutionIntent = {
+      capability: "git.diff",
+      paths,
+      inputDigest: sha256(JSON.stringify({ command: "git", args: ["diff", "--no-ext-diff", "--no-color", "--", ...paths] })),
+    }
+    await observer?.onIntent?.(intent)
+    const policy = await this.policy.evaluate(intent)
+    await observer?.onPolicy?.(intent, policy)
+
+    if (policy.decision !== "allow") {
+      const receipt = blockedReceipt(intent, policy, startedAt)
+      await persistReceipt(observer, receipt)
+      throw new ExecutionBlockedError(
+        policy.decision === "ask" ? `Approval required: ${policy.reason}` : `Execution denied: ${policy.reason}`,
+        receipt,
+      )
+    }
+
+    try {
+      for (const path of paths) await this.fs.validatePath(path)
+      const diff = await runGitDiffProcess(this.fs.root, paths, {
+        signal: options.signal,
+        maxOutputBytes,
+        timeoutMs,
+      })
+      const receipt = createReceipt({
+        capability: intent.capability,
+        inputDigest: intent.inputDigest,
+        paths: intent.paths,
+        policy,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        result: {
+          status: "success",
+          outputDigest: sha256(diff),
+          outputBytes: Buffer.byteLength(diff, "utf8"),
+          exitCode: 0,
+        },
+      })
+      await persistReceipt(observer, receipt)
+      return { diff, receipt }
+    } catch (error) {
+      if (error instanceof ExecutionUnprovenError) throw error
+      const message = error instanceof Error ? error.message : String(error)
+      const receipt = createReceipt({
+        capability: intent.capability,
+        inputDigest: intent.inputDigest,
+        paths: intent.paths,
+        policy,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        result: { status: "failure", error: message },
+      })
+      await persistReceipt(observer, receipt)
+      throw new ExecutionFailedError(`git diff failed: ${message}`, receipt, { cause: error })
+    }
   }
 }
