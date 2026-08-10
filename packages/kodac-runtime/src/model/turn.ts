@@ -2,13 +2,18 @@ import { createHash } from "node:crypto"
 import type { RuntimeOrchestrator } from "../runtime/orchestrator.ts"
 import type { RuntimeSession } from "../session/session.ts"
 import type { ToolRegistry } from "../tools/registry.ts"
-import type { ModelMessage, ModelProviderResponse } from "./provider.ts"
+import type { ModelMessage, ModelProviderResponse, ModelToolCall } from "./provider.ts"
 import type { ProviderRegistry } from "./provider.ts"
 
 export interface AgentTurnInput {
   provider: string
   model: string
   messages: ModelMessage[]
+  signal?: AbortSignal
+}
+
+export interface AgentTurnHooks {
+  beforeToolCall?(call: ModelToolCall): Promise<void> | void
 }
 
 export interface AgentToolResult {
@@ -25,6 +30,11 @@ export interface AgentTurnResult {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex")
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error ? signal.reason : new Error("Operation aborted")
 }
 
 function validateResponse(response: ModelProviderResponse): void {
@@ -63,7 +73,8 @@ export class AgentTurnRunner {
     this.session = session
   }
 
-  async run(input: AgentTurnInput): Promise<AgentTurnResult> {
+  async run(input: AgentTurnInput, hooks: AgentTurnHooks = {}): Promise<AgentTurnResult> {
+    throwIfAborted(input.signal)
     const provider = this.providers.get(input.provider)
     const tools = this.tools.list()
 
@@ -76,7 +87,13 @@ export class AgentTurnRunner {
 
     let response: ModelProviderResponse
     try {
-      response = await provider.generate({ model: input.model, messages: input.messages, tools })
+      response = await provider.generate({
+        model: input.model,
+        messages: input.messages,
+        tools,
+        signal: input.signal,
+      })
+      throwIfAborted(input.signal)
       validateResponse(response)
     } catch (error) {
       await this.session.emit("model.failed", {
@@ -106,13 +123,15 @@ export class AgentTurnRunner {
 
     const toolResults: AgentToolResult[] = []
     for (const call of response.toolCalls) {
+      throwIfAborted(input.signal)
       await this.session.emit("model.tool_call.requested", {
         provider: provider.name,
         model: input.model,
         callId: call.id,
         tool: call.name,
       })
-      const output = await this.orchestrator.invoke<unknown, unknown>(call.name, call.input)
+      await hooks.beforeToolCall?.(call)
+      const output = await this.orchestrator.invoke<unknown, unknown>(call.name, call.input, { signal: input.signal })
       toolResults.push({ id: call.id, name: call.name, output })
     }
 

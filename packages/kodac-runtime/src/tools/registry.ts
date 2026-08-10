@@ -2,6 +2,7 @@ import type { RuntimeSession } from "../session/session.ts"
 
 export interface ToolContext {
   session: RuntimeSession
+  signal?: AbortSignal
 }
 
 export interface RuntimeTool<TInput = unknown, TOutput = unknown> {

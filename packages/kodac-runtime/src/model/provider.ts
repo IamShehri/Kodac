@@ -4,6 +4,7 @@ export interface ModelMessage {
   role: ModelRole
   content: string
   name?: string
+  toolCallId?: string
 }
 
 export interface ModelToolDescriptor {
@@ -21,6 +22,7 @@ export interface ModelProviderRequest {
   model: string
   messages: ModelMessage[]
   tools: ModelToolDescriptor[]
+  signal?: AbortSignal
 }
 
 export interface ModelProviderResponse {

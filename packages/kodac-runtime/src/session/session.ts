@@ -35,7 +35,7 @@ export class RuntimeSession {
   async complete(input: {
     receiptId?: string
     tool?: string
-    mode?: "tool" | "model_turn"
+    mode?: "tool" | "model_turn" | "agent_loop"
     provider?: string
     model?: string
   } = {}): Promise<void> {

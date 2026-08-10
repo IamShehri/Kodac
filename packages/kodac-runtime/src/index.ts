@@ -1,3 +1,4 @@
+export * from "./agent/loop.ts"
 export * from "./edit/filesystem.ts"
 export * from "./edit/patch.ts"
 export * from "./evidence/ledger.ts"

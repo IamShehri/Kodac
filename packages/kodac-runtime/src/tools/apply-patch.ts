@@ -13,6 +13,9 @@ export function createApplyPatchTool(gateway: ExecutionGateway, ledger: ReceiptL
     name: "repo.apply_patch",
     capability: "repo.apply_patch",
     async execute(input, context) {
+      if (context.signal?.aborted) {
+        throw context.signal.reason instanceof Error ? context.signal.reason : new Error("Operation aborted")
+      }
       return gateway.applyPatch(input.patchText, {
         async onIntent(intent) {
           await context.session.emit("intent.created", { intent })

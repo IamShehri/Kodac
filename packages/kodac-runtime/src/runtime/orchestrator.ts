@@ -7,6 +7,11 @@ function errorReceiptId(error: unknown): string | undefined {
   return typeof receipt?.receiptId === "string" ? receipt.receiptId : undefined
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error ? signal.reason : new Error("Operation aborted")
+}
+
 export class RuntimeOrchestrator {
   private readonly registry: ToolRegistry
   private readonly session: RuntimeSession
@@ -16,7 +21,12 @@ export class RuntimeOrchestrator {
     this.session = session
   }
 
-  async invoke<TInput, TOutput>(toolName: string, input: TInput): Promise<TOutput> {
+  async invoke<TInput, TOutput>(
+    toolName: string,
+    input: TInput,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<TOutput> {
+    throwIfAborted(options.signal)
     const tool = this.registry.get<TInput, TOutput>(toolName)
     await this.session.emit("tool.started", {
       tool: tool.name,
@@ -24,7 +34,8 @@ export class RuntimeOrchestrator {
     })
 
     try {
-      const output = await tool.execute(input, { session: this.session })
+      throwIfAborted(options.signal)
+      const output = await tool.execute(input, { session: this.session, signal: options.signal })
       await this.session.emit("tool.completed", {
         tool: tool.name,
         capability: tool.capability,
