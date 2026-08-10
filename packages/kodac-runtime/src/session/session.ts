@@ -6,7 +6,7 @@ export class RuntimeSession {
   private readonly sink: EventSink
   private sequence = 0
 
-  constructor(sink: EventSink, sessionId = randomUUID()) {
+  constructor(sink: EventSink, sessionId: string = randomUUID()) {
     this.sink = sink
     this.sessionId = sessionId
   }
