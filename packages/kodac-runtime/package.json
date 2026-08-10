@@ -1,0 +1,13 @@
+{
+  "name": "@kodac/runtime-internal",
+  "version": "0.0.0-k2",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "bench:patch": "node --experimental-strip-types bench/patch-bench.ts"
+  }
+}

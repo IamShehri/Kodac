@@ -1,0 +1,42 @@
+name: k2-runtime
+
+on:
+  push:
+    branches:
+      - feat/kodac-k2-runtime-spine
+    paths:
+      - "packages/kodac-runtime/**"
+      - "provenance/imports/**"
+      - "provenance/authorizations/**"
+      - "schema/provenance-import-authorization.schema.json"
+      - ".github/workflows/k2-runtime.yml"
+  pull_request:
+    paths:
+      - "packages/kodac-runtime/**"
+      - "provenance/imports/**"
+      - "provenance/authorizations/**"
+      - "schema/provenance-import-authorization.schema.json"
+      - ".github/workflows/k2-runtime.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install typecheck tooling
+        run: npm install --prefix packages/kodac-runtime --no-save --package-lock=false --ignore-scripts --no-audit --no-fund typescript@5.9.3 @types/node@24.3.0
+      - name: Typecheck
+        working-directory: packages/kodac-runtime
+        run: ./node_modules/.bin/tsc -p tsconfig.json --noEmit
+      - name: Test
+        working-directory: packages/kodac-runtime
+        run: node --experimental-strip-types --test test/*.test.ts
+      - name: Patch benchmark hook
+        working-directory: packages/kodac-runtime
+        run: node --experimental-strip-types bench/patch-bench.ts
