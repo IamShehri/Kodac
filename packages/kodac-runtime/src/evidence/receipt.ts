@@ -3,7 +3,7 @@ import type { PolicyResult } from "../trust/policy.ts"
 import type { AffectedPaths } from "../edit/patch.ts"
 
 export type ReceiptResult =
-  | { status: "success"; affected: AffectedPaths }
+  | { status: "success"; affected: AffectedPaths; postStateDigest: string }
   | { status: "success"; outputDigest: string; outputBytes: number; exitCode: number }
   | { status: "blocked"; reason: string }
   | { status: "failure"; error: string }

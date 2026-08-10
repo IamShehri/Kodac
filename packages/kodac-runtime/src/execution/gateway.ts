@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import type { WorkspaceFileSystem } from "../edit/filesystem.ts"
-import { applyHunks, parsePatch } from "../edit/patch.ts"
+import { applyHunks, parsePatch, type AffectedPaths } from "../edit/patch.ts"
 import { createReceipt, type ExecutionReceipt } from "../evidence/receipt.ts"
 import type { ExecutionIntent, PolicyEngine, PolicyResult } from "../trust/policy.ts"
 
@@ -69,15 +69,20 @@ async function persistReceipt(observer: ExecutionObserver | undefined, receipt: 
   }
 }
 
-function runGitDiffProcess(
+function runProcess(
+  executable: string,
+  args: string[],
   cwd: string,
-  paths: string[],
-  options: { signal?: AbortSignal; maxOutputBytes: number; timeoutMs: number },
-): Promise<string> {
-  const args = ["diff", "--no-ext-diff", "--no-color", "--", ...paths]
+  options: {
+    signal?: AbortSignal
+    maxOutputBytes: number
+    timeoutMs: number
+    env?: NodeJS.ProcessEnv
+  },
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolvePromise, rejectPromise) => {
     execFile(
-      "git",
+      executable,
       args,
       {
         cwd,
@@ -86,16 +91,26 @@ function runGitDiffProcess(
         timeout: options.timeoutMs,
         maxBuffer: options.maxOutputBytes,
         signal: options.signal,
+        env: options.env,
       },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
         if (error) {
           rejectPromise(error)
           return
         }
-        resolvePromise(stdout)
+        resolvePromise({ stdout, stderr })
       },
     )
   })
+}
+
+async function digestAffectedState(fs: WorkspaceFileSystem, affected: AffectedPaths): Promise<string> {
+  const rows: string[] = []
+  for (const path of [...affected.added, ...affected.modified].sort()) {
+    rows.push(`${path}\0${sha256(await fs.readText(path))}`)
+  }
+  for (const path of [...affected.deleted].sort()) rows.push(`${path}\0<deleted>`)
+  return sha256(rows.join("\n"))
 }
 
 export class ExecutionGateway {
@@ -162,7 +177,7 @@ export class ExecutionGateway {
       policy,
       startedAt,
       completedAt: new Date().toISOString(),
-      result: { status: "success", affected },
+      result: { status: "success", affected, postStateDigest: await digestAffectedState(this.fs, affected) },
     })
     await persistReceipt(observer, receipt)
     return { affected, receipt }
@@ -173,17 +188,72 @@ export class ExecutionGateway {
     observer?: ExecutionObserver,
     options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number } = {},
   ): Promise<{ diff: string; receipt: ExecutionReceipt }> {
-    const startedAt = new Date().toISOString()
     const paths = uniquePaths(requestedPaths)
+    return this.runReadOnlyCommand(
+      "git.diff",
+      "git",
+      ["diff", "--no-ext-diff", "--no-color", "--", ...paths],
+      paths,
+      observer,
+      options,
+      "git diff",
+    ).then(({ stdout, receipt }) => ({ diff: stdout, receipt }))
+  }
+
+  async gitStatus(
+    observer?: ExecutionObserver,
+    options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number } = {},
+  ): Promise<{ status: string; receipt: ExecutionReceipt }> {
+    return this.runReadOnlyCommand(
+      "git.status",
+      "git",
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      [],
+      observer,
+      options,
+      "git status",
+    ).then(({ stdout, receipt }) => ({ status: stdout, receipt }))
+  }
+
+  async runCommand(
+    capability: string,
+    executable: string,
+    args: string[],
+    observer?: ExecutionObserver,
+    options: {
+      signal?: AbortSignal
+      maxOutputBytes?: number
+      timeoutMs?: number
+      env?: NodeJS.ProcessEnv
+    } = {},
+  ): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
+    return this.runReadOnlyCommand(capability, executable, args, [], observer, options, capability)
+  }
+
+  private async runReadOnlyCommand(
+    capability: string,
+    executable: string,
+    args: string[],
+    paths: string[],
+    observer: ExecutionObserver | undefined,
+    options: {
+      signal?: AbortSignal
+      maxOutputBytes?: number
+      timeoutMs?: number
+      env?: NodeJS.ProcessEnv
+    },
+    label: string,
+  ): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
+    const startedAt = new Date().toISOString()
     const maxOutputBytes = options.maxOutputBytes ?? 256 * 1024
     const timeoutMs = options.timeoutMs ?? 5_000
     if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) throw new Error("maxOutputBytes must be a positive integer")
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive integer")
 
     const intent: ExecutionIntent = {
-      capability: "git.diff",
+      capability,
       paths,
-      inputDigest: sha256(JSON.stringify({ command: "git", args: ["diff", "--no-ext-diff", "--no-color", "--", ...paths] })),
+      inputDigest: sha256(JSON.stringify({ executable, args })),
     }
     await observer?.onIntent?.(intent)
     const policy = await this.policy.evaluate(intent)
@@ -200,11 +270,13 @@ export class ExecutionGateway {
 
     try {
       for (const path of paths) await this.fs.validatePath(path)
-      const diff = await runGitDiffProcess(this.fs.root, paths, {
+      const { stdout, stderr } = await runProcess(executable, args, this.fs.root, {
         signal: options.signal,
         maxOutputBytes,
         timeoutMs,
+        env: options.env,
       })
+      const combined = `${stdout}\0${stderr}`
       const receipt = createReceipt({
         capability: intent.capability,
         inputDigest: intent.inputDigest,
@@ -214,13 +286,13 @@ export class ExecutionGateway {
         completedAt: new Date().toISOString(),
         result: {
           status: "success",
-          outputDigest: sha256(diff),
-          outputBytes: Buffer.byteLength(diff, "utf8"),
+          outputDigest: sha256(combined),
+          outputBytes: Buffer.byteLength(combined, "utf8"),
           exitCode: 0,
         },
       })
       await persistReceipt(observer, receipt)
-      return { diff, receipt }
+      return { stdout, stderr, receipt }
     } catch (error) {
       if (error instanceof ExecutionUnprovenError) throw error
       const message = error instanceof Error ? error.message : String(error)
@@ -234,7 +306,7 @@ export class ExecutionGateway {
         result: { status: "failure", error: message },
       })
       await persistReceipt(observer, receipt)
-      throw new ExecutionFailedError(`git diff failed: ${message}`, receipt, { cause: error })
+      throw new ExecutionFailedError(`${label} failed: ${message}`, receipt, { cause: error })
     }
   }
 }
