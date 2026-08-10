@@ -1,0 +1,228 @@
+schema_version: 1
+recorded_at: "2026-08-11"
+status: architecture_candidate
+code_import_authorized: false
+canonical_base: c425dca6e9d5474aca50d288064fa56eb21a1b9e
+
+classification_values:
+  - COPY
+  - ADAPT
+  - VENDOR
+  - REIMPLEMENT
+  - INTEGRATE
+  - REFERENCE
+  - REJECT
+
+modules:
+  - id: runtime-substrate
+    concern: runtime sessions providers tools orchestration
+    primary:
+      upstream: opencode
+      commit: 3a90639cb57619a21e59f544b3e8d23ffed56f48
+      classification: ADAPT
+      source_paths:
+        - packages/opencode/src/acp
+        - packages/opencode/src/agent
+        - packages/opencode/src/bus
+        - packages/opencode/src/config
+        - packages/opencode/src/git
+        - packages/opencode/src/lsp
+        - packages/opencode/src/mcp
+        - packages/opencode/src/patch
+        - packages/opencode/src/permission
+        - packages/opencode/src/plugin
+        - packages/opencode/src/project
+        - packages/opencode/src/provider
+        - packages/opencode/src/server
+        - packages/opencode/src/session
+        - packages/opencode/src/skill
+        - packages/opencode/src/snapshot
+        - packages/opencode/src/storage
+        - packages/opencode/src/tool
+        - packages/opencode/src/worktree
+    exclusions:
+      - account/control-plane/cloud-specific product paths by default
+      - mandatory sharing/sync/telemetry
+    note: Kodac canonical protocol remains native.
+
+  - id: duplicate-runtime-root
+    concern: second runtime foundation
+    primary:
+      upstream: kilo
+      commit: 907ed2b28d3ad86a12e34b244951dd75bd8e9998
+      classification: REJECT
+      source_paths:
+        - packages/opencode
+    note: Kilo is a comparator/selective donor, not a second runtime root.
+
+  - id: edit-engine
+    concern: patch parsing and workspace edits
+    primary:
+      upstream: opencode
+      commit: 3a90639cb57619a21e59f544b3e8d23ffed56f48
+      classification: ADAPT
+      source_paths:
+        - packages/opencode/src/patch
+        - packages/opencode/src/tool/apply_patch.ts
+        - packages/opencode/src/tool/edit.ts
+    references:
+      - upstream: codex
+        commit: cc2f2620330116b961c87430d9fdaa16d948d3bf
+        classification: REFERENCE
+        source_paths:
+          - codex-rs/apply-patch
+    note: One TypeScript default engine in K2; Codex provides behavioral/parity evidence.
+
+  - id: checkpoints
+    concern: checkpoint snapshot restore and comparison semantics
+    primary:
+      upstream: kodac-native
+      classification: REIMPLEMENT
+      source_paths: []
+    references:
+      - upstream: cline
+        commit: ffd6a6b1dbcc89955132ded8348f9842d59cac3b
+        classification: REFERENCE
+        source_paths:
+          - checkpoint/session SDK mechanics
+      - upstream: opencode
+        commit: 3a90639cb57619a21e59f544b3e8d23ffed56f48
+        classification: REFERENCE
+        source_paths:
+          - packages/opencode/src/snapshot
+    note: Expose one Kodac checkpoint API; do not preserve duplicate recovery models.
+
+  - id: repo-graph
+    concern: repository intelligence
+    primary:
+      upstream: kodac-native
+      classification: REIMPLEMENT
+      source_paths: []
+    inputs:
+      - upstream: opencode
+        commit: 3a90639cb57619a21e59f544b3e8d23ffed56f48
+        classification: ADAPT
+        source_paths:
+          - packages/opencode/src/lsp
+      - upstream: aider
+        commit: 5dc9490bb35f9729ef2c95d00a19ccd30c26339c
+        classification: REFERENCE
+        source_paths:
+          - aider/repomap.py
+      - upstream: kilo
+        commit: 907ed2b28d3ad86a12e34b244951dd75bd8e9998
+        classification: REFERENCE
+        source_paths:
+          - packages/core/src/filesystem/search.ts
+          - packages/kilo-indexing
+    note: Structured durable graph; repo-map prompt text is a view, not the canonical representation.
+
+  - id: context-engine
+    concern: context selection and budgeting
+    primary:
+      upstream: kodac-native
+      classification: REIMPLEMENT
+      source_paths: []
+    references:
+      - upstream: aider
+        commit: 5dc9490bb35f9729ef2c95d00a19ccd30c26339c
+        classification: REFERENCE
+        source_paths:
+          - aider/repomap.py
+      - upstream: tabby
+        commit: 21b29048d7bcf6b94f9f482f2d0fd05efadfd19f
+        classification: REFERENCE
+        source_paths:
+          - completion context/cache implementation
+
+  - id: policy-engine-contract
+    concern: capability authorization policy
+    primary:
+      upstream: kodac-native
+      classification: REIMPLEMENT
+      source_paths: []
+    references:
+      - upstream: codex
+        commit: cc2f2620330116b961c87430d9fdaa16d948d3bf
+        classification: REFERENCE
+        source_paths:
+          - codex-rs/execpolicy
+    note: Canonical Kodac result is allow/ask/deny; donor policy languages are adapters/backends.
+
+  - id: sandbox-control-plane
+    concern: sandbox abstraction and trusted execution backend
+    primary:
+      upstream: kodac-native
+      classification: REIMPLEMENT
+      source_paths: []
+    references:
+      - upstream: codex
+        commit: cc2f2620330116b961c87430d9fdaa16d948d3bf
+        classification: INTEGRATE
+        source_paths:
+          - codex-rs/sandboxing
+          - codex-rs/linux-sandbox
+          - codex-rs/windows-sandbox-rs
+          - codex-rs/process-hardening
+          - codex-rs/network-proxy
+          - codex-rs/secrets
+      - upstream: kilo
+        commit: 907ed2b28d3ad86a12e34b244951dd75bd8e9998
+        classification: REFERENCE
+        source_paths:
+          - packages/kilo-sandbox
+    note: ExecutionGateway and Trust Kernel remain Kodac-owned; backend imports need separate review.
+
+  - id: autocomplete
+    concern: low-latency inline completion and next edit
+    primary:
+      upstream: tabby
+      commit: 21b29048d7bcf6b94f9f482f2d0fd05efadfd19f
+      classification: REFERENCE
+      source_paths:
+        - community completion context/cache paths only
+    exclusions:
+      - ee/
+    note: Selective ADAPT only after exact path/license review. Keep latency path isolated from agent orchestration.
+
+  - id: ide-surfaces
+    concern: VS Code and JetBrains integration
+    primary:
+      upstream: kilo
+      commit: 907ed2b28d3ad86a12e34b244951dd75bd8e9998
+      classification: REFERENCE
+      source_paths:
+        - packages/kilo-vscode
+        - packages/kilo-jetbrains
+        - packages/client
+        - packages/protocol
+        - packages/sdk
+        - packages/sdk-next
+    note: Consider selective adaptation only after Kodac canonical protocol stabilizes.
+
+  - id: pr-plumbing
+    concern: pull-request provider adapters diff context description and suggestion workflows
+    primary:
+      upstream: pr-agent
+      commit: 20bc0fe8ae7c1494c0be580f7ceb35a1c45e5741
+      classification: ADAPT
+      source_paths:
+        - pr_agent/git_providers
+        - pr_agent/algo
+        - pr_agent/tools
+    exclusions:
+      - treating donor review output as Kodac blocking proof
+    note: Proof Review, Judge, Done Gate, and evidence-qualified findings remain native Kodac.
+
+  - id: evidence-catalog
+    concern: evidence provenance freshness and claim status catalog
+    primary:
+      upstream: kodac-existing
+      classification: ADAPT
+      source_paths:
+        - agents
+        - schema
+        - matrix
+        - docs/methodology
+        - tools
+    note: Preserve useful Kernux evidence machinery and evolve it behind a dedicated Evidence Catalog boundary.
