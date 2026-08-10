@@ -102,7 +102,7 @@ test("rejects writes through a symlink that escapes the workspace", async () => 
   const ws = await workspace()
   const outside = await mkdtemp(join(tmpdir(), "kodac-outside-"))
   try {
-    await symlink(outside, join(ws.root, "outside-link"), "dir")
+    await symlink(outside, join(ws.root, "outside-link"), process.platform === "win32" ? "junction" : "dir")
     await assert.rejects(
       () => applyPatch(ws.fs, "*** Begin Patch\n*** Add File: outside-link/escape.txt\n+x\n*** End Patch"),
       WorkspaceBoundaryError,

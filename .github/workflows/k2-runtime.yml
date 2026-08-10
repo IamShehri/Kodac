@@ -23,7 +23,14 @@ permissions:
 
 jobs:
   runtime:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,10 +40,10 @@ jobs:
         run: npm install --prefix packages/kodac-runtime --no-save --package-lock=false --ignore-scripts --no-audit --no-fund typescript@5.9.3 @types/node@24.3.0
       - name: Typecheck
         working-directory: packages/kodac-runtime
-        run: ./node_modules/.bin/tsc -p tsconfig.json --noEmit
+        run: node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit
       - name: Test
         working-directory: packages/kodac-runtime
-        run: node --experimental-strip-types --test test/*.test.ts
+        run: npm test
       - name: Patch benchmark hook
         working-directory: packages/kodac-runtime
-        run: node --experimental-strip-types bench/patch-bench.ts
+        run: npm run bench:patch
