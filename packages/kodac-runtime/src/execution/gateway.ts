@@ -5,23 +5,22 @@ import { createReceipt, type ExecutionReceipt } from "../evidence/receipt.ts"
 import type { ExecutionIntent, PolicyEngine, PolicyResult } from "../trust/policy.ts"
 
 export class ExecutionBlockedError extends Error {
-  constructor(
-    message: string,
-    readonly receipt: ExecutionReceipt,
-  ) {
+  readonly receipt: ExecutionReceipt
+
+  constructor(message: string, receipt: ExecutionReceipt) {
     super(message)
     this.name = "ExecutionBlockedError"
+    this.receipt = receipt
   }
 }
 
 export class ExecutionFailedError extends Error {
-  constructor(
-    message: string,
-    readonly receipt: ExecutionReceipt,
-    options?: ErrorOptions,
-  ) {
+  readonly receipt: ExecutionReceipt
+
+  constructor(message: string, receipt: ExecutionReceipt, options?: ErrorOptions) {
     super(message, options)
     this.name = "ExecutionFailedError"
+    this.receipt = receipt
   }
 }
 
@@ -46,10 +45,13 @@ function blockedReceipt(intent: ExecutionIntent, policy: PolicyResult, startedAt
 }
 
 export class ExecutionGateway {
-  constructor(
-    private readonly fs: WorkspaceFileSystem,
-    private readonly policy: PolicyEngine,
-  ) {}
+  private readonly fs: WorkspaceFileSystem
+  private readonly policy: PolicyEngine
+
+  constructor(fs: WorkspaceFileSystem, policy: PolicyEngine) {
+    this.fs = fs
+    this.policy = policy
+  }
 
   async applyPatch(patchText: string): Promise<{ affected: Awaited<ReturnType<typeof applyHunks>>; receipt: ExecutionReceipt }> {
     const startedAt = new Date().toISOString()
