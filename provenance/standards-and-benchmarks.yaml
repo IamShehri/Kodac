@@ -1,0 +1,82 @@
+schema_version: 1
+as_of: "2026-08-11"
+status: architecture_reference_baselines
+source_import_authorized: false
+notes:
+  - "These pins support architecture and compatibility review. They do not authorize source import."
+  - "Protocol/specification compatibility must be upgraded explicitly; moving upstream default branches do not change Kodac behavior automatically."
+  - "Benchmark snapshots are reproducibility references, not proof of Kodac superiority."
+
+standards:
+  - id: mcp-spec
+    repository: https://github.com/modelcontextprotocol/modelcontextprotocol
+    ref: main
+    commit: b25c0874bf0ba699a58e21ef06f659d839659de3
+    role: tool-resource-prompt interoperability specification
+    use: specification-reference-and-compatibility-tests
+    license_status: repository-metadata-NOASSERTION-review-before-source-copy
+
+  - id: acp
+    repository: https://github.com/agentclientprotocol/agent-client-protocol
+    ref: main
+    commit: ecec706f27ab851b800944486da8f8cb6b648f50
+    role: editor-client-to-agent interoperability
+    use: protocol-reference-and-adapter-compatibility
+    repository_license: Apache-2.0
+
+  - id: agent-skills
+    repository: https://github.com/agentskills/agentskills
+    ref: main
+    commit: 69ef37e9424c0a7ea9dd2293b559e43ec8176379
+    role: portable agent capability packaging specification
+    use: format-reference-and-skill-compatibility
+    repository_license: Apache-2.0
+
+code_intelligence:
+  - id: tree-sitter
+    repository: https://github.com/tree-sitter/tree-sitter
+    ref: master
+    commit: 5c2533bb7bc83cff3732031b846939f79f9ff11a
+    role: incremental syntax parsing
+    decision: integration-candidate
+    repository_license: MIT
+
+  - id: scip
+    repository: https://github.com/scip-code/scip
+    ref: main
+    commit: 59826cfa8b5067ffb390ddf1fe6231814d027c16
+    role: language-neutral code-intelligence representation
+    decision: integration-reference
+    repository_license: Apache-2.0
+    provenance_note: "Repository moved from sourcegraph/scip to scip-code/scip; pin records current canonical repository."
+
+  - id: ast-grep
+    repository: https://github.com/ast-grep/ast-grep
+    ref: main
+    commit: dfdb1fd47daf1a4e5815b9337abc2fbf493fdf4b
+    role: structural search lint and rewrite
+    decision: integration-candidate
+    repository_license: MIT
+
+benchmarks:
+  - id: swe-bench-live
+    repository: https://github.com/microsoft/SWE-bench-Live
+    ref: main
+    commit: 70ec57e852e3f2d195790fe71f553e272c691833
+    role: external software-engineering issue-resolution benchmark
+    repository_license: MIT
+
+  - id: multi-swe-bench
+    repository: https://github.com/multi-swe-bench/multi-swe-bench
+    ref: main
+    commit: 24f493f8a103e72312ded4f6b9c89f081d69cb09
+    role: multilingual software-engineering issue-resolution benchmark
+    repository_license: Apache-2.0
+
+  - id: terminal-bench-1
+    repository: https://github.com/harbor-framework/terminal-bench-1
+    ref: main
+    commit: d28711d0da2675d0bb1d56de45ae5df6082438a3
+    role: complex terminal-task benchmark
+    repository_license: Apache-2.0
+    provenance_note: "Repository moved from laude-institute/terminal-bench; pin records current canonical repository identity observed during K0/K1."
