@@ -1,6 +1,6 @@
 # ADR-0009: Kodac Repo Graph Architecture
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-11
 Decision owner: Kodac founder
 

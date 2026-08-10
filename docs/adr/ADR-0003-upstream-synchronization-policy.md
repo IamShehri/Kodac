@@ -1,6 +1,6 @@
 # ADR-0003: Upstream Synchronization Policy
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-11
 Decision owner: Kodac founder
 

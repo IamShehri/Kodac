@@ -1,6 +1,6 @@
 # ADR-0001: Kodac Product Constitution — Done Means Proven
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-11
 Decision owner: Kodac founder
 

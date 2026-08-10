@@ -1,6 +1,6 @@
 # ADR-0007: Native MCP, ACP, and Agent Skills Compatibility
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-11
 Decision owner: Kodac founder
 

@@ -1,6 +1,6 @@
 # ADR-0008: TypeScript Runtime with Optional Rust Trusted Workers
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-11
 Decision owner: Kodac founder
 

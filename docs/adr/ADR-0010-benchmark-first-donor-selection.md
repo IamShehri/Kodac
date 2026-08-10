@@ -1,6 +1,6 @@
 # ADR-0010: Benchmark-First Donor Selection and Superiority Claims
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-11
 Decision owner: Kodac founder
 
