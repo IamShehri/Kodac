@@ -1,6 +1,6 @@
 # ADR-0002: OpenCode as Selective Runtime Substrate
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-11
 Decision owner: Kodac founder
 

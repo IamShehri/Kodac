@@ -1,6 +1,6 @@
 # ADR-0005: Kodac Canonical Session, Event, and Tool Protocol
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-11
 Decision owner: Kodac founder
 

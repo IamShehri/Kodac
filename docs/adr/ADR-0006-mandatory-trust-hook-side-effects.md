@@ -1,6 +1,6 @@
 # ADR-0006: Mandatory Trust Hook for Side Effects
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-11
 Decision owner: Kodac founder
 

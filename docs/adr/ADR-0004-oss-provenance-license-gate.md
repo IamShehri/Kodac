@@ -1,6 +1,6 @@
 # ADR-0004: OSS Provenance and License Gate
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-11
 Decision owner: Kodac founder
 
