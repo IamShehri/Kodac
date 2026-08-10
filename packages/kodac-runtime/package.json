@@ -7,6 +7,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "cli": "node --experimental-strip-types src/cli.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "bench:patch": "node --experimental-strip-types bench/patch-bench.ts"
   }
