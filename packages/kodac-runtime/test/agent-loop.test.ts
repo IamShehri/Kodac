@@ -26,7 +26,7 @@ class RecordingProvider implements ModelProvider {
   }
 }
 
-function harness(provider: ModelProvider, tools: RuntimeTool[] = []): {
+function harness(provider: ModelProvider, tools: RuntimeTool[] = [], clock: () => number = () => Date.now()): {
   loop: BoundedAgentLoop
   sink: InMemoryEventSink
 } {
@@ -38,7 +38,7 @@ function harness(provider: ModelProvider, tools: RuntimeTool[] = []): {
   const providers = new ProviderRegistry()
   providers.register(provider)
   const runner = new AgentTurnRunner(providers, registry, orchestrator, session)
-  return { loop: new BoundedAgentLoop(runner, session), sink }
+  return { loop: new BoundedAgentLoop(runner, session, clock), sink }
 }
 
 const echoTool: RuntimeTool<{ value: string }, { echoed: string }> = {
@@ -173,6 +173,49 @@ test("honors a pre-aborted signal without calling the provider", async () => {
   })
   assert.equal(result.reason, "aborted")
   assert.equal(calls, 0)
+})
+
+test("enforces max elapsed time before starting a model turn", async () => {
+  let calls = 0
+  const provider: ModelProvider = {
+    name: "clocked",
+    async generate() {
+      calls += 1
+      return { assistant: "unexpected", finishReason: "stop", toolCalls: [] }
+    },
+  }
+  let now = 0
+  const { loop } = harness(provider, [], () => {
+    now += 10
+    return now
+  })
+  const result = await loop.run({
+    provider: "clocked",
+    model: "fixture/model",
+    messages: [{ role: "user", content: "x" }],
+    limits: { maxElapsedMs: 5 },
+  })
+  assert.equal(result.reason, "max_elapsed")
+  assert.equal(calls, 0)
+})
+
+test("propagates the bounded abort signal into tool context", async () => {
+  let signalSeen = false
+  const signalTool: RuntimeTool<{ value: string }, { echoed: string }> = {
+    ...echoTool,
+    async execute(input, context) {
+      signalSeen = context.signal instanceof AbortSignal
+      return { echoed: input.value }
+    },
+  }
+  const provider = new RecordingProvider([
+    { assistant: "", finishReason: "tool_calls", toolCalls: [{ id: "call-1", name: "test.echo", input: { value: "signal" } }] },
+    { assistant: "done", finishReason: "stop", toolCalls: [] },
+  ])
+  const { loop } = harness(provider, [signalTool])
+  const result = await loop.run({ provider: "recording", model: "fixture/model", messages: [{ role: "user", content: "x" }] })
+  assert.equal(result.status, "completed")
+  assert.equal(signalSeen, true)
 })
 
 test("detects a repeated turn signature even when duplicate-tool threshold is higher", async () => {
