@@ -1,6 +1,6 @@
 schema_version: 1
 record_id: opencode-patch-v1
-status: reviewed
+status: authorized
 classification: ADAPT
 upstream:
   id: opencode
@@ -50,9 +50,10 @@ verification:
     - patch-minimality
     - patch-failure-semantics
 authorization:
-  authorized_by: null
-  authorized_at: null
-  authorization_ref: null
+  authorized_by: Kodac founder
+  authorized_at: "2026-08-11T02:08:00+03:00"
+  authorization_ref: docs/planning/KODAC_K2_G8_SCOPED_SOURCE_INTAKE_AUTHORIZATION_2026-08-11.md
 notes:
-  - This is a reviewed candidate record, not source-import authorization.
-  - Global provenance policy remains code_import_authorized=false.
+  - This source intake is authorized only under the matching scoped G8 authorization manifest.
+  - Global provenance policy remains fail-closed for unscoped imports.
+  - Merge to canonical main and public release remain unauthorized.

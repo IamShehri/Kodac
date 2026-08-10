@@ -1,0 +1,24 @@
+schema_version: 1
+authorization_id: g8-k2-runtime-spine-opencode-patch-v1
+status: active
+branch: feat/kodac-k2-runtime-spine
+authorized_by: Kodac founder
+authorized_at: "2026-08-11T02:08:00+03:00"
+authorization_ref: docs/planning/KODAC_K2_G8_SCOPED_SOURCE_INTAKE_AUTHORIZATION_2026-08-11.md
+records:
+  - record_id: opencode-patch-v1
+    upstream_id: opencode
+    commit: 3a90639cb57619a21e59f544b3e8d23ffed56f48
+    source_paths:
+      - packages/opencode/src/patch/index.ts
+    destination_paths:
+      - packages/kodac-runtime/src/edit/patch.ts
+constraints:
+  merge_to_main_authorized: false
+  public_release_authorized: false
+  additional_source_paths_authorized: false
+notes:
+  - "This authorization is valid only on the named isolated K2 branch."
+  - "No other donor, source path, upstream commit, or destination path is authorized."
+  - "Canonical main remains blocked until the ratified GitHub protection ruleset is active and verified."
+  - "Kodac remains an engineering codename pending professional name/trademark clearance or founder rename."
