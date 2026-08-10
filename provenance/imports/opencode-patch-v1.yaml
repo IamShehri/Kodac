@@ -1,0 +1,58 @@
+schema_version: 1
+record_id: opencode-patch-v1
+status: reviewed
+classification: ADAPT
+upstream:
+  id: opencode
+  repository: https://github.com/anomalyco/opencode
+  commit: 3a90639cb57619a21e59f544b3e8d23ffed56f48
+  source_paths:
+    - packages/opencode/src/patch/index.ts
+destination_paths:
+  - packages/kodac-runtime/src/edit/patch.ts
+license_review:
+  repository_license: MIT
+  path_scope_reviewed: true
+  notice_required: true
+  evidence:
+    - upstream root LICENSE at commit 3a90639cb57619a21e59f544b3e8d23ffed56f48
+    - packages/opencode/package.json declares MIT at the same commit
+  excluded_paths:
+    - packages/opencode/src/util/bom.ts
+    - packages/core/src/fs-util.ts
+dependency_closure:
+  - name: effect
+    kind: package
+    disposition: package-dependency
+    license: MIT
+    notes: External package dependency; do not vendor through this intake record.
+  - name: '@opencode-ai/core/fs-util'
+    kind: source
+    disposition: replace-with-kodac
+    license: MIT
+    notes: Do not import the broad OpenCode FSUtil dependency closure for the first slice; adapt patch I/O to a narrow Kodac filesystem interface.
+  - name: packages/opencode/src/util/bom.ts
+    kind: source
+    disposition: replace-with-kodac
+    license: MIT
+    notes: Reimplement trivial BOM preservation behind the Kodac edit/filesystem boundary or audit separately if direct source reuse becomes preferable.
+modifications:
+  - Remove OpenCode product/schema naming from public interfaces.
+  - Map filesystem effects to the Kodac-owned edit/filesystem contract.
+  - Preserve MIT attribution for substantial adapted source.
+  - Keep behavioral parity tests against the pinned upstream and Codex apply-patch reference cases.
+verification:
+  behavioral_tests_required: true
+  license_check_required: true
+  provenance_check_required: true
+  benchmark_ids:
+    - patch-apply-correctness
+    - patch-minimality
+    - patch-failure-semantics
+authorization:
+  authorized_by: null
+  authorized_at: null
+  authorization_ref: null
+notes:
+  - This is a reviewed candidate record, not source-import authorization.
+  - Global provenance policy remains code_import_authorized=false.
