@@ -34,6 +34,9 @@ export type KodacEventType =
   | "verification.check.completed"
   | "verification.completed"
   | "done_gate.evaluated"
+  | "provider.qualification.started"
+  | "provider.qualification.check.completed"
+  | "provider.qualification.completed"
   | "session.completed"
   | "session.failed"
 
