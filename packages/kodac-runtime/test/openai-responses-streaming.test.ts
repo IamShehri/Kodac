@@ -24,6 +24,40 @@ function request(overrides: Partial<ModelProviderRequest> = {}): ModelProviderRe
   }
 }
 
+const MOCK_API_KEY = "sk-test-stream-diagnostics-key"
+const SECRET_SENTINEL = "SHOULD_NOT_LEAK_SECRET_SENTINEL"
+
+async function captureStreamFailure(event: Record<string, unknown>): Promise<ModelProviderError> {
+  let calls = 0
+  const provider = new OpenAIResponsesProvider({
+    apiKey: MOCK_API_KEY,
+    stream: true,
+    maxAttempts: 3,
+    fetchImpl: (async () => {
+      calls += 1
+      return sse([
+        { type: "response.created", sequence_number: 0, response: { id: "resp_failure" } },
+        event,
+      ])
+    }) as typeof fetch,
+  })
+
+  let thrown: unknown
+  try {
+    await provider.generate(request())
+  } catch (error) {
+    thrown = error
+  }
+
+  assert.ok(thrown instanceof ModelProviderError)
+  assert.equal(thrown.code, "stream_failed")
+  assert.equal(thrown.retryable, false)
+  assert.equal(calls, 1)
+  assert.equal(thrown.message.includes(MOCK_API_KEY), false)
+  assert.equal(thrown.message.includes(SECRET_SENTINEL), false)
+  return thrown
+}
+
 test("OpenAI Responses provider normalizes native output-text streaming and final usage", async () => {
   const observed: ModelProviderStreamEvent[] = []
   let payload: Record<string, unknown> | undefined
@@ -95,6 +129,134 @@ test("OpenAI Responses provider reports function-call deltas but executes only t
   assert.equal(response.finishReason, "tool_calls")
   assert.deepEqual(response.toolCalls, [{ id: "call_1", name: "repo.read", input: { path: "README.md" } }])
   assert.equal(observed.filter((event) => event.type === "tool_call_delta").length, 3)
+})
+
+test("OpenAI response.failed preserves bounded approved diagnostics", async () => {
+  const error = await captureStreamFailure({
+    type: "response.failed",
+    sequence_number: 1,
+    response: {
+      status: "failed",
+      error: {
+        code: "server_error",
+        message: "The model failed to generate a response.",
+      },
+      unapproved_debug: { token: SECRET_SENTINEL },
+    },
+  })
+
+  assert.equal(error.message.includes("response.failed"), true)
+  assert.equal(error.message.includes("server_error"), true)
+  assert.equal(error.message.includes("The model failed to generate a response."), true)
+})
+
+test("OpenAI response.incomplete preserves its bounded reason", async () => {
+  const error = await captureStreamFailure({
+    type: "response.incomplete",
+    sequence_number: 1,
+    response: {
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+    },
+  })
+
+  assert.equal(error.message, "OpenAI response.incomplete [max_output_tokens]")
+})
+
+test("OpenAI top-level error preserves approved diagnostics and normalizes whitespace", async () => {
+  const error = await captureStreamFailure({
+    type: "error",
+    sequence_number: 1,
+    code: " \t rate_limit_exceeded \r\n ",
+    message: " \n Rate\tlimit  reached. \r ",
+    param: " \t input[0] \n ",
+    unapproved_debug: SECRET_SENTINEL,
+  })
+
+  assert.equal(error.message, "OpenAI error [rate_limit_exceeded] (param: input[0]): Rate limit reached.")
+  assert.equal(/[\t\r\n]|\s{2,}/u.test(error.message), false)
+})
+
+test("OpenAI bounds every approved stream-failure diagnostic", async () => {
+  const failed = await captureStreamFailure({
+    type: "response.failed",
+    sequence_number: 1,
+    response: {
+      error: {
+        code: "c".repeat(129),
+        message: "m".repeat(513),
+      },
+    },
+  })
+  assert.equal(
+    failed.message,
+    "OpenAI response.failed [" + "c".repeat(128) + "]: " + "m".repeat(512),
+  )
+
+  const incomplete = await captureStreamFailure({
+    type: "response.incomplete",
+    sequence_number: 1,
+    response: {
+      incomplete_details: { reason: "r".repeat(129) },
+    },
+  })
+  assert.equal(incomplete.message, "OpenAI response.incomplete [" + "r".repeat(128) + "]")
+
+  const topLevel = await captureStreamFailure({
+    type: "error",
+    sequence_number: 1,
+    code: "e".repeat(129),
+    message: "n".repeat(513),
+    param: "p".repeat(129),
+  })
+  assert.equal(
+    topLevel.message,
+    "OpenAI error [" + "e".repeat(128) + "] (param: " + "p".repeat(128) + "): " + "n".repeat(512),
+  )
+})
+
+test("OpenAI ignores empty and non-string stream-failure diagnostics", async () => {
+  const fixtures: Array<{ type: string; event: Record<string, unknown> }> = [
+    {
+      type: "response.failed",
+      event: {
+        type: "response.failed",
+        sequence_number: 1,
+        response: {
+          error: {
+            code: 503,
+            message: " \n\t ",
+            unapproved_debug: SECRET_SENTINEL,
+          },
+        },
+      },
+    },
+    {
+      type: "response.incomplete",
+      event: {
+        type: "response.incomplete",
+        sequence_number: 1,
+        response: {
+          incomplete_details: { reason: { unapproved_debug: SECRET_SENTINEL } },
+        },
+      },
+    },
+    {
+      type: "error",
+      event: {
+        type: "error",
+        sequence_number: 1,
+        code: false,
+        message: [SECRET_SENTINEL],
+        param: " \r\n ",
+      },
+    },
+  ]
+
+  for (const fixture of fixtures) {
+    const error = await captureStreamFailure(fixture.event)
+    assert.equal(error.message, "OpenAI " + fixture.type + " reported a stream failure.")
+  }
 })
 
 test("OpenAI Responses provider never retries after partial native stream output", async () => {

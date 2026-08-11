@@ -14,6 +14,8 @@ const DEFAULT_ENDPOINT = "https://api.openai.com/v1/responses"
 const RETRYABLE_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504])
 const MAX_STREAM_BYTES = 8 * 1024 * 1024
 const MAX_STREAM_EVENTS = 20_000
+const MAX_FAILURE_DIAGNOSTIC_LENGTH = 128
+const MAX_FAILURE_MESSAGE_LENGTH = 512
 
 type FetchLike = typeof fetch
 type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>
@@ -300,6 +302,60 @@ function sseData(frame: string): string | undefined {
   return data.length > 0 ? data.join("\n") : undefined
 }
 
+function boundedFailureDiagnostic(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined
+  const normalized = value.replace(/\s+/gu, " ").trim()
+  if (!normalized) return undefined
+  return normalized.slice(0, maxLength).trim()
+}
+
+function formatStreamFailure(
+  eventType: "response.failed" | "response.incomplete" | "error",
+  codeOrReason?: string,
+  message?: string,
+  param?: string,
+): string {
+  let diagnostic = "OpenAI " + eventType
+  if (codeOrReason) diagnostic += " [" + codeOrReason + "]"
+  if (param) diagnostic += " (param: " + param + ")"
+  if (message) diagnostic += ": " + message
+  return codeOrReason || message || param
+    ? diagnostic
+    : diagnostic + " reported a stream failure."
+}
+
+function streamFailureMessage(event: Record<string, unknown>): string {
+  if (event.type === "response.failed") {
+    const response = isRecord(event.response) ? event.response : undefined
+    const error = isRecord(response?.error) ? response.error : undefined
+    return formatStreamFailure(
+      "response.failed",
+      boundedFailureDiagnostic(error?.code, MAX_FAILURE_DIAGNOSTIC_LENGTH),
+      boundedFailureDiagnostic(error?.message, MAX_FAILURE_MESSAGE_LENGTH),
+    )
+  }
+
+  if (event.type === "response.incomplete") {
+    const response = isRecord(event.response) ? event.response : undefined
+    const details = isRecord(response?.incomplete_details) ? response.incomplete_details : undefined
+    return formatStreamFailure(
+      "response.incomplete",
+      boundedFailureDiagnostic(details?.reason, MAX_FAILURE_DIAGNOSTIC_LENGTH),
+    )
+  }
+
+  if (event.type === "error") {
+    return formatStreamFailure(
+      "error",
+      boundedFailureDiagnostic(event.code, MAX_FAILURE_DIAGNOSTIC_LENGTH),
+      boundedFailureDiagnostic(event.message, MAX_FAILURE_MESSAGE_LENGTH),
+      boundedFailureDiagnostic(event.param, MAX_FAILURE_DIAGNOSTIC_LENGTH),
+    )
+  }
+
+  return "OpenAI stream reported a failure."
+}
+
 export class OpenAIResponsesProvider implements ModelProvider {
   readonly name = "openai"
   private readonly apiKey?: string
@@ -433,7 +489,11 @@ export class OpenAIResponsesProvider implements ModelProvider {
         return
       }
       if (value.type === "response.failed" || value.type === "response.incomplete" || value.type === "error") {
-        throw new ModelProviderError("stream_failed", "OpenAI stream reported a failed or incomplete response.")
+        throw new ModelProviderError(
+          "stream_failed",
+          streamFailureMessage(value),
+          { retryable: false },
+        )
       }
       if (value.type !== "response.completed") return
       if (!sawStarted || sawCompleted || !isRecord(value.response)) {
