@@ -91,12 +91,11 @@ test("K3-R1 gold truth distinguishes facts, ambiguity, exclusions, and untrusted
 })
 
 test("K3-R1 virtual security cases encode fail-closed expected outcomes", () => {
-  const byId = new Map(
-    manifest.virtual_security_cases.map((entry: { case_id: string }) => [
-      entry.case_id,
-      entry,
-    ]),
-  )
+  const cases = manifest.virtual_security_cases as Array<{
+    case_id: string
+    expected: string
+  }>
+  const byId = new Map(cases.map((entry) => [entry.case_id, entry] as const))
 
   assert.equal(byId.get("path-traversal")?.expected, "REJECT_PATH_ESCAPE")
   assert.equal(byId.get("symlink-escape")?.expected, "REJECT_SYMLINK_ESCAPE")
