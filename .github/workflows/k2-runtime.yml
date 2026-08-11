@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/kodac-k2-runtime-spine
+      - main
     paths:
       - "packages/kodac-runtime/**"
       - "provenance/imports/**"
