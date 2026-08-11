@@ -60,5 +60,6 @@ notes:
   - Initial implementation commit 83ac10b7cafea86d0b1e961565ee6f37bea990b1 failed its first runtime test run and was not certified.
   - Runtime compatibility correction commit 63dfefaa483469b82d9125bff423756ea630863e passed K2 runtime and governance checks.
   - Verification evidence is recorded in docs/planning/KODAC_K2_PATCH_SLICE_IMPORT_VERIFICATION_2026-08-11.md.
-  - This imported status remains valid only under the matching scoped G8 authorization manifest and branch.
-  - Merge to canonical main and public release remain unauthorized.
+  - This imported status was originally authorized on the isolated K2 branch by the matching scoped G8 authorization manifest.
+  - Canonical main adoption is separately ratified by provenance/main-adoptions/k2-opencode-patch-v1.yaml for PR #3 merge commit 0de4bd2dee1efb4ba08f15551e7a75ea7d550dcc.
+  - Public release remains unauthorized.
