@@ -168,6 +168,56 @@
   },
   "purpose": "Deterministic gold evidence for future K3 repository-intelligence implementation and adapter benchmarks.",
   "schema_version": "k3-r1-gold-evidence-v1",
+  "virtual_repository_state_cases": [
+    {
+      "case_id": "tracked-modified",
+      "expected": {
+        "path": "src/math.ts",
+        "state": "modified"
+      },
+      "head_digest": "fixture-head-math-v1",
+      "worktree_digest": "fixture-worktree-math-v2"
+    },
+    {
+      "case_id": "staged-added",
+      "expected": {
+        "path": "src/new.ts",
+        "state": "added"
+      },
+      "head_path": null,
+      "index_path": "src/new.ts",
+      "worktree_path": "src/new.ts"
+    },
+    {
+      "case_id": "tracked-deleted",
+      "expected": {
+        "path": "src/obsolete.ts",
+        "state": "deleted"
+      },
+      "head_path": "src/obsolete.ts",
+      "worktree_path": null
+    },
+    {
+      "case_id": "untracked-file",
+      "expected": {
+        "path": "notes/new.txt",
+        "state": "untracked"
+      },
+      "head_path": null,
+      "index_path": null,
+      "worktree_path": "notes/new.txt"
+    },
+    {
+      "after_path": "src/new-name.ts",
+      "before_path": "src/old-name.ts",
+      "case_id": "renamed-file",
+      "expected": {
+        "after_path": "src/new-name.ts",
+        "before_path": "src/old-name.ts",
+        "state": "renamed"
+      }
+    }
+  ],
   "virtual_security_cases": [
     {
       "case_id": "path-traversal",
