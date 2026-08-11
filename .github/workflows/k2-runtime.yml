@@ -9,20 +9,102 @@ on:
       - "provenance/imports/**"
       - "provenance/authorizations/**"
       - "schema/provenance-import-authorization.schema.json"
+      - "schema/provenance-import-record.schema.json"
       - ".github/workflows/k2-runtime.yml"
   pull_request:
-    paths:
-      - "packages/kodac-runtime/**"
-      - "provenance/imports/**"
-      - "provenance/authorizations/**"
-      - "schema/provenance-import-authorization.schema.json"
-      - ".github/workflows/k2-runtime.yml"
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    name: runtime-change-classifier
+    runs-on: ubuntu-latest
+    outputs:
+      runtime_sensitive: ${{ steps.classify.outputs.runtime_sensitive }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify runtime-sensitive changes
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          case "$EVENT_NAME" in
+            pull_request)
+              base_sha="$PR_BASE_SHA"
+              head_sha="$PR_HEAD_SHA"
+              ;;
+            push)
+              base_sha="$PUSH_BEFORE_SHA"
+              head_sha="$PUSH_HEAD_SHA"
+              ;;
+            *)
+              echo "::error::Unsupported event for runtime classification."
+              exit 1
+              ;;
+          esac
+
+          if [[ ! "$head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Invalid head SHA for runtime classification."
+            exit 1
+          fi
+
+          if ! git cat-file -e "$head_sha^{commit}"; then
+            echo "::error::Head commit is unavailable for runtime classification."
+            exit 1
+          fi
+
+          if [[ "$EVENT_NAME" == "push" && "$base_sha" =~ ^0{40}$ ]]; then
+            echo "::notice::New-branch sentinel detected; running the runtime matrix conservatively."
+            printf 'runtime_sensitive=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ ! "$base_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Invalid base SHA for runtime classification."
+            exit 1
+          fi
+
+          if ! git cat-file -e "$base_sha^{commit}"; then
+            echo "::error::Base commit is unavailable for runtime classification."
+            exit 1
+          fi
+
+          changed_paths_file="$(mktemp)"
+          trap 'rm -f -- "$changed_paths_file"' EXIT
+
+          if ! git diff --no-ext-diff --no-textconv --no-renames --name-only -z "$base_sha" "$head_sha" -- > "$changed_paths_file"; then
+            echo "::error::Unable to compare the exact event base and head."
+            exit 1
+          fi
+
+          runtime_sensitive=false
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              packages/kodac-runtime/*|provenance/imports/*|provenance/authorizations/*|schema/provenance-import-authorization.schema.json|schema/provenance-import-record.schema.json|.github/workflows/k2-runtime.yml)
+                runtime_sensitive=true
+                break
+                ;;
+            esac
+          done < "$changed_paths_file"
+
+          printf 'runtime_sensitive=%s\n' "$runtime_sensitive" >> "$GITHUB_OUTPUT"
+
   runtime:
+    needs: changes
+    if: ${{ needs.changes.outputs.runtime_sensitive == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +115,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -47,3 +131,44 @@ jobs:
       - name: Patch benchmark hook
         working-directory: packages/kodac-runtime
         run: npm run bench:patch
+
+  k2-runtime-gate:
+    name: k2-runtime-gate
+    needs:
+      - changes
+      - runtime
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce stable runtime gate
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUNTIME_SENSITIVE: ${{ needs.changes.outputs.runtime_sensitive }}
+          RUNTIME_RESULT: ${{ needs.runtime.result }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$CHANGES_RESULT" != "success" ]]; then
+            echo "::error::Runtime change classification did not succeed."
+            exit 1
+          fi
+
+          case "$RUNTIME_SENSITIVE" in
+            true)
+              if [[ "$RUNTIME_RESULT" != "success" ]]; then
+                echo "::error::Runtime-sensitive changes require a successful runtime matrix."
+                exit 1
+              fi
+              ;;
+            false)
+              if [[ "$RUNTIME_RESULT" != "skipped" ]]; then
+                echo "::error::Non-runtime changes require the runtime matrix to be skipped."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Runtime classifier output must be exactly true or false."
+              exit 1
+              ;;
+          esac
