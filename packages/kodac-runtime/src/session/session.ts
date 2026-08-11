@@ -38,9 +38,12 @@ export class RuntimeSession {
     mode?: "tool" | "model_turn" | "agent_loop"
     provider?: string
     model?: string
+    verified?: boolean
+    doneGate?: "PROVEN_READY" | "NOT_READY"
+    proof?: string
   } = {}): Promise<void> {
     await this.emit("session.completed", {
-      status: input.receiptId ? "proven_ready" : "complete",
+      status: input.doneGate === "PROVEN_READY" ? "proven_ready" : "complete",
       ...input,
     })
   }
