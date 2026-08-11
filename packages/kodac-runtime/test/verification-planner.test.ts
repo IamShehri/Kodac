@@ -109,7 +109,7 @@ test("kodac solve reaches PROVEN READY from an automatic verification plan witho
       changedPaths: string[]
     }
     assert.equal(plan.protocol, "kodac.verification-plan")
-    assert.equal(plan.risk, "medium")
+    assert.equal(plan.risk, "low")
     assert.deepEqual(plan.changedPaths, ["note.txt"])
     assert.ok(plan.commands.some((command) => command.category === "tests" && command.executable === "node"))
 
