@@ -314,12 +314,14 @@ function formatStreamFailure(
   codeOrReason?: string,
   message?: string,
   param?: string,
+  errorType?: string,
 ): string {
   let diagnostic = "OpenAI " + eventType
   if (codeOrReason) diagnostic += " [" + codeOrReason + "]"
+  if (errorType) diagnostic += " (type: " + errorType + ")"
   if (param) diagnostic += " (param: " + param + ")"
   if (message) diagnostic += ": " + message
-  return codeOrReason || message || param
+  return codeOrReason || errorType || message || param
     ? diagnostic
     : diagnostic + " reported a stream failure."
 }
@@ -345,11 +347,21 @@ function streamFailureMessage(event: Record<string, unknown>): string {
   }
 
   if (event.type === "error") {
+    const code = boundedFailureDiagnostic(event.code, MAX_FAILURE_DIAGNOSTIC_LENGTH)
+    const message = boundedFailureDiagnostic(event.message, MAX_FAILURE_MESSAGE_LENGTH)
+    const param = boundedFailureDiagnostic(event.param, MAX_FAILURE_DIAGNOSTIC_LENGTH)
+
+    if (code || message || param) {
+      return formatStreamFailure("error", code, message, param)
+    }
+
+    const error = isRecord(event.error) ? event.error : undefined
     return formatStreamFailure(
       "error",
-      boundedFailureDiagnostic(event.code, MAX_FAILURE_DIAGNOSTIC_LENGTH),
-      boundedFailureDiagnostic(event.message, MAX_FAILURE_MESSAGE_LENGTH),
-      boundedFailureDiagnostic(event.param, MAX_FAILURE_DIAGNOSTIC_LENGTH),
+      boundedFailureDiagnostic(error?.code, MAX_FAILURE_DIAGNOSTIC_LENGTH),
+      boundedFailureDiagnostic(error?.message, MAX_FAILURE_MESSAGE_LENGTH),
+      boundedFailureDiagnostic(error?.param, MAX_FAILURE_DIAGNOSTIC_LENGTH),
+      boundedFailureDiagnostic(error?.type, MAX_FAILURE_DIAGNOSTIC_LENGTH),
     )
   }
 

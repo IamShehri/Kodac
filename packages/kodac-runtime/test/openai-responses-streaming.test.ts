@@ -177,6 +177,138 @@ test("OpenAI top-level error preserves approved diagnostics and normalizes white
   assert.equal(/[\t\r\n]|\s{2,}/u.test(error.message), false)
 })
 
+test("OpenAI nested error preserves observed approved diagnostics only", async () => {
+  const event: Record<string, unknown> = {
+    type: "error",
+    sequence_number: 1,
+    error: {
+      code: "credit_balance_exhausted",
+      type: "insufficient_quota",
+      message: "You have no credits remaining.",
+      param: null,
+      unapproved_debug: SECRET_SENTINEL,
+    },
+  }
+  const rawEvent = JSON.stringify(event)
+  const error = await captureStreamFailure(event)
+
+  assert.equal(error.message.includes("credit_balance_exhausted"), true)
+  assert.equal(error.message.includes("insufficient_quota"), true)
+  assert.equal(error.message.includes("You have no credits remaining."), true)
+  assert.equal(error.message.includes(rawEvent), false)
+  assert.equal(error.message.includes("\"unapproved_debug\""), false)
+  assert.equal(error.message.includes("{\"code\""), false)
+})
+
+test("OpenAI nested error diagnostics normalize, bound, and ignore invalid values", async () => {
+  const normalized = await captureStreamFailure({
+    type: "error",
+    sequence_number: 1,
+    error: {
+      code: " \t nested \n code \r ",
+      type: " \n nested\t type ",
+      message: " \n Nested\tmessage  text. \r ",
+      param: " \t input[0] \n field ",
+    },
+  })
+  assert.equal(
+    normalized.message,
+    "OpenAI error [nested code] (type: nested type) (param: input[0] field): Nested message text.",
+  )
+  assert.equal(/[\t\r\n]|\s{2,}/u.test(normalized.message), false)
+
+  const bounded = await captureStreamFailure({
+    type: "error",
+    sequence_number: 1,
+    error: {
+      code: "c".repeat(129),
+      type: "t".repeat(129),
+      message: "m".repeat(513),
+      param: "p".repeat(129),
+    },
+  })
+  assert.equal(
+    bounded.message,
+    "OpenAI error [" + "c".repeat(128) + "] (type: " + "t".repeat(128) + ") (param: " +
+      "p".repeat(128) + "): " + "m".repeat(512),
+  )
+
+  const ignored = await captureStreamFailure({
+    type: "error",
+    sequence_number: 1,
+    error: {
+      code: 503,
+      type: " \n\t ",
+      message: { unapproved_debug: SECRET_SENTINEL },
+      param: null,
+    },
+  })
+  assert.equal(ignored.message, "OpenAI error reported a stream failure.")
+})
+
+test("OpenAI top-level error diagnostics take precedence over nested diagnostics", async () => {
+  const error = await captureStreamFailure({
+    type: "error",
+    sequence_number: 1,
+    code: "top_level_code",
+    message: "Top-level message.",
+    param: "top_level_param",
+    error: {
+      code: "nested_code",
+      type: "nested_type",
+      message: "Nested message.",
+      param: "nested_param",
+    },
+  })
+
+  assert.equal(error.message, "OpenAI error [top_level_code] (param: top_level_param): Top-level message.")
+  assert.equal(error.message.includes("nested_code"), false)
+  assert.equal(error.message.includes("nested_type"), false)
+  assert.equal(error.message.includes("Nested message."), false)
+  assert.equal(error.message.includes("nested_param"), false)
+
+  const messageOnly = await captureStreamFailure({
+    type: "error",
+    sequence_number: 1,
+    code: 429,
+    message: "Top-level message only.",
+    param: " \n\t ",
+    error: {
+      code: "nested_code",
+      type: "nested_type",
+      message: "Nested message.",
+      param: "nested_param",
+    },
+  })
+
+  assert.equal(messageOnly.message, "OpenAI error: Top-level message only.")
+  assert.equal(messageOnly.message.includes("nested_code"), false)
+  assert.equal(messageOnly.message.includes("nested_type"), false)
+  assert.equal(messageOnly.message.includes("Nested message."), false)
+  assert.equal(messageOnly.message.includes("nested_param"), false)
+})
+
+test("OpenAI invalid top-level error diagnostics fall back to nested diagnostics", async () => {
+  const error = await captureStreamFailure({
+    type: "error",
+    sequence_number: 1,
+    code: 429,
+    message: " \n\t ",
+    param: { unapproved_debug: SECRET_SENTINEL },
+    error: {
+      code: " nested_code ",
+      type: " nested_type ",
+      message: " Nested message. ",
+      param: " nested_param ",
+    },
+  })
+
+  assert.equal(
+    error.message,
+    "OpenAI error [nested_code] (type: nested_type) (param: nested_param): Nested message.",
+  )
+})
+
 test("OpenAI bounds every approved stream-failure diagnostic", async () => {
   const failed = await captureStreamFailure({
     type: "response.failed",
