@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROVENANCE = ROOT / "provenance"
 IMPORT_SCHEMA_PATH = ROOT / "schema" / "provenance-import-record.schema.json"
 AUTH_SCHEMA_PATH = ROOT / "schema" / "provenance-import-authorization.schema.json"
+MAIN_ADOPTION_SCHEMA_PATH = ROOT / "schema" / "provenance-main-adoption.schema.json"
 
 
 def load_yaml(path: Path):
@@ -98,6 +99,22 @@ def load_scoped_authorizations() -> list[dict]:
     return result
 
 
+def load_main_adoptions() -> list[dict]:
+    adoption_dir = PROVENANCE / "main-adoptions"
+    if not adoption_dir.exists():
+        return []
+    result: list[dict] = []
+    seen_ids: set[str] = set()
+    for path in sorted(adoption_dir.glob("*.yaml")):
+        adoption = validate_schema(path, MAIN_ADOPTION_SCHEMA_PATH)
+        adoption_id = adoption["adoption_id"]
+        if adoption_id in seen_ids:
+            fail(f"duplicate main adoption_id: {adoption_id}")
+        seen_ids.add(adoption_id)
+        result.append(adoption)
+    return result
+
+
 def exact_scoped_authorization(record: dict, branch: str, authorizations: list[dict]) -> dict | None:
     for authorization in authorizations:
         if authorization["status"] != "active" or authorization["branch"] != branch:
@@ -119,10 +136,33 @@ def exact_scoped_authorization(record: dict, branch: str, authorizations: list[d
     return None
 
 
+def exact_main_adoption(record: dict, adoptions: list[dict]) -> dict | None:
+    authorization_ref = (record.get("authorization") or {}).get("authorization_ref")
+    for adoption in adoptions:
+        if adoption["status"] != "active" or adoption["target_branch"] != "main":
+            continue
+        if adoption["intake_authorization_ref"] != authorization_ref:
+            continue
+        for adopted in adoption["records"]:
+            if adopted["record_id"] != record["record_id"]:
+                continue
+            if adopted["upstream_id"] != record["upstream"]["id"]:
+                continue
+            if adopted["commit"] != record["upstream"]["commit"]:
+                continue
+            if adopted["source_paths"] != record["upstream"]["source_paths"]:
+                continue
+            if adopted["destination_paths"] != record["destination_paths"]:
+                continue
+            return adoption
+    return None
+
+
 def validate_import_records(
     global_code_import_authorized: bool,
     upstreams: dict[str, dict],
     authorizations: list[dict],
+    main_adoptions: list[dict],
 ) -> int:
     imports_dir = PROVENANCE / "imports"
     if not imports_dir.exists():
@@ -154,20 +194,25 @@ def validate_import_records(
                 fail(f"{path.relative_to(ROOT)}: authorized/imported record requires authorization evidence")
 
             if not global_code_import_authorized:
-                if not branch:
-                    fail(
-                        f"{path.relative_to(ROOT)}: scoped authorization requires branch context; "
-                        "set KODAC_BRANCH for local validation"
-                    )
-                scoped = exact_scoped_authorization(record, branch, authorizations)
-                if scoped is None:
-                    fail(
-                        f"{path.relative_to(ROOT)}: {record['status']} import is forbidden while "
-                        "policy.code_import_authorized=false unless an exact active scoped authorization "
-                        f"matches branch {branch!r}"
-                    )
-                if scoped["authorized_by"] != authorization_evidence.get("authorized_by"):
-                    fail(f"{path.relative_to(ROOT)}: authorization actor differs from scoped authorization")
+                main_adoption = exact_main_adoption(record, main_adoptions) if record["status"] == "imported" else None
+                if main_adoption is not None:
+                    if main_adoption["authorized_by"] != authorization_evidence.get("authorized_by"):
+                        fail(f"{path.relative_to(ROOT)}: adoption actor differs from import authorization actor")
+                else:
+                    if not branch:
+                        fail(
+                            f"{path.relative_to(ROOT)}: scoped authorization requires branch context; "
+                            "set KODAC_BRANCH for local validation"
+                        )
+                    scoped = exact_scoped_authorization(record, branch, authorizations)
+                    if scoped is None:
+                        fail(
+                            f"{path.relative_to(ROOT)}: {record['status']} import is forbidden while "
+                            "policy.code_import_authorized=false unless an exact active scoped authorization "
+                            f"matches branch {branch!r} or an exact active main-adoption authorization exists"
+                        )
+                    if scoped["authorized_by"] != authorization_evidence.get("authorized_by"):
+                        fail(f"{path.relative_to(ROOT)}: authorization actor differs from scoped authorization")
 
         count += 1
     return count
@@ -179,7 +224,13 @@ def main() -> int:
         global_code_import_authorized = validate_global_policy(upstreams_doc)
         upstreams = upstream_index(upstreams_doc)
         authorizations = load_scoped_authorizations()
-        imports = validate_import_records(global_code_import_authorized, upstreams, authorizations)
+        main_adoptions = load_main_adoptions()
+        imports = validate_import_records(
+            global_code_import_authorized,
+            upstreams,
+            authorizations,
+            main_adoptions,
+        )
     except Exception as exc:
         print(f"PROVENANCE_VALIDATION_FAIL: {exc}", file=sys.stderr)
         return 1
@@ -188,7 +239,7 @@ def main() -> int:
     state = "GLOBAL" if global_code_import_authorized else "SCOPED_OR_FAIL_CLOSED"
     print(
         f"PROVENANCE_VALIDATION_PASS imports={imports} authorizations={len(authorizations)} "
-        f"code_import={state} branch={branch}"
+        f"main_adoptions={len(main_adoptions)} code_import={state} branch={branch}"
     )
     return 0
 

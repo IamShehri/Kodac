@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kodac.dev/schema/provenance-main-adoption.schema.json",
+  "title": "Kodac Canonical Main Adoption Authorization",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "adoption_id", "status", "target_branch", "source_branch", "pull_request", "merge_commit", "authorized_by", "authorized_at", "authorization_ref", "intake_authorization_ref", "records", "constraints"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "adoption_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "status": {"enum": ["active", "revoked"]},
+    "target_branch": {"const": "main"},
+    "source_branch": {"type": "string", "minLength": 1},
+    "pull_request": {"type": "integer", "minimum": 1},
+    "merge_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "authorized_by": {"type": "string", "minLength": 1},
+    "authorized_at": {"type": "string", "minLength": 1},
+    "authorization_ref": {"type": "string", "minLength": 1},
+    "intake_authorization_ref": {"type": "string", "minLength": 1},
+    "records": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["record_id", "upstream_id", "commit", "source_paths", "destination_paths"],
+        "properties": {
+          "record_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+          "upstream_id": {"type": "string", "minLength": 1},
+          "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "source_paths": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "destination_paths": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["public_release_authorized", "additional_source_paths_authorized"],
+      "properties": {
+        "public_release_authorized": {"const": false},
+        "additional_source_paths_authorized": {"const": false}
+      }
+    },
+    "notes": {"type": "array", "items": {"type": "string"}}
+  }
+}

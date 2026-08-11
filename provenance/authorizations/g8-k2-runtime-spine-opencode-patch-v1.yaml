@@ -18,7 +18,9 @@ constraints:
   public_release_authorized: false
   additional_source_paths_authorized: false
 notes:
-  - "This authorization is valid only on the named isolated K2 branch."
+  - "This source-intake authorization remains valid only on the named isolated K2 branch."
+  - "It does not itself authorize canonical adoption; canonical adoption requires a separate exact main-adoption authorization record."
   - "No other donor, source path, upstream commit, or destination path is authorized."
-  - "Canonical main remains blocked until the ratified GitHub protection ruleset is active and verified."
+  - "PR #3 canonical adoption is recorded separately in provenance/main-adoptions/k2-opencode-patch-v1.yaml."
+  - "Public release remains unauthorized."
   - "Kodac remains an engineering codename pending professional name/trademark clearance or founder rename."
