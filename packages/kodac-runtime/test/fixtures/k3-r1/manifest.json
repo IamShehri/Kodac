@@ -7,6 +7,10 @@
     "persistent_storage": false,
     "production_repository_intelligence": false
   },
+  "digest_policy": {
+    "binary": "raw-bytes",
+    "text": "utf8-lf-normalized"
+  },
   "expected_files": [
     {
       "kind": "binary",

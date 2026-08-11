@@ -8,8 +8,13 @@ const fixtureRoot = join("test", "fixtures", "k3-r1")
 const manifestPath = join(fixtureRoot, "manifest.json")
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
 
-function digest(path: string): string {
-  return createHash("sha256").update(readFileSync(join(fixtureRoot, path))).digest("hex")
+function digest(path: string, kind: string): string {
+  const bytes = readFileSync(join(fixtureRoot, path))
+  if (kind === "binary") {
+    return createHash("sha256").update(bytes).digest("hex")
+  }
+  const canonicalText = bytes.toString("utf8").replace(/\r\n/g, "\n")
+  return createHash("sha256").update(canonicalText, "utf8").digest("hex")
 }
 
 test("K3-R1 fixture manifest is deterministic and authority-bounded", () => {
@@ -22,13 +27,17 @@ test("K3-R1 fixture manifest is deterministic and authority-bounded", () => {
   assert.equal(manifest.authority.external_adapter_intake, false)
   assert.equal(manifest.authority.new_dependencies, false)
   assert.equal(manifest.authority.persistent_storage, false)
+  assert.deepEqual(manifest.digest_policy, {
+    binary: "raw-bytes",
+    text: "utf8-lf-normalized",
+  })
 
   const paths = manifest.expected_files.map((entry: { path: string }) => entry.path)
   assert.deepEqual(paths, [...paths].sort())
 
   for (const entry of manifest.expected_files) {
     assert.match(entry.sha256, /^[0-9a-f]{64}$/)
-    assert.equal(digest(entry.path), entry.sha256, `digest mismatch for ${entry.path}`)
+    assert.equal(digest(entry.path, entry.kind), entry.sha256, `digest mismatch for ${entry.path}`)
   }
 })
 
