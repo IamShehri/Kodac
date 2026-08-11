@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { posix } from "node:path"
 import { NodeWorkspaceFileSystem } from "../edit/filesystem.ts"
-import type { VerificationCategory, VerificationCommandSpec } from "./types.ts"
+import type { VerificationCommandSpec } from "./types.ts"
 
 export type VerificationRisk = "low" | "medium" | "high"
 
@@ -83,24 +83,54 @@ async function detectPackageManager(fs: NodeWorkspaceFileSystem, dir: string, pa
   return "npm"
 }
 
-function packageArgs(manager: PackageManager, dir: string, script: string): string[] {
-  if (dir === ".") return ["run", script]
-  if (manager === "npm") return ["--prefix", dir, "run", script]
-  if (manager === "pnpm") return ["--dir", dir, "run", script]
-  return ["--cwd", dir, "run", script]
+function tokenizeDirectNodeScript(body: string): string[] | undefined {
+  if (/[;&|><`$\n\r]/.test(body)) return undefined
+  const tokens: string[] = []
+  let current = ""
+  let quote: "'" | "\"" | undefined
+  for (let index = 0; index < body.length; index++) {
+    const char = body[index]
+    if (quote) {
+      if (char === quote) quote = undefined
+      else current += char
+      continue
+    }
+    if (char === "'" || char === "\"") {
+      quote = char
+      continue
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current)
+        current = ""
+      }
+      continue
+    }
+    current += char
+  }
+  if (quote) return undefined
+  if (current) tokens.push(current)
+  if (tokens[0] !== "node" || tokens.length < 2) return undefined
+  return tokens.slice(1)
 }
 
-function scriptSpec(
-  manager: PackageManager,
+function directNodeScriptSpec(
   dir: string,
   script: string,
+  body: string,
   category: VerificationCommandSpec["category"],
-): VerificationCommandSpec {
+): VerificationCommandSpec | undefined {
+  const nodeArgs = tokenizeDirectNodeScript(body)
+  if (!nodeArgs) return undefined
+  const args = dir === "." ? nodeArgs : nodeArgs.map((arg, index) => {
+    if (index !== 0 || arg.startsWith("-") || posix.isAbsolute(arg)) return arg
+    return childPath(dir, arg)
+  })
   return {
     id: commandId("js", dir, script.replace(/[^a-z0-9]+/gi, "-")),
     category,
-    executable: manager,
-    args: packageArgs(manager, dir, script),
+    executable: "node",
+    args,
     timeoutMs: category === "tests" ? 120_000 : 60_000,
     maxOutputBytes: 1024 * 1024,
   }
@@ -135,18 +165,22 @@ async function packageCommands(
   const manager = await detectPackageManager(fs, dir, record.packageManager)
   signals.push(`${manifest}:javascript:${manager}`)
   const commands: VerificationCommandSpec[] = []
-  const typeScript = findScript(scripts, ["typecheck", "type-check", "check:types", "types"])
-  const lintScript = findScript(scripts, ["lint", "check:lint"])
-  const testScript = findScript(scripts, ["test", "test:unit", "test:ci"])
-  if (typeScript) commands.push(scriptSpec(manager, dir, typeScript, "types"))
-  if (lintScript) commands.push(scriptSpec(manager, dir, lintScript, "lint"))
-  if (testScript) {
-    const body = scripts[testScript]
-    if (typeof body === "string" && /no test specified/i.test(body)) {
+  const candidates: Array<{ script: string | undefined; category: VerificationCommandSpec["category"] }> = [
+    { script: findScript(scripts, ["typecheck", "type-check", "check:types", "types"]), category: "types" },
+    { script: findScript(scripts, ["lint", "check:lint"]), category: "lint" },
+    { script: findScript(scripts, ["test", "test:unit", "test:ci"]), category: "tests" },
+  ]
+  for (const candidate of candidates) {
+    if (!candidate.script) continue
+    const body = scripts[candidate.script]
+    if (typeof body !== "string") continue
+    if (candidate.category === "tests" && /no test specified/i.test(body)) {
       warnings.push(`Ignored placeholder test script in ${manifest}`)
-    } else {
-      commands.push(scriptSpec(manager, dir, testScript, "tests"))
+      continue
     }
+    const spec = directNodeScriptSpec(dir, candidate.script, body, candidate.category)
+    if (spec) commands.push(spec)
+    else warnings.push(`Detected ${candidate.script} in ${manifest}, but K2-S7 refused auto-execution because it is not a direct no-shell Node recipe.`)
   }
   return commands
 }

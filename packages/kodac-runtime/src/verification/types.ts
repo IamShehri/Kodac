@@ -12,7 +12,7 @@ export type VerificationCategory =
   | "tests"
   | "custom"
 export type VerificationStatus = "pass" | "fail"
-export type VerificationExecutable = "node" | "npm" | "pnpm" | "yarn" | "bun" | "python" | "cargo" | "go"
+export type VerificationExecutable = "node" | "python" | "cargo" | "go"
 
 export interface VerificationEvidenceRef {
   kind: "receipt" | "artifact" | "event" | "workspace"

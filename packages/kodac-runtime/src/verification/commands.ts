@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path"
 import type { VerificationCommandSpec, VerificationExecutable } from "./types.ts"
 
 const CATEGORIES = new Set(["syntax", "types", "lint", "tests", "custom"])
-const EXECUTABLES = new Set<VerificationExecutable>(["node", "npm", "pnpm", "yarn", "bun", "python", "cargo", "go"])
+const EXECUTABLES = new Set<VerificationExecutable>(["node", "python", "cargo", "go"])
 
 function boundedInteger(name: string, value: unknown, maximum: number): number | undefined {
   if (value === undefined) return undefined
@@ -32,7 +32,7 @@ export function parseVerificationCommandSpec(raw: string): VerificationCommandSp
   if (typeof id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(id)) throw new Error("verification command id is invalid")
   if (typeof category !== "string" || !CATEGORIES.has(category)) throw new Error("verification command category is invalid")
   if (typeof executable !== "string" || !EXECUTABLES.has(executable as VerificationExecutable)) {
-    throw new Error("verification command executable is not in the Kodac safe executable catalog")
+    throw new Error("verification command executable is not in the Kodac no-shell executable catalog")
   }
   if (!Array.isArray(args) || args.length > 64 || !args.every((arg) => typeof arg === "string" && arg.length <= 4096 && !arg.includes("\0"))) {
     throw new Error("verification command args must be an array of bounded strings")
