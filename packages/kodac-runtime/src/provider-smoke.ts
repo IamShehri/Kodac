@@ -41,7 +41,7 @@ function parse(argv: string[]): SmokeArgs {
 }
 
 function providerFromEnv(name: SmokeArgs["provider"], env: NodeJS.ProcessEnv): ModelProvider {
-  if (name === "openai") return new OpenAIResponsesProvider({ apiKey: env.OPENAI_API_KEY })
+  if (name === "openai") return new OpenAIResponsesProvider({ apiKey: env.OPENAI_API_KEY, stream: true })
   return OpenAICompatibleProvider.fromEnv(env, { stream: true })
 }
 

@@ -12,6 +12,8 @@ import {
 
 const DEFAULT_ENDPOINT = "https://api.openai.com/v1/responses"
 const RETRYABLE_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504])
+const MAX_STREAM_BYTES = 8 * 1024 * 1024
+const MAX_STREAM_EVENTS = 20_000
 
 type FetchLike = typeof fetch
 type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>
@@ -23,6 +25,7 @@ export interface OpenAIResponsesProviderOptions {
   maxAttempts?: number
   clock?: () => number
   sleep?: Sleep
+  stream?: boolean
 }
 
 interface OpenAIToolBinding {
@@ -34,6 +37,12 @@ interface OpenAIToolBinding {
 interface ToolHistoryEntry {
   name: string
   input: unknown
+  contextItems: unknown[]
+}
+
+interface ParsedResponse {
+  assistant: string
+  toolCalls: ModelToolCall[]
   contextItems: unknown[]
 }
 
@@ -53,6 +62,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function numeric(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function integer(value: unknown): number | undefined {
+  return Number.isInteger(value) && (value as number) >= 0 ? value as number : undefined
 }
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -179,7 +192,7 @@ function responseUsage(body: Record<string, unknown>): ModelProviderUsage | unde
 function parseAssistantAndCalls(
   body: Record<string, unknown>,
   bindings: OpenAIToolBinding[],
-): { assistant: string; toolCalls: ModelToolCall[]; contextItems: unknown[] } {
+): ParsedResponse {
   const canonicalByAlias = new Map(bindings.map((binding) => [binding.provider, binding.canonical]))
   const text: string[] = []
   const toolCalls: ModelToolCall[] = []
@@ -242,6 +255,51 @@ function aborted(signal?: AbortSignal): ModelProviderError | undefined {
   )
 }
 
+function completedResponse(
+  body: Record<string, unknown>,
+  bindings: OpenAIToolBinding[],
+  attempts: number,
+  latencyMs: number,
+  requestId?: string,
+): { response: ModelProviderResponse; parsed: ParsedResponse } {
+  if (typeof body.status === "string" && body.status !== "completed") {
+    throw new ModelProviderError(
+      "incomplete_response",
+      `OpenAI response status was ${body.status}.`,
+      { retryable: false },
+    )
+  }
+  const parsed = parseAssistantAndCalls(body, bindings)
+  return {
+    parsed,
+    response: {
+      assistant: parsed.assistant,
+      toolCalls: parsed.toolCalls,
+      finishReason: parsed.toolCalls.length > 0 ? "tool_calls" : "stop",
+      metadata: {
+        responseId: typeof body.id === "string" ? body.id : undefined,
+        requestId,
+        latencyMs,
+        attempts,
+        usage: responseUsage(body),
+      },
+    },
+  }
+}
+
+function sseFrames(buffer: string): { frames: string[]; remainder: string } {
+  const normalized = buffer.replace(/\r\n/g, "\n")
+  const parts = normalized.split("\n\n")
+  return { frames: parts.slice(0, -1), remainder: parts.at(-1) ?? "" }
+}
+
+function sseData(frame: string): string | undefined {
+  const data = frame.split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).replace(/^ /, ""))
+  return data.length > 0 ? data.join("\n") : undefined
+}
+
 export class OpenAIResponsesProvider implements ModelProvider {
   readonly name = "openai"
   private readonly apiKey?: string
@@ -250,6 +308,7 @@ export class OpenAIResponsesProvider implements ModelProvider {
   private readonly maxAttempts: number
   private readonly clock: () => number
   private readonly sleep: Sleep
+  private readonly stream: boolean
   private readonly callHistory = new Map<string, ToolHistoryEntry>()
 
   constructor(options: OpenAIResponsesProviderOptions = {}) {
@@ -259,6 +318,7 @@ export class OpenAIResponsesProvider implements ModelProvider {
     this.maxAttempts = options.maxAttempts ?? 3
     this.clock = options.clock ?? (() => Date.now())
     this.sleep = options.sleep ?? defaultSleep
+    this.stream = options.stream ?? false
     if (!Number.isInteger(this.maxAttempts) || this.maxAttempts <= 0 || this.maxAttempts > 5) {
       throw new Error("OpenAI maxAttempts must be an integer between 1 and 5")
     }
@@ -270,6 +330,176 @@ export class OpenAIResponsesProvider implements ModelProvider {
       throw new ModelProviderError("credential_missing", "OPENAI_API_KEY is not configured.", { retryable: false })
     }
     return value.trim()
+  }
+
+  private rememberCalls(parsed: ParsedResponse): void {
+    for (const call of parsed.toolCalls) {
+      this.callHistory.set(call.id, {
+        name: call.name,
+        input: call.input,
+        contextItems: parsed.contextItems,
+      })
+    }
+  }
+
+  private async parseStream(
+    httpResponse: Response,
+    request: ModelProviderRequest,
+    bindings: OpenAIToolBinding[],
+    attempt: number,
+    startedAt: number,
+    requestId?: string,
+  ): Promise<ModelProviderResponse> {
+    if (!httpResponse.body) {
+      throw new ModelProviderError("stream_missing_body", "OpenAI streaming response did not include a body.", { retryable: true })
+    }
+    const contentType = httpResponse.headers.get("content-type") ?? ""
+    if (!contentType.toLowerCase().includes("text/event-stream")) {
+      throw new ModelProviderError("invalid_stream_content_type", "OpenAI streaming response was not text/event-stream.")
+    }
+
+    const reader = httpResponse.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ""
+    let bytes = 0
+    let eventCount = 0
+    let lastSequence = -1
+    let sawStarted = false
+    let sawCompleted = false
+    let streamedText = ""
+    let finalResponse: ModelProviderResponse | undefined
+
+    const emit = async (event: Parameters<NonNullable<ModelProviderRequest["onStreamEvent"]>>[0]): Promise<void> => {
+      await request.onStreamEvent?.(event)
+      const signalError = aborted(request.signal)
+      if (signalError) throw signalError
+    }
+
+    const processData = async (data: string): Promise<void> => {
+      if (!data.trim()) return
+      if (data.trim() === "[DONE]") {
+        if (!sawCompleted) throw new ModelProviderError("incomplete_stream", "OpenAI stream ended before response.completed.")
+        return
+      }
+      eventCount += 1
+      if (eventCount > MAX_STREAM_EVENTS) {
+        throw new ModelProviderError("stream_event_limit", "OpenAI stream exceeded the Kodac event-count limit.")
+      }
+      let value: unknown
+      try {
+        value = JSON.parse(data)
+      } catch (error) {
+        throw new ModelProviderError("invalid_stream_event", "OpenAI stream emitted invalid JSON.", { cause: error })
+      }
+      if (!isRecord(value) || typeof value.type !== "string") {
+        throw new ModelProviderError("invalid_stream_event", "OpenAI stream event was not a typed object.")
+      }
+      const sequence = integer(value.sequence_number)
+      if (sequence !== undefined) {
+        if (sequence <= lastSequence) {
+          throw new ModelProviderError("invalid_stream_sequence", "OpenAI stream sequence numbers were not strictly increasing.")
+        }
+        lastSequence = sequence
+      }
+
+      if (value.type === "response.created") {
+        if (sawStarted) throw new ModelProviderError("invalid_stream_order", "OpenAI stream emitted response.created more than once.")
+        sawStarted = true
+        await emit({ type: "started" })
+        return
+      }
+      if (value.type === "response.output_text.delta") {
+        if (!sawStarted || sawCompleted || typeof value.delta !== "string") {
+          throw new ModelProviderError("invalid_stream_event", "OpenAI output-text delta was malformed or out of order.")
+        }
+        streamedText += value.delta
+        await emit({ type: "text_delta", text: value.delta })
+        return
+      }
+      if (value.type === "response.function_call_arguments.delta") {
+        const index = integer(value.output_index)
+        if (!sawStarted || sawCompleted || index === undefined || typeof value.item_id !== "string" || typeof value.delta !== "string") {
+          throw new ModelProviderError("invalid_stream_event", "OpenAI function-call delta was malformed or out of order.")
+        }
+        await emit({ type: "tool_call_delta", index, id: value.item_id, argumentsDelta: value.delta })
+        return
+      }
+      if (value.type === "response.function_call_arguments.done") {
+        const index = integer(value.output_index)
+        if (!sawStarted || sawCompleted || index === undefined || typeof value.item_id !== "string" || typeof value.name !== "string" || typeof value.arguments !== "string") {
+          throw new ModelProviderError("invalid_stream_event", "OpenAI function-call completion event was malformed or out of order.")
+        }
+        await emit({ type: "tool_call_delta", index, id: value.item_id, name: value.name })
+        return
+      }
+      if (value.type === "response.failed" || value.type === "response.incomplete" || value.type === "error") {
+        throw new ModelProviderError("stream_failed", "OpenAI stream reported a failed or incomplete response.")
+      }
+      if (value.type !== "response.completed") return
+      if (!sawStarted || sawCompleted || !isRecord(value.response)) {
+        throw new ModelProviderError("invalid_stream_event", "OpenAI response.completed event was malformed or out of order.")
+      }
+      sawCompleted = true
+      const completed = completedResponse(
+        value.response,
+        bindings,
+        attempt,
+        Math.max(0, this.clock() - startedAt),
+        requestId,
+      )
+      if (streamedText && completed.response.assistant !== streamedText) {
+        throw new ModelProviderError("stream_text_mismatch", "OpenAI streamed text did not match the completed response.")
+      }
+      this.rememberCalls(completed.parsed)
+      finalResponse = completed.response
+      if (finalResponse.metadata?.usage) await emit({ type: "usage", usage: finalResponse.metadata.usage })
+      await emit({
+        type: "completed",
+        finishReason: finalResponse.finishReason,
+        responseId: finalResponse.metadata?.responseId,
+      })
+    }
+
+    try {
+      while (true) {
+        const signalError = aborted(request.signal)
+        if (signalError) throw signalError
+        const result = await reader.read()
+        if (result.done) break
+        bytes += result.value.byteLength
+        if (bytes > MAX_STREAM_BYTES) {
+          throw new ModelProviderError("stream_too_large", "OpenAI stream exceeded the Kodac response-size limit.")
+        }
+        buffer += decoder.decode(result.value, { stream: true })
+        const split = sseFrames(buffer)
+        buffer = split.remainder
+        for (const frame of split.frames) {
+          const data = sseData(frame)
+          if (data !== undefined) await processData(data)
+        }
+      }
+      buffer += decoder.decode()
+      if (buffer.trim()) {
+        const data = sseData(buffer.replace(/\r\n/g, "\n"))
+        if (data !== undefined) await processData(data)
+      }
+    } catch (error) {
+      const signalError = aborted(request.signal)
+      if (signalError) throw signalError
+      if (error instanceof ModelProviderError) throw error
+      throw new ModelProviderError(
+        sawStarted ? "stream_interrupted" : "stream_network_error",
+        sawStarted ? "OpenAI stream was interrupted after output began." : "OpenAI stream failed before output began.",
+        { retryable: !sawStarted, cause: error },
+      )
+    } finally {
+      reader.releaseLock()
+    }
+
+    if (!sawStarted || !sawCompleted || !finalResponse) {
+      throw new ModelProviderError("incomplete_stream", "OpenAI stream ended before response.completed.")
+    }
+    return finalResponse
   }
 
   async generate(request: ModelProviderRequest): Promise<ModelProviderResponse> {
@@ -289,6 +519,7 @@ export class OpenAIResponsesProvider implements ModelProvider {
       store: false,
       input: mapMessages(request.messages, bindings, this.callHistory),
     }
+    if (this.stream) payload.stream = true
     if (bindings.length > 0) {
       payload.tools = bindings.map((binding) => ({
         type: "function",
@@ -345,6 +576,17 @@ export class OpenAIResponsesProvider implements ModelProvider {
         continue
       }
 
+      if (this.stream) {
+        try {
+          return await this.parseStream(response, request, bindings, attempt, startedAt, requestId)
+        } catch (error) {
+          if (!(error instanceof ModelProviderError) || !error.retryable || attempt >= this.maxAttempts) throw error
+          lastError = error
+          await this.sleep(Math.min(2_000, 250 * 2 ** (attempt - 1)), request.signal)
+          continue
+        }
+      }
+
       let body: unknown
       try {
         body = await response.json()
@@ -358,35 +600,15 @@ export class OpenAIResponsesProvider implements ModelProvider {
       if (!isRecord(body)) {
         throw new ModelProviderError("invalid_response", "OpenAI API returned an invalid response object.")
       }
-      if (typeof body.status === "string" && body.status !== "completed") {
-        throw new ModelProviderError(
-          "incomplete_response",
-          `OpenAI response status was ${body.status}.`,
-          { retryable: false },
-        )
-      }
-
-      const parsed = parseAssistantAndCalls(body, bindings)
-      for (const call of parsed.toolCalls) {
-        this.callHistory.set(call.id, {
-          name: call.name,
-          input: call.input,
-          contextItems: parsed.contextItems,
-        })
-      }
-      const latencyMs = Math.max(0, this.clock() - startedAt)
-      return {
-        assistant: parsed.assistant,
-        toolCalls: parsed.toolCalls,
-        finishReason: parsed.toolCalls.length > 0 ? "tool_calls" : "stop",
-        metadata: {
-          responseId: typeof body.id === "string" ? body.id : undefined,
-          requestId,
-          latencyMs,
-          attempts: attempt,
-          usage: responseUsage(body),
-        },
-      }
+      const completed = completedResponse(
+        body,
+        bindings,
+        attempt,
+        Math.max(0, this.clock() - startedAt),
+        requestId,
+      )
+      this.rememberCalls(completed.parsed)
+      return completed.response
     }
 
     throw lastError ?? new ModelProviderError("request_failed", "OpenAI API request failed.")

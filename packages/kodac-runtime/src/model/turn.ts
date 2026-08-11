@@ -89,7 +89,7 @@ export class AgentTurnRunner {
   private resolveProvider(name: string): ModelProvider {
     if (this.providers.has(name)) return this.providers.get(name)
     if (name === "openai") {
-      const provider = new OpenAIResponsesProvider()
+      const provider = new OpenAIResponsesProvider({ stream: true })
       this.providers.register(provider)
       return provider
     }
