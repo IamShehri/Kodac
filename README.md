@@ -1,17 +1,43 @@
-# Kernux
+# Kodac
 
-> Compare AI coding agents using evidence, not marketing.
+> Done means proven.
 
-**Kernux** is an open, evidence-backed guide to AI coding agents — an
-independent, source-cited index that normalizes fragmented evidence (vendor
-documentation, academic benchmarks, community comparisons, marketing claims)
-into sourced profiles and decision-oriented comparisons.
+Kodac is an open, model-agnostic agentic software-engineering platform focused
+on trusted execution, verification, evidence, and proof-oriented completion.
 
-> **Phase 1 status.** This repository currently contains a single vertical
-> slice: **one profiled agent ([OpenCode](agents/opencode/profile.yaml))**, the
+## Current status
+
+The following status applies to the isolated K2 work on
+`feat/kodac-k2-runtime-spine`; it does not imply that K2 has merged into
+canonical `main` or that a public release is authorized.
+
+| Area | Status |
+|---|---|
+| K2 isolated runtime technical proof | **PASS** |
+| Real OpenAI provider qualification | **PASS — 9/9** |
+| First controlled real-model solve | **PROVEN_READY** |
+| Canonical `main` merge | **NOT YET AUTHORIZED** |
+| Public brand launch | **NOT AUTHORIZED** |
+| Name clearance | **NOT ESTABLISHED** |
+
+See the [K2 final technical closure](docs/planning/KODAC_K2_FINAL_TECHNICAL_CLOSURE_2026-08-11.md)
+for the verified evidence identities, technical scope, and continuing
+authorization boundaries.
+
+## Kodac Evidence Catalog
+
+Kodac preserves the earlier Kernux evidence-backed guide to AI coding agents as
+the **Kodac Evidence Catalog**: an independent, source-cited subsystem that
+normalizes fragmented evidence (vendor documentation, academic benchmarks,
+community comparisons, and marketing claims) into sourced profiles and
+decision-oriented comparisons.
+
+> **Original evidence-catalog Phase 1 status.** This subsystem currently
+> contains one profiled agent ([OpenCode](agents/opencode/profile.yaml)), the
 > agent-profile schema and validator, a deterministic comparison matrix, and
 > tests. The other nine launch profiles, Controlled Evaluation Tasks, Runs,
-> reports, and any hosted website are **not yet implemented**.
+> reports, and any hosted website remain unimplemented within that original
+> catalog roadmap.
 
 ## What you can do right now (zero-install)
 
@@ -22,7 +48,7 @@ into sourced profiles and decision-oriented comparisons.
 - Read the [**Profile Sourcing Methodology**](docs/methodology/PROFILE_SOURCING.md)
   for how facts are sourced, labeled, and kept fresh.
 
-## How Kernux works
+## How the Kodac Evidence Catalog works
 
 - **Canonical format:** profiles are YAML (`agents/<id>/profile.yaml`), validated
   by a [strict JSON Schema](schema/agent-profile.schema.json) plus a custom
@@ -60,30 +86,33 @@ A factual field is one of:
 | `unknown`         | No acceptable direct source found. Absence of documentation is **not** a vendor claim — it is an assessment limitation. |
 | `disputed`        | Acceptable sources conflict; the dispute is documented in the profile.                        |
 
-Phase 1 has **no Run evidence** and **no independent behavioral reproduction**.
-Reading a vendor's documentation does not independently verify product behavior;
-behavioral, capability, protocol, pricing, and privacy fields are
-`vendor-reported`. Only repository identity, license, and release metadata are
-`verified` (artifact-based).
+The original evidence-catalog Phase 1 slice has **no Run evidence** and **no
+independent behavioral reproduction**. Within that slice, reading a vendor's
+documentation does not independently verify product behavior; behavioral,
+capability, protocol, pricing, and privacy fields are `vendor-reported`. Only
+repository identity, license, and release metadata are `verified` through
+artifact evidence.
 
 ## Complementary to SWE-bench
 
-Kernux is **complementary to SWE-bench** and other academic benchmarks.
-SWE-bench measures performance on real GitHub issues under its methodology.
-Kernux focuses on product capabilities, operating conditions, provenance, and
-decision support. Kernux does **not** market its (future) Controlled Evaluation
-Tasks as a SWE-bench replacement.
+The Kodac Evidence Catalog is **complementary to SWE-bench** and other academic
+benchmarks. SWE-bench measures performance on real GitHub issues under its
+methodology. The catalog focuses on product capabilities, operating conditions,
+provenance, and decision support. It does **not** market its future Controlled
+Evaluation Tasks as a SWE-bench replacement.
 
 ## No overall score
 
-Kernux does **not** publish an overall "Kernux Score" or league table.
-Comparisons are decision-oriented (privacy characteristics, local-model
-capability, terminal support, headless/CI support, permission/sandbox controls,
-model-provider flexibility) and are never universal winner declarations.
+The Kodac Evidence Catalog does **not** publish a universal overall score or
+league table. Comparisons are decision-oriented (privacy characteristics,
+local-model capability, terminal support, headless/CI support,
+permission/sandbox controls, model-provider flexibility) and are never
+universal winner declarations.
 
-## Not yet implemented
+## Original evidence-catalog roadmap status
 
-The following are part of the ratified roadmap but are **not** in Phase 1:
+The following remain unimplemented in the original evidence-catalog Phase 1
+roadmap:
 
 - the other nine launch profiles (Claude Code, Gemini CLI, GitHub Copilot,
   Cursor, Windsurf, Aider, Cline, OpenHands, OpenAI Codex);
@@ -92,7 +121,7 @@ The following are part of the ratified roadmap but are **not** in Phase 1:
 - dated analytical reports;
 - a hosted website, CI beyond the local toolchain, and any launch activity.
 
-## Tooling (for contributors)
+## Evidence-catalog tooling (for contributors)
 
 ```bash
 uv sync                                       # install Python deps from uv.lock
@@ -110,17 +139,29 @@ toolchain requirements.
 
 ## Relationship to earlier work
 
-This repository previously hosted a different direction (a "trust kernel" /
-`nexusmcp` OmniBridge prototype). That material is **historical** and is **not**
-part of this product. It is preserved on local archive branches
-(`archive/trust-kernel-s0b`, `archive/omnibridge-pre-reboot`) and is not mixed
-into the new product identity.
+Kodac preserves the earlier Kernux evidence catalog, its sourced profiles, and
+its methodology as evidence and history rather than destructively deleting
+them. Kodac is not merely a rebrand: it was reconstituted around a new
+runtime/platform architecture focused on trusted execution, verification,
+evidence, and proof-oriented completion. Legacy Kernux planning and decision
+material remains historical input unless explicitly referenced by a current
+accepted Kodac record.
 
-## Ratified proposal documents
+Before Kernux, this repository hosted a different direction (a "trust kernel" /
+`nexusmcp` OmniBridge prototype). That material remains preserved on local
+archive branches (`archive/trust-kernel-s0b`,
+`archive/omnibridge-pre-reboot`) as history and is not current Kodac
+architecture.
 
-The product strategy, schema, evidence policy, competitor map, roadmap, and
-founder decisions live under [`proposal/`](proposal/). The authoritative record
-is [`proposal/FOUNDER_DECISIONS.md`](proposal/FOUNDER_DECISIONS.md).
+## Current governance authority
+
+Current Kodac architecture, governance, and planning truth lives primarily in
+the accepted records under [`docs/adr/`](docs/adr/),
+[`docs/governance/`](docs/governance/), and
+[`docs/planning/`](docs/planning/). Content under
+[`proposal/`](proposal/) and legacy Kernux planning and decision material is
+preserved as historical input unless explicitly referenced by a current
+accepted Kodac record.
 
 ## License
 
@@ -128,6 +169,7 @@ Apache-2.0. See [LICENSE](LICENSE).
 
 ---
 
-*Phase 1 vertical slice. No launch is authorized. No overall score is computed.
-Kernux makes no compliance, certification, security, or production-readiness
-claim beyond what is explicitly sourced and labeled in each profile.*
+*No canonical `main` merge or public brand launch is authorized by this README.
+The evidence catalog computes no universal overall score. Kodac makes no
+compliance, certification, security, or production-readiness claim beyond what
+is explicitly established by accepted governance records and cited evidence.*
