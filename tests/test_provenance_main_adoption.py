@@ -75,6 +75,31 @@ def test_main_rejects_import_without_exact_adoption(
         vp.validate_import_records(False, upstreams, [], [])
 
 
+def test_main_rejects_exact_scoped_authorization_without_main_adoption(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    upstreams, _ = _configure(monkeypatch, tmp_path)
+    record = _load(tmp_path / "provenance" / "imports" / "opencode-patch-v1.yaml")
+    scoped = {
+        "status": "active",
+        "branch": "main",
+        "authorized_by": "Kodac founder",
+        "authorization_ref": record["authorization"]["authorization_ref"],
+        "records": [
+            {
+                "record_id": record["record_id"],
+                "upstream_id": record["upstream"]["id"],
+                "commit": record["upstream"]["commit"],
+                "source_paths": record["upstream"]["source_paths"],
+                "destination_paths": record["destination_paths"],
+            }
+        ],
+    }
+    monkeypatch.setenv("KODAC_BRANCH", "main")
+    with pytest.raises(ValueError, match="exact active main-adoption authorization"):
+        vp.validate_import_records(False, upstreams, [scoped], [])
+
+
 def test_feature_branch_rejects_new_unadopted_unscoped_import(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

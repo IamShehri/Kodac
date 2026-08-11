@@ -194,8 +194,17 @@ def validate_import_records(
                 fail(f"{path.relative_to(ROOT)}: authorized/imported record requires authorization evidence")
 
             if not global_code_import_authorized:
-                main_adoption = exact_main_adoption(record, main_adoptions) if record["status"] == "imported" else None
-                if main_adoption is not None:
+                main_adoption = exact_main_adoption(record, main_adoptions)
+                if branch == "main":
+                    if main_adoption is None:
+                        fail(
+                            f"{path.relative_to(ROOT)}: {record['status']} import is forbidden on canonical main "
+                            "while policy.code_import_authorized=false unless an exact active main-adoption "
+                            "authorization exists"
+                        )
+                    if main_adoption["authorized_by"] != authorization_evidence.get("authorized_by"):
+                        fail(f"{path.relative_to(ROOT)}: adoption actor differs from import authorization actor")
+                elif record["status"] == "imported" and main_adoption is not None:
                     if main_adoption["authorized_by"] != authorization_evidence.get("authorized_by"):
                         fail(f"{path.relative_to(ROOT)}: adoption actor differs from import authorization actor")
                 else:
