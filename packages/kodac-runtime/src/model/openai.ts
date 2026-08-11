@@ -494,10 +494,18 @@ export class OpenAIResponsesProvider implements ModelProvider {
       }
       if (value.type === "response.function_call_arguments.done") {
         const index = integer(value.output_index)
-        if (!sawStarted || sawCompleted || index === undefined || typeof value.item_id !== "string" || typeof value.name !== "string" || typeof value.arguments !== "string") {
+        if (!sawStarted || sawCompleted || index === undefined || typeof value.item_id !== "string" || value.item_id.length === 0 || typeof value.arguments !== "string") {
           throw new ModelProviderError("invalid_stream_event", "OpenAI function-call completion event was malformed or out of order.")
         }
-        await emit({ type: "tool_call_delta", index, id: value.item_id, name: value.name })
+        const name = typeof value.name === "string" && value.name.trim().length > 0
+          ? value.name
+          : undefined
+        await emit({
+          type: "tool_call_delta",
+          index,
+          id: value.item_id,
+          ...(name === undefined ? {} : { name }),
+        })
         return
       }
       if (value.type === "response.failed" || value.type === "response.incomplete" || value.type === "error") {

@@ -128,7 +128,173 @@ test("OpenAI Responses provider reports function-call deltas but executes only t
   }))
   assert.equal(response.finishReason, "tool_calls")
   assert.deepEqual(response.toolCalls, [{ id: "call_1", name: "repo.read", input: { path: "README.md" } }])
-  assert.equal(observed.filter((event) => event.type === "tool_call_delta").length, 3)
+  assert.deepEqual(
+    observed.filter((event) => event.type === "tool_call_delta"),
+    [
+      { type: "tool_call_delta", index: 0, id: "fc_1", argumentsDelta: "{\"path\":\"" },
+      { type: "tool_call_delta", index: 0, id: "fc_1", argumentsDelta: "README.md\"}" },
+      { type: "tool_call_delta", index: 0, id: "fc_1", name: alias },
+    ],
+  )
+})
+
+test("OpenAI Responses provider tolerates a nameless function-call done event", async () => {
+  const observed: ModelProviderStreamEvent[] = []
+  let alias = ""
+  const provider = new OpenAIResponsesProvider({
+    apiKey: "secret",
+    stream: true,
+    fetchImpl: (async (_input: string | URL | Request, init?: RequestInit) => {
+      const payload = JSON.parse(String(init?.body)) as { tools: Array<{ name: string }> }
+      alias = payload.tools[0].name
+      return sse([
+        { type: "response.created", sequence_number: 0, response: { id: "resp_tools" } },
+        { type: "response.function_call_arguments.delta", sequence_number: 1, item_id: "fc_1", output_index: 0, delta: "{\"path\":\"" },
+        { type: "response.function_call_arguments.delta", sequence_number: 2, item_id: "fc_1", output_index: 0, delta: "README.md\"}" },
+        { type: "response.function_call_arguments.done", sequence_number: 3, item_id: "fc_1", output_index: 0, arguments: "{\"path\":\"README.md\"}" },
+        {
+          type: "response.completed",
+          sequence_number: 4,
+          response: {
+            id: "resp_tools",
+            status: "completed",
+            output: [{ type: "function_call", id: "fc_1", call_id: "call_1", name: alias, arguments: "{\"path\":\"README.md\"}", status: "completed" }],
+            usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+          },
+        },
+      ])
+    }) as typeof fetch,
+  })
+
+  const response = await provider.generate(request({
+    tools: [{ name: "repo.read", capability: "repo.read", description: "Read a file", inputSchema: { type: "object" } }],
+    onStreamEvent(event) { observed.push(event) },
+  }))
+  assert.equal(response.finishReason, "tool_calls")
+  assert.deepEqual(response.toolCalls, [{ id: "call_1", name: "repo.read", input: { path: "README.md" } }])
+  const doneEvent = observed.filter((event) => event.type === "tool_call_delta").at(-1)
+  assert.deepEqual(doneEvent, { type: "tool_call_delta", index: 0, id: "fc_1" })
+  assert.equal(Object.hasOwn(doneEvent ?? {}, "name"), false)
+})
+
+test("OpenAI ignores invalid streamed function names and trusts only the completed call", async () => {
+  const variants: Array<{ name: unknown; arguments: string }> = [
+    { name: "", arguments: "not-json" },
+    { name: 42, arguments: "{\"path\":\"UNTRUSTED.md\"}" },
+  ]
+
+  for (const variant of variants) {
+    const observed: ModelProviderStreamEvent[] = []
+    let alias = ""
+    const provider = new OpenAIResponsesProvider({
+      apiKey: "secret",
+      stream: true,
+      fetchImpl: (async (_input: string | URL | Request, init?: RequestInit) => {
+        const payload = JSON.parse(String(init?.body)) as { tools: Array<{ name: string }> }
+        alias = payload.tools[0].name
+        return sse([
+          { type: "response.created", sequence_number: 0, response: { id: "resp_tools" } },
+          {
+            type: "response.function_call_arguments.done",
+            sequence_number: 1,
+            item_id: "fc_stream_only",
+            output_index: 0,
+            name: variant.name,
+            arguments: variant.arguments,
+          },
+          {
+            type: "response.completed",
+            sequence_number: 2,
+            response: {
+              id: "resp_tools",
+              status: "completed",
+              output: [{ type: "function_call", id: "fc_final", call_id: "call_final", name: alias, arguments: "{\"path\":\"README.md\"}", status: "completed" }],
+            },
+          },
+        ])
+      }) as typeof fetch,
+    })
+
+    const response = await provider.generate(request({
+      tools: [{ name: "repo.read", capability: "repo.read", description: "Read a file", inputSchema: { type: "object" } }],
+      onStreamEvent(event) { observed.push(event) },
+    }))
+    assert.deepEqual(response.toolCalls, [{ id: "call_final", name: "repo.read", input: { path: "README.md" } }])
+    const doneEvent = observed.find((event) => event.type === "tool_call_delta")
+    assert.deepEqual(doneEvent, { type: "tool_call_delta", index: 0, id: "fc_stream_only" })
+    assert.equal(Object.hasOwn(doneEvent ?? {}, "name"), false)
+  }
+})
+
+test("OpenAI function-call done events keep required fields fail-closed", async () => {
+  const validDone: Record<string, unknown> = {
+    type: "response.function_call_arguments.done",
+    sequence_number: 1,
+    output_index: 0,
+    item_id: "fc_1",
+    arguments: "{}",
+  }
+  const cases: Array<{ label: string; overrides: Record<string, unknown> }> = [
+    { label: "missing output_index", overrides: { output_index: undefined } },
+    { label: "string output_index", overrides: { output_index: "0" } },
+    { label: "negative output_index", overrides: { output_index: -1 } },
+    { label: "fractional output_index", overrides: { output_index: 0.5 } },
+    { label: "missing item_id", overrides: { item_id: undefined } },
+    { label: "non-string item_id", overrides: { item_id: 1 } },
+    { label: "empty item_id", overrides: { item_id: "" } },
+    { label: "missing arguments", overrides: { arguments: undefined } },
+    { label: "non-string arguments", overrides: { arguments: {} } },
+  ]
+
+  for (const fixture of cases) {
+    const provider = new OpenAIResponsesProvider({
+      apiKey: "secret",
+      stream: true,
+      fetchImpl: (async () => sse([
+        { type: "response.created", sequence_number: 0, response: { id: "resp_tools" } },
+        { ...validDone, ...fixture.overrides },
+      ])) as typeof fetch,
+    })
+    await assert.rejects(
+      () => provider.generate(request()),
+      (error: unknown) =>
+        error instanceof ModelProviderError &&
+        error.code === "invalid_stream_event" &&
+        error.message === "OpenAI function-call completion event was malformed or out of order.",
+      fixture.label,
+    )
+  }
+})
+
+test("OpenAI function-call stream events cannot produce a partial executable call", async () => {
+  const observed: ModelProviderStreamEvent[] = []
+  const provider = new OpenAIResponsesProvider({
+    apiKey: "secret",
+    stream: true,
+    fetchImpl: (async () => sse([
+      { type: "response.created", sequence_number: 0, response: { id: "resp_tools" } },
+      { type: "response.function_call_arguments.delta", sequence_number: 1, item_id: "fc_1", output_index: 0, delta: "{\"path\":\"README.md\"}" },
+      { type: "response.function_call_arguments.done", sequence_number: 2, item_id: "fc_1", output_index: 0, name: "", arguments: "{\"path\":\"README.md\"}" },
+    ])) as typeof fetch,
+  })
+
+  let executableToolCalls: unknown
+  await assert.rejects(
+    async () => {
+      const response = await provider.generate(request({ onStreamEvent(event) { observed.push(event) } }))
+      executableToolCalls = response.toolCalls
+    },
+    (error: unknown) =>
+      error instanceof ModelProviderError &&
+      error.code === "incomplete_stream" &&
+      error.message === "OpenAI stream ended before response.completed.",
+  )
+  assert.equal(executableToolCalls, undefined)
+  assert.deepEqual(observed, [
+    { type: "started" },
+    { type: "tool_call_delta", index: 0, id: "fc_1", argumentsDelta: "{\"path\":\"README.md\"}" },
+    { type: "tool_call_delta", index: 0, id: "fc_1" },
+  ])
 })
 
 test("OpenAI response.failed preserves bounded approved diagnostics", async () => {
