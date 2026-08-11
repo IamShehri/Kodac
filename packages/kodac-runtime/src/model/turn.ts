@@ -3,6 +3,7 @@ import type { RuntimeOrchestrator } from "../runtime/orchestrator.ts"
 import type { RuntimeSession } from "../session/session.ts"
 import type { ToolRegistry } from "../tools/registry.ts"
 import { OpenAICompatibleProvider } from "./openai-compatible.ts"
+import { OpenAIResponsesProvider } from "./openai.ts"
 import {
   ModelProviderError,
   type ModelMessage,
@@ -83,6 +84,11 @@ export class AgentTurnRunner {
 
   private resolveProvider(name: string): ModelProvider {
     if (this.providers.has(name)) return this.providers.get(name)
+    if (name === "openai") {
+      const provider = new OpenAIResponsesProvider()
+      this.providers.register(provider)
+      return provider
+    }
     if (name === "openai-compatible") {
       const provider = OpenAICompatibleProvider.fromEnv()
       this.providers.register(provider)
