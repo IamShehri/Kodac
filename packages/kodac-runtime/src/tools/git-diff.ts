@@ -22,6 +22,18 @@ export function createGitDiffTool(gateway: ExecutionGateway, ledger: ReceiptLedg
   return {
     name: "git.diff",
     capability: "git.diff",
+    model: {
+      description: "Read the current Git diff for the workspace or a bounded set of workspace-relative paths.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          paths: { type: "array", items: { type: "string" }, maxItems: 64 },
+          maxOutputBytes: { type: "integer", minimum: 1, maximum: 1048576 },
+          timeoutMs: { type: "integer", minimum: 1, maximum: 10000 },
+        },
+        additionalProperties: false,
+      },
+    },
     async execute(input, context) {
       return gateway.gitDiff(
         input.paths ?? [],

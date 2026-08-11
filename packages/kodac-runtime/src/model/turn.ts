@@ -2,8 +2,13 @@ import { createHash } from "node:crypto"
 import type { RuntimeOrchestrator } from "../runtime/orchestrator.ts"
 import type { RuntimeSession } from "../session/session.ts"
 import type { ToolRegistry } from "../tools/registry.ts"
-import type { ModelMessage, ModelProviderResponse, ModelToolCall } from "./provider.ts"
-import type { ProviderRegistry } from "./provider.ts"
+import {
+  ModelProviderError,
+  type ModelMessage,
+  type ModelProviderResponse,
+  type ModelToolCall,
+  type ProviderRegistry,
+} from "./provider.ts"
 
 export interface AgentTurnInput {
   provider: string
@@ -25,6 +30,7 @@ export interface AgentToolResult {
 export interface AgentTurnResult {
   assistant: string
   finishReason: ModelProviderResponse["finishReason"]
+  toolCalls: ModelToolCall[]
   toolResults: AgentToolResult[]
 }
 
@@ -82,7 +88,7 @@ export class AgentTurnRunner {
       provider: provider.name,
       model: input.model,
       messageCount: input.messages.length,
-      tools,
+      tools: tools.map((tool) => ({ name: tool.name, capability: tool.capability })),
     })
 
     let response: ModelProviderResponse
@@ -100,6 +106,9 @@ export class AgentTurnRunner {
         provider: provider.name,
         model: input.model,
         error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof ModelProviderError
+          ? { providerCode: error.code, retryable: error.retryable, status: error.status }
+          : {}),
       })
       throw error
     }
@@ -110,6 +119,11 @@ export class AgentTurnRunner {
       finishReason: response.finishReason,
       assistantLength: response.assistant.length,
       toolCallCount: response.toolCalls.length,
+      responseId: response.metadata?.responseId,
+      requestId: response.metadata?.requestId,
+      latencyMs: response.metadata?.latencyMs,
+      attempts: response.metadata?.attempts,
+      usage: response.metadata?.usage,
     })
 
     if (response.assistant) {
@@ -138,6 +152,7 @@ export class AgentTurnRunner {
     return {
       assistant: response.assistant,
       finishReason: response.finishReason,
+      toolCalls: response.toolCalls.map((call) => ({ ...call })),
       toolResults,
     }
   }

@@ -54,6 +54,18 @@ export function createRepoReadTool(fs: WorkspaceFileSystem, policy: PolicyEngine
   return {
     name: "repo.read",
     capability: "repo.read",
+    model: {
+      description: "Read a bounded UTF-8 text file inside the current Kodac workspace.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Workspace-relative file path." },
+          maxBytes: { type: "integer", minimum: 1, maximum: MAX_READ_BYTES },
+        },
+        required: ["path"],
+        additionalProperties: false,
+      },
+    },
     async execute(input, context) {
       const maxBytes = boundedInteger("maxBytes", input.maxBytes, 64 * 1024, MAX_READ_BYTES)
       await authorizeReadOnly("repo.read", [input.path], { path: input.path, maxBytes }, policy, context)
@@ -74,6 +86,19 @@ export function createRepoListTool(fs: WorkspaceFileSystem, policy: PolicyEngine
   return {
     name: "repo.list",
     capability: "repo.list",
+    model: {
+      description: "List bounded workspace files and directories without escaping the repository boundary.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Workspace-relative directory path. Defaults to repository root." },
+          recursive: { type: "boolean" },
+          maxEntries: { type: "integer", minimum: 1, maximum: MAX_LIST_ENTRIES },
+          maxDepth: { type: "integer", minimum: 1, maximum: 12 },
+        },
+        additionalProperties: false,
+      },
+    },
     async execute(input, context) {
       const path = input.path ?? "."
       const maxEntries = boundedInteger("maxEntries", input.maxEntries, 200, MAX_LIST_ENTRIES)
@@ -96,6 +121,20 @@ export function createRepoSearchTool(fs: WorkspaceFileSystem, policy: PolicyEngi
   return {
     name: "repo.search",
     capability: "repo.search",
+    model: {
+      description: "Search bounded UTF-8 workspace text for an exact text fragment.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", minLength: 1 },
+          path: { type: "string", description: "Workspace-relative search root. Defaults to repository root." },
+          caseSensitive: { type: "boolean" },
+          maxResults: { type: "integer", minimum: 1, maximum: MAX_SEARCH_RESULTS },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+    },
     async execute(input, context) {
       if (!input.query) throw new Error("repo.search query must not be empty")
       const path = input.path ?? "."
