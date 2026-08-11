@@ -22,6 +22,10 @@ function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex")
 }
 
+function compareCanonicalStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
 function boundedInteger(name: string, value: number | undefined, fallback: number, maximum: number): number {
   if (value === undefined) return fallback
   if (!Number.isInteger(value) || value <= 0 || value > maximum) throw new Error(`${name} must be a positive integer <= ${maximum}`)
@@ -49,7 +53,11 @@ function canonicalChange(change: GitWorkingTreeChange): object {
 }
 
 function canonicalCompleteness(completeness: SnapshotCompleteness): object {
-  return { state: completeness.state, reasons: [...completeness.reasons].sort(), omittedAtLeast: completeness.omittedAtLeast }
+  return {
+    state: completeness.state,
+    reasons: [...completeness.reasons].sort(compareCanonicalStrings),
+    omittedAtLeast: completeness.omittedAtLeast,
+  }
 }
 
 function changeState(indexStatus: string, worktreeStatus: string): GitWorkingTreeChange["state"] {
@@ -81,7 +89,11 @@ export function parseGitStatusPorcelainV1Z(raw: string): GitWorkingTreeChange[] 
       changes.push({ path, state, indexStatus, worktreeStatus })
     }
   }
-  return changes.sort((a, b) => a.path.localeCompare(b.path) || (a.sourcePath ?? "").localeCompare(b.sourcePath ?? ""))
+  return changes.sort(
+    (a, b) =>
+      compareCanonicalStrings(a.path, b.path)
+      || compareCanonicalStrings(a.sourcePath ?? "", b.sourcePath ?? ""),
+  )
 }
 
 export interface GitSnapshotObservation<T> {
@@ -138,7 +150,7 @@ function completenessFor(entries: RepositoryInventoryEntry[], overLimit: boolean
   if (entries.some((entry) => entry.type === "symlink")) reasons.push("symlink-content-not-hashed")
   return {
     state: reasons.includes("max-entries") || reasons.includes("max-depth") ? "truncated" : reasons.length ? "partial" : "complete",
-    reasons: [...new Set(reasons)].sort(),
+    reasons: [...new Set(reasons)].sort(compareCanonicalStrings),
     omittedAtLeast,
   }
 }
@@ -157,9 +169,14 @@ export async function captureRepositorySnapshot(
   if (!/^[0-9a-f]{40,64}$/i.test(preHead.value)) throw new Error("K3-R2 requires a full Git HEAD object id")
 
   const listed = await fs.list(".", { recursive: true, maxEntries: maxEntries + 1, maxDepth })
-  const overLimit = listed.length > maxEntries
-  const retained = listed.slice(0, maxEntries).map((entry) => ({ ...entry, path: portablePath(entry.path) }))
-  retained.sort((a, b) => a.path.localeCompare(b.path) || a.type.localeCompare(b.type))
+  const normalizedListed = listed.map((entry) => ({ ...entry, path: portablePath(entry.path) }))
+  normalizedListed.sort(
+    (a, b) =>
+      compareCanonicalStrings(a.path, b.path)
+      || compareCanonicalStrings(a.type, b.type),
+  )
+  const overLimit = normalizedListed.length > maxEntries
+  const retained = normalizedListed.slice(0, maxEntries)
 
   const files = retained.filter((entry) => entry.type === "file")
   const objectIds = new Map<string, { gitObjectId: string; provenanceRef?: string }>()
@@ -232,9 +249,10 @@ export async function captureRepositorySnapshot(
       claim: { kind: "architecture-candidate", value: "candidate" },
     })
   }
-  evidence.sort((a, b) => a.evidenceId.localeCompare(b.evidenceId))
+  evidence.sort((a, b) => compareCanonicalStrings(a.evidenceId, b.evidenceId))
 
-  const sourceRefs = (values: Array<string | undefined>): string[] => [...new Set(values.filter((value): value is string => Boolean(value)))].sort()
+  const sourceRefs = (values: Array<string | undefined>): string[] =>
+    [...new Set(values.filter((value): value is string => Boolean(value)))].sort(compareCanonicalStrings)
   const sources: RepositoryEvidenceSource[] = [
     { id: "builtin.git.head.v1", kind: "builtin", provenanceRefs: sourceRefs([preHead.provenanceRef, postHead.provenanceRef]) },
     { id: "builtin.git.status-porcelain-v1-z.v1", kind: "builtin", provenanceRefs: sourceRefs([preStatus.provenanceRef, postStatus.provenanceRef]) },

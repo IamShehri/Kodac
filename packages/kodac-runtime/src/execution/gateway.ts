@@ -74,16 +74,25 @@ async function persistReceipt(observer: ExecutionObserver | undefined, receipt: 
   }
 }
 
+interface ProcessOptions {
+  signal?: AbortSignal
+  maxOutputBytes: number
+  timeoutMs: number
+  env?: NodeJS.ProcessEnv
+}
+
+type ProcessRunner = (
+  executable: string,
+  args: string[],
+  cwd: string,
+  options: ProcessOptions,
+) => Promise<{ stdout: string; stderr: string }>
+
 function runProcess(
   executable: string,
   args: string[],
   cwd: string,
-  options: {
-    signal?: AbortSignal
-    maxOutputBytes: number
-    timeoutMs: number
-    env?: NodeJS.ProcessEnv
-  },
+  options: ProcessOptions,
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolvePromise, rejectPromise) => {
     execFile(
@@ -109,6 +118,21 @@ function runProcess(
   })
 }
 
+function parseGitHeadOutput(stdout: string): string {
+  const head = stdout.trim()
+  if (!/^[0-9a-f]{40,64}$/i.test(head)) throw new Error("git rev-parse HEAD did not return a full object id")
+  return head.toLowerCase()
+}
+
+function parseGitHashObjectOutput(stdout: string, expectedCount: number): string[] {
+  const objectIds = stdout.split(/\r?\n/).filter(Boolean)
+  if (objectIds.length !== expectedCount) throw new Error("git hash-object result count does not match requested path count")
+  return objectIds.map((gitObjectId) => {
+    if (!/^[0-9a-f]+$/i.test(gitObjectId)) throw new Error("git hash-object returned an invalid object id")
+    return gitObjectId.toLowerCase()
+  })
+}
+
 async function digestAffectedState(fs: WorkspaceFileSystem, affected: AffectedPaths): Promise<string> {
   const rows: string[] = []
   for (const path of [...affected.added, ...affected.modified].sort()) {
@@ -121,6 +145,7 @@ async function digestAffectedState(fs: WorkspaceFileSystem, affected: AffectedPa
 export class ExecutionGateway {
   private readonly fs: WorkspaceFileSystem
   private readonly policy: PolicyEngine
+  private readonly processRunner: ProcessRunner = runProcess
 
   constructor(fs: WorkspaceFileSystem, policy: PolicyEngine) {
     this.fs = fs
@@ -217,10 +242,11 @@ export class ExecutionGateway {
       observer,
       { ...options, maxOutputBytes: options.maxOutputBytes ?? 4096, timeoutMs: options.timeoutMs ?? 5_000 },
       "git rev-parse HEAD",
+      (stdout) => {
+        parseGitHeadOutput(stdout)
+      },
     )
-    const head = result.stdout.trim()
-    if (!/^[0-9a-f]{40,64}$/i.test(head)) throw new ExecutionFailedError("git rev-parse HEAD did not return a full object id", result.receipt)
-    return { head: head.toLowerCase(), receipt: result.receipt }
+    return { head: parseGitHeadOutput(result.stdout), receipt: result.receipt }
   }
 
   async gitStatus(
@@ -260,14 +286,15 @@ export class ExecutionGateway {
       observer,
       { ...options, maxOutputBytes: options.maxOutputBytes ?? 64 * 1024, timeoutMs: options.timeoutMs ?? 10_000 },
       "git hash-object",
+      (stdout) => {
+        parseGitHashObjectOutput(stdout, paths.length)
+      },
     )
-    const objectIds = result.stdout.split(/\r?\n/).filter(Boolean)
-    if (objectIds.length !== paths.length) throw new ExecutionFailedError("git hash-object result count does not match requested path count", result.receipt)
-    const objects = paths.map((path, index) => {
-      const gitObjectId = objectIds[index]
-      if (!/^[0-9a-f]+$/i.test(gitObjectId)) throw new ExecutionFailedError("git hash-object returned an invalid object id", result.receipt)
-      return { path: portablePath(path), gitObjectId: gitObjectId.toLowerCase() }
-    })
+    const objectIds = parseGitHashObjectOutput(result.stdout, paths.length)
+    const objects = paths.map((path, index) => ({
+      path: portablePath(path),
+      gitObjectId: objectIds[index],
+    }))
     return { objects, receipt: result.receipt }
   }
 
@@ -302,6 +329,7 @@ export class ExecutionGateway {
       env?: NodeJS.ProcessEnv
     },
     label: string,
+    validateOutput?: (stdout: string, stderr: string) => void,
   ): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
     const startedAt = new Date().toISOString()
     const maxOutputBytes = options.maxOutputBytes ?? 256 * 1024
@@ -329,12 +357,13 @@ export class ExecutionGateway {
 
     try {
       for (const path of paths) await this.fs.validatePath(path)
-      const { stdout, stderr } = await runProcess(executable, args, this.fs.root, {
+      const { stdout, stderr } = await this.processRunner(executable, args, this.fs.root, {
         signal: options.signal,
         maxOutputBytes,
         timeoutMs,
         env: options.env,
       })
+      validateOutput?.(stdout, stderr)
       const combined = `${stdout}\0${stderr}`
       const receipt = createReceipt({
         capability: intent.capability,

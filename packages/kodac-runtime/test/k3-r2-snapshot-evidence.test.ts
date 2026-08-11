@@ -8,6 +8,7 @@ import test from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { NodeWorkspaceFileSystem, type WorkspaceFileSystem } from "../src/edit/filesystem.ts"
+import type { ExecutionReceipt } from "../src/evidence/receipt.ts"
 import { ExecutionGateway } from "../src/execution/gateway.ts"
 import {
   captureRepositorySnapshot,
@@ -77,6 +78,21 @@ function fakeFs(root: string, entries: { path: string; type: "file" | "directory
 function gitBlobSha1(bytes: Buffer): string {
   const header = Buffer.from(`blob ${bytes.length}\0`, "utf8")
   return createHash("sha1").update(header).update(bytes).digest("hex")
+}
+
+function receiptRecorder(statuses: string[]) {
+  return {
+    onReceipt(receipt: ExecutionReceipt) {
+      statuses.push(receipt.result.status)
+    },
+  }
+}
+
+function setGatewayProcessOutput(gateway: ExecutionGateway, stdout: string, stderr = ""): void {
+  const testableGateway = gateway as unknown as {
+    processRunner: () => Promise<{ stdout: string; stderr: string }>
+  }
+  testableGateway.processRunner = async () => ({ stdout, stderr })
 }
 
 test("K3-R2 clean repository produces a current complete deterministic snapshot", async () => {
@@ -154,6 +170,32 @@ test("K3-R2 preserves mixed XY status without collapsing it", () => {
   assert.equal(change.worktreeStatus, "M")
 })
 
+test("K3-R2 canonical ordering is locale-independent across mixed-case and non-ASCII source order", async () => {
+  const entries = [
+    { path: "zeta.ts", type: "file" as const },
+    { path: "Álpha.ts", type: "file" as const },
+    { path: "Beta.ts", type: "file" as const },
+    { path: "alpha.ts", type: "file" as const },
+  ]
+  const statusA = "?? zeta.ts\0?? Álpha.ts\0?? Beta.ts\0?? alpha.ts\0"
+  const statusB = "?? alpha.ts\0?? Beta.ts\0?? Álpha.ts\0?? zeta.ts\0"
+  const first = await captureRepositorySnapshot(
+    fakeFs("/fixture", entries),
+    fakeSource(["a".repeat(40)], [statusA]),
+  )
+  const second = await captureRepositorySnapshot(
+    fakeFs("/fixture", [...entries].reverse()),
+    fakeSource(["a".repeat(40)], [statusB]),
+  )
+  const expectedPaths = ["Beta.ts", "alpha.ts", "zeta.ts", "Álpha.ts"]
+  assert.deepEqual(first.inventory.map((entry) => entry.path), expectedPaths)
+  assert.deepEqual(second.inventory.map((entry) => entry.path), expectedPaths)
+  assert.deepEqual(first.workingTree.map((entry) => entry.path), expectedPaths)
+  assert.deepEqual(second.workingTree.map((entry) => entry.path), expectedPaths)
+  assert.equal(first.contentIdentity.value, second.contentIdentity.value)
+  assert.deepEqual(first.evidence.map((entry) => entry.evidenceId), second.evidence.map((entry) => entry.evidenceId))
+})
+
 test("K3-R2 inventory over the entry limit reports explicit truncation", async () => {
   const fs = fakeFs("/fixture", [
     { path: "a.txt", type: "file" },
@@ -224,6 +266,56 @@ test("K3-R2 generic ExecutionGateway.runCommand cannot spoof reserved git or rep
   }
 })
 
+test("K3-R2 malformed git.head output persists failure only", async () => {
+  const gateway = new ExecutionGateway(fakeFs("/fixture", []), repositoryIntelligenceReadPolicy())
+  setGatewayProcessOutput(gateway, "not-a-git-object\n")
+  const statuses: string[] = []
+  await assert.rejects(
+    () => gateway.gitHead(receiptRecorder(statuses)),
+    /did not return a full object id/,
+  )
+  assert.deepEqual(statuses, ["failure"])
+})
+
+test("K3-R2 malformed or mismatched git.hash-object output persists failure only", async () => {
+  for (const stdout of ["", "not-an-object\n"]) {
+    const gateway = new ExecutionGateway(
+      fakeFs("/fixture", [{ path: "a.txt", type: "file" }]),
+      repositoryIntelligenceReadPolicy(),
+    )
+    setGatewayProcessOutput(gateway, stdout)
+    const statuses: string[] = []
+    await assert.rejects(
+      () => gateway.gitHashObjects(["a.txt"], receiptRecorder(statuses)),
+      /git hash-object/,
+    )
+    assert.deepEqual(statuses, ["failure"])
+  }
+})
+
+test("K3-R2 valid git.head and git.hash-object persist success receipts", async () => {
+  const headGateway = new ExecutionGateway(fakeFs("/fixture", []), repositoryIntelligenceReadPolicy())
+  const headObjectId = "a".repeat(40)
+  setGatewayProcessOutput(headGateway, `${headObjectId}\n`)
+  const headStatuses: string[] = []
+  const headResult = await headGateway.gitHead(receiptRecorder(headStatuses))
+  assert.equal(headResult.head, headObjectId)
+  assert.equal(headResult.receipt.result.status, "success")
+  assert.deepEqual(headStatuses, ["success"])
+
+  const hashGateway = new ExecutionGateway(
+    fakeFs("/fixture", [{ path: "a.txt", type: "file" }]),
+    repositoryIntelligenceReadPolicy(),
+  )
+  const fileObjectId = "b".repeat(40)
+  setGatewayProcessOutput(hashGateway, `${fileObjectId}\n`)
+  const hashStatuses: string[] = []
+  const hashResult = await hashGateway.gitHashObjects(["a.txt"], receiptRecorder(hashStatuses))
+  assert.deepEqual(hashResult.objects, [{ path: "a.txt", gitObjectId: fileObjectId }])
+  assert.equal(hashResult.receipt.result.status, "success")
+  assert.deepEqual(hashStatuses, ["success"])
+})
+
 test("K3-R2 dedicated git.hash-object preserves path order and object identities", async () => {
   const root = await initRepository({ "a.txt": "a\n", "b.txt": "b\n" })
   try {
@@ -261,8 +353,8 @@ test("K3-R2 ADR and spec discovery is heuristic candidate evidence only", async 
 test("K3-R2 RepositoryContentIdentity excludes workspace-local root identity", async () => {
   const sourceA = fakeSource(["a".repeat(40)], [""])
   const sourceB = fakeSource(["a".repeat(40)], [""])
-  const one = await captureRepositorySnapshot(fakeFs("/one", [],), sourceA)
-  const two = await captureRepositorySnapshot(fakeFs("/two", [],), sourceB)
+  const one = await captureRepositorySnapshot(fakeFs("/one", []), sourceA)
+  const two = await captureRepositorySnapshot(fakeFs("/two", []), sourceB)
   assert.equal(one.contentIdentity.value, two.contentIdentity.value)
   assert.notEqual(one.repositoryIdentity.value, two.repositoryIdentity.value)
   assert.notEqual(one.snapshotIdentity.value, two.snapshotIdentity.value)
