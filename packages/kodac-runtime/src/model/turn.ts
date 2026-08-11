@@ -2,9 +2,11 @@ import { createHash } from "node:crypto"
 import type { RuntimeOrchestrator } from "../runtime/orchestrator.ts"
 import type { RuntimeSession } from "../session/session.ts"
 import type { ToolRegistry } from "../tools/registry.ts"
+import { OpenAICompatibleProvider } from "./openai-compatible.ts"
 import {
   ModelProviderError,
   type ModelMessage,
+  type ModelProvider,
   type ModelProviderResponse,
   type ModelToolCall,
   type ProviderRegistry,
@@ -79,9 +81,19 @@ export class AgentTurnRunner {
     this.session = session
   }
 
+  private resolveProvider(name: string): ModelProvider {
+    if (this.providers.has(name)) return this.providers.get(name)
+    if (name === "openai-compatible") {
+      const provider = OpenAICompatibleProvider.fromEnv()
+      this.providers.register(provider)
+      return provider
+    }
+    return this.providers.get(name)
+  }
+
   async run(input: AgentTurnInput, hooks: AgentTurnHooks = {}): Promise<AgentTurnResult> {
     throwIfAborted(input.signal)
-    const provider = this.providers.get(input.provider)
+    const provider = this.resolveProvider(input.provider)
     const tools = this.tools.list()
 
     await this.session.emit("model.requested", {
