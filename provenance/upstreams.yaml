@@ -1,0 +1,153 @@
+schema_version: 1
+as_of: "2026-08-11"
+canonical_base: c425dca6e9d5474aca50d288064fa56eb21a1b9e
+policy:
+  code_import_authorized: false
+  require_exact_commit: true
+  require_component_license_review: true
+  require_import_record: true
+  require_behavioral_tests: true
+  notes:
+    - "These entries are discovery baselines, not authorization to import source code."
+    - "Mixed-license repositories must be reviewed at path/component level."
+
+upstreams:
+  - id: opencode
+    repository: https://github.com/anomalyco/opencode
+    ref: dev
+    commit: 3a90639cb57619a21e59f544b3e8d23ffed56f48
+    repository_license: MIT
+    role: runtime-foundation
+    decision: selective-foundation
+    priority_review:
+      - packages/opencode/src/acp
+      - packages/opencode/src/agent
+      - packages/opencode/src/bus
+      - packages/opencode/src/config
+      - packages/opencode/src/git
+      - packages/opencode/src/ide
+      - packages/opencode/src/lsp
+      - packages/opencode/src/mcp
+      - packages/opencode/src/patch
+      - packages/opencode/src/permission
+      - packages/opencode/src/plugin
+      - packages/opencode/src/project
+      - packages/opencode/src/provider
+      - packages/opencode/src/server
+      - packages/opencode/src/session
+      - packages/opencode/src/skill
+      - packages/opencode/src/snapshot
+      - packages/opencode/src/storage
+      - packages/opencode/src/tool
+      - packages/opencode/src/worktree
+    default_exclude_until_needed:
+      - account/cloud-specific identity
+      - hosted control plane
+      - upstream sharing/sync services
+      - upstream telemetry/business-specific services
+
+  - id: kilo
+    repository: https://github.com/Kilo-Org/kilocode
+    ref: main
+    commit: 907ed2b28d3ad86a12e34b244951dd75bd8e9998
+    repository_license: MIT
+    role: surface-comparator-and-donor
+    decision: selective-donor
+    priority_review:
+      - packages/kilo-vscode
+      - packages/kilo-jetbrains
+      - packages/client
+      - packages/protocol
+      - packages/kilo-indexing
+      - packages/kilo-memory
+      - packages/kilo-sandbox
+    notes:
+      - "Compare with OpenCode equivalents before importing; never run duplicate canonical runtimes."
+
+  - id: codex
+    repository: https://github.com/openai/codex
+    ref: main
+    commit: cc2f2620330116b961c87430d9fdaa16d948d3bf
+    repository_license: Apache-2.0
+    role: trusted-execution-donor
+    decision: selective-donor-and-reference
+    priority_review:
+      - codex-rs/app-server
+      - codex-rs/app-server-protocol
+      - codex-rs/app-server-transport
+      - codex-rs/exec
+      - codex-rs/execpolicy
+      - codex-rs/sandboxing
+      - codex-rs/linux-sandbox
+      - codex-rs/windows-sandbox-rs
+      - codex-rs/process-hardening
+      - codex-rs/network-proxy
+      - codex-rs/secrets
+      - codex-rs/protocol
+      - codex-rs/apply-patch
+      - codex-rs/rollout-trace
+      - codex-rs/otel
+      - codex-rs/skills
+
+  - id: cline
+    repository: https://github.com/cline/cline
+    ref: main
+    commit: ffd6a6b1dbcc89955132ded8348f9842d59cac3b
+    repository_license: Apache-2.0
+    role: agent-reliability-mechanics
+    decision: behavior-donor-and-reference
+    priority_review:
+      - checkpoints
+      - session recovery
+      - Plan/Act UX
+      - CLI/IDE shared-core boundaries
+      - worktree and parallel-task mechanics
+      - skills/rules/MCP UX
+
+  - id: aider
+    repository: https://github.com/Aider-AI/aider
+    ref: main
+    commit: 5dc9490bb35f9729ef2c95d00a19ccd30c26339c
+    repository_license: Apache-2.0
+    role: editing-and-repository-algorithms
+    decision: reimplement-or-port-with-tests
+    priority_review:
+      - aider/repomap.py
+      - aider/repo.py
+      - aider/diffs.py
+      - aider/coders
+      - aider/linter.py
+      - aider/queries
+
+  - id: tabby
+    repository: https://github.com/TabbyML/tabby
+    ref: main
+    commit: 21b29048d7bcf6b94f9f482f2d0fd05efadfd19f
+    repository_license: mixed
+    role: autocomplete-donor-and-reference
+    decision: selective-donor-after-path-license-review
+    license_notes:
+      - "Repository root LICENSE states ee/ is separately licensed."
+      - "Do not import ee/."
+      - "Third-party components retain their own licenses and require inventory."
+      - "Eligible non-enterprise source outside separately licensed components is Apache-2.0 per root LICENSE."
+
+  - id: pr-agent
+    repository: https://github.com/The-PR-Agent/pr-agent
+    ref: main
+    commit: 20bc0fe8ae7c1494c0be580f7ceb35a1c45e5741
+    repository_license: MIT
+    role: review-bootstrap
+    decision: selective-donor-and-adapt
+    priority_review:
+      - Git provider adapters
+      - PR and diff parsing
+      - review request pipeline
+      - comment/update mechanics
+      - prompt/config patterns
+    native_kodac_exclusions:
+      - Proof Review
+      - Kodac Judge
+      - evidence requirements
+      - finding deduplication and calibration
+      - merge-confidence calibration

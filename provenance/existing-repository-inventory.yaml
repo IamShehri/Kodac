@@ -1,0 +1,64 @@
+schema_version: 1
+as_of: "2026-08-11"
+repository: https://github.com/IamShehri/Kodac
+review_ref: docs/kodac-k0-k1-oss-intake
+purpose: pre-K2 third-party and legacy inventory
+
+areas:
+  - path: agents/
+    classification: legacy-evidence-data
+    k2_disposition: preserve-and-migrate
+    third_party_source_status: no_embedded_source_identified_in_gate_search
+  - path: schema/
+    classification: legacy-evidence-schema
+    k2_disposition: preserve-and-migrate
+    third_party_source_status: no_embedded_source_identified_in_gate_search
+  - path: matrix/
+    classification: generated-evidence-view
+    k2_disposition: preserve-until-parity
+    third_party_source_status: no_embedded_source_identified_in_gate_search
+  - path: tools/
+    classification: legacy-python-evidence-tooling
+    k2_disposition: preserve-until-parity
+    third_party_source_status: no_embedded_source_identified_in_gate_search
+  - path: nexusmcp/omni-bridge/
+    classification: historical-typescript-prototype
+    k2_disposition: quarantine-exclude-from-runtime-intake
+    third_party_source_status: origin_not_independently_established
+    notes:
+      - Contains its own npm dependency manifest and lockfile.
+      - No claim is made that this subtree is clean-room or donor-free.
+      - It must not be copied into the new trusted runtime without a separate provenance review.
+  - path: proposal/
+    classification: historical-planning
+    k2_disposition: preserve-reference-only
+  - path: docs/architecture/
+    classification: historical-architecture
+    k2_disposition: superseded-by-accepted-kodac-adrs-where-conflicting
+  - path: docs/decisions/
+    classification: historical-adrs
+    k2_disposition: historical-only
+
+search_observations:
+  copyright_header_search_results: 0
+  spdx_header_search_results: 0
+  apache_phrase_code_search_results: 0
+  git_submodule_manifest_observed: false
+
+external_dependencies:
+  python:
+    manifest: pyproject.toml
+    direct_runtime:
+      - pyyaml
+      - jsonschema
+    direct_dev:
+      - pytest
+      - ruff
+  legacy_omni_bridge:
+    manifest: nexusmcp/omni-bridge/package.json
+    status: quarantined_dependency_tree
+
+k2_intake_boundary:
+  new_runtime_paths_must_be_new_or_explicitly_migrated: true
+  no_legacy_subtree_is_authorized_as_donor_source: true
+  no_third_party_source_import_is_authorized: true

@@ -1,133 +1,259 @@
-# Kernux
+<div align="center">
 
-> Compare AI coding agents using evidence, not marketing.
+# Kodac
 
-**Kernux** is an open, evidence-backed guide to AI coding agents — an
-independent, source-cited index that normalizes fragmented evidence (vendor
-documentation, academic benchmarks, community comparisons, marketing claims)
-into sourced profiles and decision-oriented comparisons.
+**Done means proven.**
 
-> **Phase 1 status.** This repository currently contains a single vertical
-> slice: **one profiled agent ([OpenCode](agents/opencode/profile.yaml))**, the
-> agent-profile schema and validator, a deterministic comparison matrix, and
-> tests. The other nine launch profiles, Controlled Evaluation Tasks, Runs,
-> reports, and any hosted website are **not yet implemented**.
+Open, model-agnostic agentic engineering with bounded execution, verification, evidence, and proof-oriented completion.
 
-## What you can do right now (zero-install)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+![Node](https://img.shields.io/badge/Node.js-24%2B-339933)
+![K2](https://img.shields.io/badge/K2-PROVEN__READY-6F42C1)
+![Status](https://img.shields.io/badge/status-active%20development-0A7F5A)
 
-- Read the [**Agent Matrix**](matrix/AGENT_MATRIX.md) — a generated, no-overall-score
-  comparison of profiled agents.
-- Read the [**OpenCode profile**](agents/opencode/profile.yaml) — every factual
-  field cites a primary source and a verification date.
-- Read the [**Profile Sourcing Methodology**](docs/methodology/PROFILE_SOURCING.md)
-  for how facts are sourced, labeled, and kept fresh.
-
-## How Kernux works
-
-- **Canonical format:** profiles are YAML (`agents/<id>/profile.yaml`), validated
-  by a [strict JSON Schema](schema/agent-profile.schema.json) plus a custom
-  evidence-policy layer. Markdown is a generated view, not the source of truth.
-- **Evidence before claims:** every non-`unknown` factual field carries a source
-  with a content digest (`content_sha256`) and a verification date. Immutable
-  sources are pinned where technically possible (raw GitHub URLs pinned to exact
-  commit SHAs); dynamic sources (GitHub API, vendor homepages) carry a
-  point-in-time digest and may drift. A digest alone does not make a dynamic
-  URL immutable.
-  Vendor-reported facts are labeled `vendor-reported`; artifact-verified facts
-  (repository identity, LICENSE, release metadata) are labeled `verified`.
-- **Claim status is mechanical, not prose.** Each evidence record carries a
-  `verification_method` that must be compatible with its `claim_status`:
-  `verified` requires `repository-artifact`, `repository-metadata`,
-  `release-metadata`, or (future) `independent-execution`;
-  `vendor-reported` requires `official-documentation` or `vendor-marketing`.
-- **Derived evidence summaries:** `evidence_status` and `last_verified` are
-  computed by tooling from field-level claim statuses, never authored by hand.
-- **`unknown` and `stale` are different states.** `unknown` means no source was
-  found (absence of documentation is not a vendor claim); `stale` means a
-  previously-verified source is past its freshness window.
-- **Freshness windows (field-specific):** 30 days (price/versions/models/retention),
-  90 days (capabilities/integrations/protocols/modes/sandbox),
-  180 days (identity/openness). Expired values are visibly marked `STALE`.
-
-## Claim status and evidence semantics
-
-A factual field is one of:
-
-| State             | Meaning                                                                                       |
-|-------------------|-----------------------------------------------------------------------------------------------|
-| `verified`        | Established from a directly inspectable artifact (repository identity, LICENSE, release metadata) or independent execution. Does **not** mean "a contributor read a vendor documentation page." |
-| `vendor-reported` | A direct claim from official documentation, vendor website, or marketing; not independently reproduced. |
-| `unknown`         | No acceptable direct source found. Absence of documentation is **not** a vendor claim — it is an assessment limitation. |
-| `disputed`        | Acceptable sources conflict; the dispute is documented in the profile.                        |
-
-Phase 1 has **no Run evidence** and **no independent behavioral reproduction**.
-Reading a vendor's documentation does not independently verify product behavior;
-behavioral, capability, protocol, pricing, and privacy fields are
-`vendor-reported`. Only repository identity, license, and release metadata are
-`verified` (artifact-based).
-
-## Complementary to SWE-bench
-
-Kernux is **complementary to SWE-bench** and other academic benchmarks.
-SWE-bench measures performance on real GitHub issues under its methodology.
-Kernux focuses on product capabilities, operating conditions, provenance, and
-decision support. Kernux does **not** market its (future) Controlled Evaluation
-Tasks as a SWE-bench replacement.
-
-## No overall score
-
-Kernux does **not** publish an overall "Kernux Score" or league table.
-Comparisons are decision-oriented (privacy characteristics, local-model
-capability, terminal support, headless/CI support, permission/sandbox controls,
-model-provider flexibility) and are never universal winner declarations.
-
-## Not yet implemented
-
-The following are part of the ratified roadmap but are **not** in Phase 1:
-
-- the other nine launch profiles (Claude Code, Gemini CLI, GitHub Copilot,
-  Cursor, Windsurf, Aider, Cline, OpenHands, OpenAI Codex);
-- Controlled Evaluation Tasks;
-- Run evidence bundles and benchmark execution;
-- dated analytical reports;
-- a hosted website, CI beyond the local toolchain, and any launch activity.
-
-## Tooling (for contributors)
-
-```bash
-uv sync                                       # install Python deps from uv.lock
-uv run python -m tools.validate_profiles      # validate all profiles
-uv run python -m tools.generate_matrix        # regenerate the matrix
-uv run python -m tools.generate_matrix --check # fail if matrix is out of date
-uv run pytest -q                              # run the test suite
-uv run ruff check .                           # lint
-uv run ruff format --check .                  # format check (optional)
-```
-
-No network access is required to validate profiles, generate the matrix, or run
-tests. Python 3.11+ and [uv](https://github.com/astral-sh/uv) are the only
-toolchain requirements.
-
-## Relationship to earlier work
-
-This repository previously hosted a different direction (a "trust kernel" /
-`nexusmcp` OmniBridge prototype). That material is **historical** and is **not**
-part of this product. It is preserved on local archive branches
-(`archive/trust-kernel-s0b`, `archive/omnibridge-pre-reboot`) and is not mixed
-into the new product identity.
-
-## Ratified proposal documents
-
-The product strategy, schema, evidence policy, competitor map, roadmap, and
-founder decisions live under [`proposal/`](proposal/). The authoritative record
-is [`proposal/FOUNDER_DECISIONS.md`](proposal/FOUNDER_DECISIONS.md).
-
-## License
-
-Apache-2.0. See [LICENSE](LICENSE).
+</div>
 
 ---
 
-*Phase 1 vertical slice. No launch is authorized. No overall score is computed.
-Kernux makes no compliance, certification, security, or production-readiness
-claim beyond what is explicitly sourced and labeled in each profile.*
+## Why Kodac exists
+
+Coding agents are getting very good at producing patches. The harder problem is deciding whether a patch is **allowed, correct, verified, and actually ready**.
+
+Kodac is built around that boundary.
+
+It separates model reasoning from execution authority, routes side effects through explicit policy, records machine-readable receipts, runs independent verification, and lets a dedicated **Done Gate** decide whether work has reached `PROVEN_READY`.
+
+```text
+Understand → Plan → Build → Verify → Prove
+```
+
+The goal is simple:
+
+> **A model can propose the change. Kodac must prove the change.**
+
+## Core capabilities
+
+| Capability | What Kodac provides |
+|---|---|
+| **Trusted execution** | Policy-gated tools, workspace confinement, exact write scope, bounded side effects |
+| **Model independence** | Provider abstraction without moving execution authority into the model |
+| **Bounded agents** | Turn, tool-call, elapsed-time, failure, repetition, and output limits |
+| **Evidence** | Canonical events, execution receipts, digests, plans, and proof artifacts |
+| **Verification** | Structured command planning and execution outside assistant prose |
+| **Done Gate** | `PROVEN_READY` only when required evidence and verification succeed |
+| **OSS provenance** | Explicit authorization, source identity, license, and import records for donor code |
+| **Protected integration** | Required governance and runtime gates before canonical `main` can move |
+
+## Runtime architecture
+
+```mermaid
+flowchart LR
+    A[Task] --> B[Model / Agent Loop]
+    B --> C[Tool Registry]
+    C --> D[Runtime Orchestrator]
+    D --> E[Execution Gateway]
+    E --> F[Policy]
+    F --> G[Workspace]
+    G --> H[Receipts & Evidence]
+    H --> I[Verification]
+    I --> J[Done Gate]
+    J --> K[PROVEN_READY]
+```
+
+Canonical execution path:
+
+```text
+CLI
+→ RuntimeSession
+→ kodac.event
+→ ToolRegistry
+→ RuntimeOrchestrator
+→ ExecutionGateway
+→ Policy
+→ Workspace
+→ ReceiptLedger
+→ Verification
+→ DoneGate
+```
+
+## K2 technical proof
+
+K2 has completed the first real controlled end-to-end runtime proof.
+
+| Evidence | Result |
+|---|---:|
+| Real OpenAI provider qualification | **PASS — 9/9** |
+| Real controlled model-driven write | **PASS** |
+| Exact write-scope enforcement | **PASS** |
+| Independent verification | **PASS** |
+| Done Gate | **PROVEN_READY** |
+| Runtime tests | **80 / 80 PASS** |
+| Typecheck | **PASS** |
+| Patch benchmark | **PASS** |
+| Cross-platform CI | **Ubuntu / Windows / macOS PASS** |
+| Stable runtime merge gate | **PASS** |
+
+The first controlled real solve modified exactly one authorized file, produced execution receipts, passed verification, and reached `PROVEN_READY`. The earlier deliberately over-tight attempt stopped safely before mutation when its tool-call budget was exhausted; that failure history is preserved as positive fail-closed evidence.
+
+See the [K2 final technical closure](docs/planning/KODAC_K2_FINAL_TECHNICAL_CLOSURE_2026-08-11.md) for the evidence identities, sessions, artifact digests, and exact authorization boundaries.
+
+## Trust model
+
+Kodac is designed so that **model output alone cannot establish readiness**.
+
+Key boundaries include:
+
+- workspace path confinement and traversal rejection;
+- symlink-escape protection;
+- explicit allow / ask / deny policy decisions;
+- bounded agent-loop budgets and repetition protection;
+- no-shell verification commands from a controlled executable catalog;
+- bounded provider streams and fail-closed error handling;
+- no execution authority from partial provider stream events;
+- explicit write and verification approvals for controlled live execution;
+- exact allowed write paths;
+- receipts for controlled side effects;
+- verification evidence before `PROVEN_READY`.
+
+## Provider model
+
+Kodac currently includes two provider lanes:
+
+- **OpenAI Responses** — native streaming, `store:false`, bounded events, explicit tool-result continuation, and final-response authority for executable calls.
+- **OpenAI-compatible** — a separate compatibility lane rather than weakening the native OpenAI contract.
+
+Provider credentials are runtime inputs; qualification evidence records that secrets are not persisted.
+
+## Stable CI enforcement
+
+Canonical `main` is protected by repository ruleset `20707483`.
+
+Required status checks are:
+
+```text
+provenance
+legacy-tests
+k2-runtime-gate
+```
+
+`k2-runtime-gate` is deliberately a stable required check. Runtime-sensitive pull requests execute the full Node 24 matrix on Ubuntu, Windows, and macOS. Non-runtime changes receive an explicit classified no-op path instead of leaving a missing required check. The final gate fails closed if classification or required runtime verification does not succeed.
+
+## Repository map
+
+```text
+Kodac/
+├── packages/kodac-runtime/   # trusted agent runtime
+├── docs/adr/                 # accepted architecture decisions
+├── docs/governance/          # protection and governance records
+├── docs/planning/            # milestone and evidence closeouts
+├── provenance/               # OSS intake / authorization records
+├── schema/                   # profile and provenance contracts
+├── agents/                   # evidence-backed agent profiles
+├── matrix/                   # generated comparison views
+└── tools/                    # validation and generation tooling
+```
+
+Useful entry points:
+
+- [`packages/kodac-runtime/`](packages/kodac-runtime/) — runtime implementation
+- [`docs/adr/`](docs/adr/) — architecture decisions
+- [`docs/governance/`](docs/governance/) — governance and protection truth
+- [`docs/planning/`](docs/planning/) — K0/K1/K2 planning and closeout records
+- [`provenance/`](provenance/) — donor authorization and import evidence
+
+## Quick start — runtime
+
+The runtime currently targets **Node.js 24+**.
+
+```bash
+cd packages/kodac-runtime
+npm test
+npm run bench:patch
+```
+
+For the CI-equivalent typecheck, the workflow installs pinned TypeScript tooling and runs `tsc --noEmit` against the runtime `tsconfig.json`.
+
+The runtime package is intentionally private and unpublished while the architecture is still under active integration.
+
+## Kodac Evidence Catalog
+
+Kodac preserves an evidence-backed catalog for comparing AI coding agents without turning vendor claims into facts or collapsing products into a universal score.
+
+The catalog uses sourced YAML profiles, strict schemas, content digests, verification dates, and explicit claim states:
+
+| State | Meaning |
+|---|---|
+| `verified` | Established from directly inspectable artifact or independent execution evidence |
+| `vendor-reported` | Direct claim from official vendor material, not independently reproduced |
+| `unknown` | No acceptable direct source found |
+| `disputed` | Acceptable sources conflict |
+
+Entry points:
+
+- [Agent Matrix](matrix/AGENT_MATRIX.md)
+- [OpenCode profile](agents/opencode/profile.yaml)
+- [Profile sourcing methodology](docs/methodology/PROFILE_SOURCING.md)
+
+The catalog intentionally publishes **no universal overall winner score**.
+
+### Evidence-catalog tooling
+
+```bash
+uv sync
+uv run python -m tools.validate_profiles
+uv run python -m tools.generate_matrix --check
+uv run pytest -q
+uv run ruff check .
+```
+
+Python 3.11+ and [uv](https://github.com/astral-sh/uv) are required for the evidence-catalog toolchain.
+
+## OSS provenance
+
+Kodac does not treat a useful upstream repository as permission to copy it wholesale.
+
+The K2 runtime contains a narrowly scoped, authorized adaptation of OpenCode patch functionality with recorded:
+
+- upstream repository and exact commit;
+- source and destination paths;
+- `ADAPT` classification;
+- MIT license identity;
+- authorization and import records;
+- third-party notice coverage.
+
+See [`provenance/`](provenance/) and [`packages/kodac-runtime/THIRD_PARTY_NOTICES.md`](packages/kodac-runtime/THIRD_PARTY_NOTICES.md).
+
+## Governance
+
+Kodac separates technical proof from release authority.
+
+Current governance truth lives primarily in:
+
+- [`docs/adr/`](docs/adr/)
+- [`docs/governance/`](docs/governance/)
+- [`docs/planning/`](docs/planning/)
+
+Historical proposal and earlier planning material remains preserved as input, but it does not override accepted current Kodac records.
+
+Technical closure does **not** automatically authorize a public launch, production-readiness claim, or legal name clearance.
+
+<details>
+<summary><strong>Project history</strong></summary>
+
+Earlier Kernux evidence-catalog work is preserved as historical and research input rather than being destructively removed. Kodac is not merely a rename; the project was reconstituted around a new runtime and governance architecture focused on trusted execution, verification, evidence, and proof-oriented completion.
+
+Earlier trust-kernel / OmniBridge experiments are also preserved as history and are not part of the current Kodac architecture.
+
+</details>
+
+## License
+
+Kodac is licensed under the [Apache License 2.0](LICENSE).
+
+---
+
+<div align="center">
+
+**Kodac — Done means proven.**
+
+</div>

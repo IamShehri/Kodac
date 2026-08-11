@@ -1,0 +1,26 @@
+name: governance
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen --dev
+      - run: uv run python tools/validate_provenance.py
+
+  legacy-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen --dev
+      - run: uv run pytest
+      - run: uv run ruff check .

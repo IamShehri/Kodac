@@ -1,0 +1,64 @@
+schema_version: 1
+record_id: opencode-patch-v1
+status: imported
+classification: ADAPT
+upstream:
+  id: opencode
+  repository: https://github.com/anomalyco/opencode
+  commit: 3a90639cb57619a21e59f544b3e8d23ffed56f48
+  source_paths:
+    - packages/opencode/src/patch/index.ts
+destination_paths:
+  - packages/kodac-runtime/src/edit/patch.ts
+license_review:
+  repository_license: MIT
+  path_scope_reviewed: true
+  notice_required: true
+  evidence:
+    - upstream root LICENSE at commit 3a90639cb57619a21e59f544b3e8d23ffed56f48
+    - packages/opencode/package.json declares MIT at the same commit
+    - packages/kodac-runtime/THIRD_PARTY_NOTICES.md preserves the upstream MIT notice
+  excluded_paths:
+    - packages/opencode/src/util/bom.ts
+    - packages/core/src/fs-util.ts
+dependency_closure:
+  - name: effect
+    kind: package
+    disposition: package-dependency
+    license: MIT
+    notes: External package dependency was not required by the final K2 adaptation and is not vendored by this record.
+  - name: '@opencode-ai/core/fs-util'
+    kind: source
+    disposition: replace-with-kodac
+    license: MIT
+    notes: Not imported. Replaced with packages/kodac-runtime/src/edit/filesystem.ts.
+  - name: packages/opencode/src/util/bom.ts
+    kind: source
+    disposition: replace-with-kodac
+    license: MIT
+    notes: Not imported. BOM handling is implemented inside the authorized destination patch module.
+modifications:
+  - Removed OpenCode Effect/FSUtil/BOM dependencies from the adapted patch path.
+  - Mapped file effects to the Kodac-owned WorkspaceFileSystem boundary.
+  - Added workspace traversal and escaping-symlink rejection.
+  - Added stricter malformed-patch and duplicate-path handling.
+  - Routed patch mutation through the native ExecutionGateway policy and receipt path.
+  - Preserved MIT attribution for substantial adapted source.
+verification:
+  behavioral_tests_required: true
+  license_check_required: true
+  provenance_check_required: true
+  benchmark_ids:
+    - patch-apply-correctness
+    - patch-minimality
+    - patch-failure-semantics
+authorization:
+  authorized_by: Kodac founder
+  authorized_at: "2026-08-11T02:08:00+03:00"
+  authorization_ref: docs/planning/KODAC_K2_G8_SCOPED_SOURCE_INTAKE_AUTHORIZATION_2026-08-11.md
+notes:
+  - Initial implementation commit 83ac10b7cafea86d0b1e961565ee6f37bea990b1 failed its first runtime test run and was not certified.
+  - Runtime compatibility correction commit 63dfefaa483469b82d9125bff423756ea630863e passed K2 runtime and governance checks.
+  - Verification evidence is recorded in docs/planning/KODAC_K2_PATCH_SLICE_IMPORT_VERIFICATION_2026-08-11.md.
+  - This imported status remains valid only under the matching scoped G8 authorization manifest and branch.
+  - Merge to canonical main and public release remain unauthorized.
