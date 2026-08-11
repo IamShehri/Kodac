@@ -278,7 +278,9 @@ test("K3-R2 repository-intelligence policy allows only dedicated read-only Git c
   }
 })
 
-test("K3-R2 keeps the canonical K3-R1 manifest byte-identical", async () => {
-  const bytes = await readFile(goldManifestPath)
+test("K3-R2 keeps the canonical K3-R1 manifest repository-content identity unchanged across checkout line endings", async () => {
+  const text = await readFile(goldManifestPath, "utf8")
+  const canonicalLfText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+  const bytes = Buffer.from(canonicalLfText, "utf8")
   assert.equal(gitBlobSha1(bytes), "6f812003a4b33e62ad1be672a39c7f42509fc500")
 })
