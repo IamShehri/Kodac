@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
+import { dirname } from "node:path"
 import type { WorkspaceFileSystem } from "../edit/filesystem.ts"
 import { applyHunks, parsePatch, type AffectedPaths } from "../edit/patch.ts"
 import { createReceipt, type ExecutionReceipt } from "../evidence/receipt.ts"
@@ -47,6 +48,10 @@ function sha256(value: string): string {
 
 function uniquePaths(paths: string[]): string[] {
   return [...new Set(paths)].sort()
+}
+
+function portablePath(path: string): string {
+  return path.replace(/\\/g, "/")
 }
 
 function blockedReceipt(intent: ExecutionIntent, policy: PolicyResult, startedAt: string): ExecutionReceipt {
@@ -200,6 +205,24 @@ export class ExecutionGateway {
     ).then(({ stdout, receipt }) => ({ diff: stdout, receipt }))
   }
 
+  async gitHead(
+    observer?: ExecutionObserver,
+    options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number } = {},
+  ): Promise<{ head: string; receipt: ExecutionReceipt }> {
+    const result = await this.runReadOnlyCommand(
+      "git.head",
+      "git",
+      ["rev-parse", "--verify", "HEAD"],
+      [],
+      observer,
+      { ...options, maxOutputBytes: options.maxOutputBytes ?? 4096, timeoutMs: options.timeoutMs ?? 5_000 },
+      "git rev-parse HEAD",
+    )
+    const head = result.stdout.trim()
+    if (!/^[0-9a-f]{40,64}$/i.test(head)) throw new ExecutionFailedError("git rev-parse HEAD did not return a full object id", result.receipt)
+    return { head: head.toLowerCase(), receipt: result.receipt }
+  }
+
   async gitStatus(
     observer?: ExecutionObserver,
     options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number } = {},
@@ -207,12 +230,45 @@ export class ExecutionGateway {
     return this.runReadOnlyCommand(
       "git.status",
       "git",
-      ["status", "--porcelain=v1", "--untracked-files=all"],
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
       [],
       observer,
       options,
       "git status",
     ).then(({ stdout, receipt }) => ({ status: stdout, receipt }))
+  }
+
+  async gitHashObjects(
+    paths: string[],
+    observer?: ExecutionObserver,
+    options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number } = {},
+  ): Promise<{ objects: { path: string; gitObjectId: string }[]; receipt: ExecutionReceipt }> {
+    if (!Array.isArray(paths) || paths.length === 0 || paths.length > 128) throw new Error("git.hash-object paths must contain 1..128 entries")
+    for (const path of paths) {
+      await this.fs.validatePath(path)
+      const portable = portablePath(path)
+      const parent = portablePath(dirname(path))
+      const entries = await this.fs.list(parent === "." ? "." : parent, { recursive: false, maxEntries: 20_000, maxDepth: 1 })
+      const entry = entries.find((candidate) => candidate.path === portable)
+      if (!entry || entry.type !== "file") throw new Error(`git.hash-object path is not a regular workspace file: ${path}`)
+    }
+    const result = await this.runReadOnlyCommand(
+      "git.hash-object",
+      "git",
+      ["hash-object", "--no-filters", "--", ...paths],
+      paths,
+      observer,
+      { ...options, maxOutputBytes: options.maxOutputBytes ?? 64 * 1024, timeoutMs: options.timeoutMs ?? 10_000 },
+      "git hash-object",
+    )
+    const objectIds = result.stdout.split(/\r?\n/).filter(Boolean)
+    if (objectIds.length !== paths.length) throw new ExecutionFailedError("git hash-object result count does not match requested path count", result.receipt)
+    const objects = paths.map((path, index) => {
+      const gitObjectId = objectIds[index]
+      if (!/^[0-9a-f]+$/i.test(gitObjectId)) throw new ExecutionFailedError("git hash-object returned an invalid object id", result.receipt)
+      return { path: portablePath(path), gitObjectId: gitObjectId.toLowerCase() }
+    })
+    return { objects, receipt: result.receipt }
   }
 
   async runCommand(
@@ -227,6 +283,9 @@ export class ExecutionGateway {
       env?: NodeJS.ProcessEnv
     } = {},
   ): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
+    if (capability.startsWith("git.") || capability.startsWith("repo.")) {
+      throw new Error(`Generic runCommand cannot use reserved capability: ${capability}`)
+    }
     return this.runReadOnlyCommand(capability, executable, args, [], observer, options, capability)
   }
 
