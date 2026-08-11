@@ -108,10 +108,18 @@ test("OpenAI Responses provider never retries after partial native stream output
     sleep: async (ms) => { sleeps.push(ms) },
     fetchImpl: (async () => {
       calls += 1
+      let read = 0
       const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "response.created", sequence_number: 0, response: { id: "resp_partial" } })}\n\n`))
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "response.output_text.delta", sequence_number: 1, item_id: "msg", output_index: 0, content_index: 0, delta: "partial" })}\n\n`))
+        pull(controller) {
+          read += 1
+          if (read === 1) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "response.created", sequence_number: 0, response: { id: "resp_partial" } })}\n\n`))
+            return
+          }
+          if (read === 2) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "response.output_text.delta", sequence_number: 1, item_id: "msg", output_index: 0, content_index: 0, delta: "partial" })}\n\n`))
+            return
+          }
           controller.error(new Error("connection lost"))
         },
       })
