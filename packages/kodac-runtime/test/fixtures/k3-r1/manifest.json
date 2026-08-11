@@ -30,7 +30,7 @@
     },
     {
       "kind": "malformed-source",
-      "path": "malformed/broken.ts",
+      "path": "malformed/broken.fixture",
       "sha256": "f369f37c7ce3ef6faba6992952a443560f5d7c034babdc6fffd0f28598d21a8f"
     },
     {
@@ -105,7 +105,7 @@
     "malformed_sources": [
       {
         "expected": "MALFORMED_OR_PARTIAL_NOT_SILENTLY_COMPLETE",
-        "path": "malformed/broken.ts"
+        "path": "malformed/broken.fixture"
       }
     ],
     "non_primary_evidence": [
