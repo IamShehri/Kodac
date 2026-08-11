@@ -1,4 +1,13 @@
-import { ModelProviderError, type ModelMessage, type ModelProvider, type ModelProviderRequest, type ModelProviderResponse, type ModelProviderUsage, type ModelToolCall } from "./provider.ts"
+import {
+  ModelProviderError,
+  type ModelMessage,
+  type ModelProvider,
+  type ModelProviderRequest,
+  type ModelProviderResponse,
+  type ModelProviderStreamEvent,
+  type ModelProviderUsage,
+  type ModelToolCall,
+} from "./provider.ts"
 
 export type ProviderFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 
@@ -8,6 +17,7 @@ export interface OpenAICompatibleProviderOptions {
   apiKey?: string
   baseUrl?: string
   maxAttempts?: number
+  stream?: boolean
   fetchImpl?: ProviderFetch
   sleep?: Sleep
 }
@@ -180,11 +190,219 @@ async function boundedJson(response: Response): Promise<unknown> {
   }
 }
 
+async function emitStream(request: ModelProviderRequest, event: ModelProviderStreamEvent): Promise<void> {
+  await request.onStreamEvent?.(event)
+}
+
+function nextSseEvent(buffer: string): { block: string; rest: string } | undefined {
+  const match = /\r?\n\r?\n/.exec(buffer)
+  if (!match || match.index === undefined) return undefined
+  return {
+    block: buffer.slice(0, match.index),
+    rest: buffer.slice(match.index + match[0].length),
+  }
+}
+
+function sseData(block: string): string | undefined {
+  const data = block
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).replace(/^ /, ""))
+  return data.length ? data.join("\n") : undefined
+}
+
+interface StreamingToolAccumulator {
+  id: string
+  name: string
+  arguments: string
+}
+
+async function parseStreamingResponse(
+  response: Response,
+  request: ModelProviderRequest,
+  attempts: number,
+  startedAt: number,
+  requestId?: string,
+): Promise<ModelProviderResponse> {
+  const contentType = response.headers.get("content-type")
+  if (contentType && !contentType.toLowerCase().includes("text/event-stream")) {
+    throw providerError("invalid_stream", "Provider streaming response must use text/event-stream.")
+  }
+  if (!response.body) throw providerError("invalid_stream", "Provider streaming response did not include a response body.")
+
+  await emitStream(request, { type: "started" })
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let totalBytes = 0
+  let assistant = ""
+  let responseId: string | undefined
+  let usage: ModelProviderUsage | undefined
+  let finishReason: "stop" | "tool_calls" | undefined
+  let sawDone = false
+  const tools = new Map<number, StreamingToolAccumulator>()
+
+  const consumePayload = async (payload: string): Promise<void> => {
+    if (payload === "[DONE]") {
+      sawDone = true
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(payload)
+    } catch (error) {
+      throw providerError("invalid_stream_event", "Provider stream contained invalid JSON.", { cause: error })
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw providerError("invalid_stream_event", "Provider stream event must be a JSON object.")
+    }
+    const root = parsed as Record<string, unknown>
+    if (typeof root.id === "string" && root.id) responseId = root.id
+    const mappedUsage = mapUsage(root.usage)
+    if (mappedUsage) {
+      usage = mappedUsage
+      await emitStream(request, { type: "usage", usage: mappedUsage })
+    }
+    if (!Array.isArray(root.choices)) throw providerError("invalid_stream_event", "Provider stream event choices must be an array.")
+    if (root.choices.length === 0) return
+    if (root.choices.length !== 1) throw providerError("invalid_stream_event", "Provider stream event must contain at most one choice.")
+    const choice = root.choices[0]
+    if (!choice || typeof choice !== "object" || Array.isArray(choice)) throw providerError("invalid_stream_event", "Provider stream choice is invalid.")
+    const choiceRecord = choice as Record<string, unknown>
+    if (choiceRecord.index !== undefined && choiceRecord.index !== 0) throw providerError("invalid_stream_event", "Kodac streaming currently requires choice index 0.")
+    const delta = choiceRecord.delta
+    if (!delta || typeof delta !== "object" || Array.isArray(delta)) throw providerError("invalid_stream_event", "Provider stream choice delta is invalid.")
+    const deltaRecord = delta as Record<string, unknown>
+    if (deltaRecord.content !== undefined && deltaRecord.content !== null) {
+      if (typeof deltaRecord.content !== "string") throw providerError("invalid_stream_event", "Provider text delta must be a string or null.")
+      if (deltaRecord.content) {
+        assistant += deltaRecord.content
+        await emitStream(request, { type: "text_delta", text: deltaRecord.content })
+      }
+    }
+    if (deltaRecord.tool_calls !== undefined) {
+      if (!Array.isArray(deltaRecord.tool_calls)) throw providerError("invalid_stream_event", "Provider tool-call delta must be an array.")
+      for (const raw of deltaRecord.tool_calls) {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw providerError("invalid_stream_event", "Provider tool-call delta is invalid.")
+        const record = raw as Record<string, unknown>
+        if (!Number.isInteger(record.index) || (record.index as number) < 0) throw providerError("invalid_stream_event", "Provider tool-call delta requires a non-negative index.")
+        const index = record.index as number
+        const current = tools.get(index) ?? { id: "", name: "", arguments: "" }
+        let id: string | undefined
+        let name: string | undefined
+        let argumentsDelta: string | undefined
+        if (record.id !== undefined) {
+          if (typeof record.id !== "string" || !record.id) throw providerError("invalid_stream_event", "Provider tool-call id delta is invalid.")
+          if (current.id && current.id !== record.id) throw providerError("invalid_stream_event", "Provider changed a tool-call id mid-stream.")
+          current.id = record.id
+          id = record.id
+        }
+        if (record.function !== undefined) {
+          if (!record.function || typeof record.function !== "object" || Array.isArray(record.function)) throw providerError("invalid_stream_event", "Provider tool-call function delta is invalid.")
+          const fn = record.function as Record<string, unknown>
+          if (fn.name !== undefined) {
+            if (typeof fn.name !== "string") throw providerError("invalid_stream_event", "Provider tool-call name delta is invalid.")
+            if (fn.name) {
+              if (!current.name) current.name = fn.name
+              else if (current.name !== fn.name) current.name += fn.name
+              name = fn.name
+            }
+          }
+          if (fn.arguments !== undefined) {
+            if (typeof fn.arguments !== "string") throw providerError("invalid_stream_event", "Provider tool-call arguments delta is invalid.")
+            current.arguments += fn.arguments
+            argumentsDelta = fn.arguments
+          }
+        }
+        tools.set(index, current)
+        await emitStream(request, { type: "tool_call_delta", index, id, name, argumentsDelta })
+      }
+    }
+    const rawFinish = choiceRecord.finish_reason
+    if (rawFinish !== undefined && rawFinish !== null) {
+      if (rawFinish !== "stop" && rawFinish !== "tool_calls") {
+        throw providerError("incomplete_response", `Provider stream did not complete normally (finish_reason=${String(rawFinish)}).`)
+      }
+      if (finishReason && finishReason !== rawFinish) throw providerError("invalid_stream_event", "Provider changed finish_reason mid-stream.")
+      finishReason = rawFinish
+    }
+  }
+
+  try {
+    while (true) {
+      if (request.signal?.aborted) {
+        await reader.cancel().catch(() => undefined)
+        throw abortError(request.signal)
+      }
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await reader.read()
+      } catch (error) {
+        throw providerError("stream_interrupted", "Provider stream was interrupted after it started; Kodac will not retry a partial stream.", { cause: error })
+      }
+      if (chunk.done) break
+      totalBytes += chunk.value.byteLength
+      if (totalBytes > MAX_RESPONSE_BYTES) throw providerError("response_too_large", "Provider stream exceeded the Kodac response-size limit.")
+      buffer += decoder.decode(chunk.value, { stream: true })
+      while (true) {
+        const event = nextSseEvent(buffer)
+        if (!event) break
+        buffer = event.rest
+        const payload = sseData(event.block)
+        if (payload !== undefined) await consumePayload(payload)
+        if (sawDone) break
+      }
+      if (sawDone) break
+    }
+    buffer += decoder.decode()
+    if (!sawDone && buffer.trim()) {
+      const payload = sseData(buffer)
+      if (payload !== undefined) await consumePayload(payload)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  if (!sawDone) throw providerError("incomplete_stream", "Provider stream ended before the [DONE] sentinel.")
+  if (!finishReason) throw providerError("incomplete_stream", "Provider stream ended without a normal finish_reason.")
+
+  const toolCalls: ModelToolCall[] = [...tools.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([index, tool]) => {
+      if (!tool.id || !tool.name) throw providerError("incomplete_stream", `Provider tool call ${index} ended without id/name.`)
+      let input: unknown
+      try {
+        input = JSON.parse(tool.arguments)
+      } catch (error) {
+        throw providerError("invalid_tool_arguments", `Provider tool call ${index} returned invalid streamed JSON arguments.`, { cause: error })
+      }
+      return { id: tool.id, name: tool.name, input }
+    })
+
+  if (finishReason === "tool_calls" && toolCalls.length === 0) throw providerError("invalid_stream", "Provider finish_reason=tool_calls requires streamed tool calls.")
+  if (finishReason === "stop" && toolCalls.length > 0) throw providerError("invalid_stream", "Provider streamed tool calls with finish_reason=stop.")
+
+  await emitStream(request, { type: "completed", finishReason, responseId })
+  return {
+    assistant,
+    toolCalls,
+    finishReason,
+    metadata: {
+      responseId,
+      requestId,
+      latencyMs: Math.max(0, Date.now() - startedAt),
+      attempts,
+      usage,
+    },
+  }
+}
+
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = "openai-compatible"
   private readonly apiKey?: string
   private readonly baseUrl: URL
   private readonly maxAttempts: number
+  private readonly stream: boolean
   private readonly fetchImpl: ProviderFetch
   private readonly sleep: Sleep
 
@@ -192,6 +410,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.apiKey = options.apiKey?.trim() || undefined
     this.baseUrl = validatedBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL)
     this.maxAttempts = options.maxAttempts ?? 3
+    this.stream = options.stream ?? true
     if (!Number.isInteger(this.maxAttempts) || this.maxAttempts < 1 || this.maxAttempts > 5) {
       throw providerError("invalid_retry_policy", "OpenAI-compatible maxAttempts must be an integer from 1 to 5.")
     }
@@ -226,7 +445,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
         },
       })),
       tool_choice: request.tools.length ? "auto" : undefined,
-      stream: false,
+      stream: this.stream,
+      ...(this.stream ? { stream_options: { include_usage: true } } : {}),
     })
     const startedAt = Date.now()
     let lastError: unknown
@@ -243,6 +463,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
           const error = providerError("http_error", `Provider request failed with HTTP ${response.status}.`, { retryable, status: response.status })
           if (!retryable || attempt === this.maxAttempts) throw error
           lastError = error
+        } else if (this.stream) {
+          return await parseStreamingResponse(response, request, attempt, startedAt, requestId)
         } else {
           const json = await boundedJson(response)
           return parseResponse(json, attempt, Math.max(0, Date.now() - startedAt), requestId)
