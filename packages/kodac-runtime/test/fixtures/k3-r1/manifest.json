@@ -1,0 +1,244 @@
+{
+  "authority": {
+    "external_adapter_intake": false,
+    "k3_r1_fixture_implementation": true,
+    "k3_r2_snapshot_implementation": false,
+    "new_dependencies": false,
+    "persistent_storage": false,
+    "production_repository_intelligence": false
+  },
+  "digest_policy": {
+    "binary": "raw-bytes",
+    "text": "utf8-lf-normalized"
+  },
+  "expected_files": [
+    {
+      "kind": "binary",
+      "path": "binary/sample.bin",
+      "sha256": "697f544cf93d9023062b0ab5980cc4d0ed1befedfc0174fe6d7ee7056b98b117"
+    },
+    {
+      "kind": "architecture-document",
+      "path": "docs/ADR-0001-fixture.md",
+      "sha256": "0bb2ee92facaad500027e5b67ac5e902030017767f53bd78b48ee42ed1819279"
+    },
+    {
+      "kind": "untrusted-document",
+      "path": "docs/untrusted-instructions.md",
+      "sha256": "e1340d16b04c3c28ee2bae075cd813716e8f5150814269032a0c347b9277897b"
+    },
+    {
+      "kind": "generated",
+      "path": "generated/client.ts",
+      "sha256": "5d5bed03c5f38d640ff3ab1dbce18c387cfe0257f9bed5c7c6b002f08ae446c0"
+    },
+    {
+      "kind": "malformed-source",
+      "path": "malformed/broken.fixture",
+      "sha256": "f369f37c7ce3ef6faba6992952a443560f5d7c034babdc6fffd0f28598d21a8f"
+    },
+    {
+      "kind": "source",
+      "path": "src/ambiguous-a.ts",
+      "sha256": "22712a737626754e03f7a6a5e1a33346ef7e55bd94e2395a5ca756aa746cbd83"
+    },
+    {
+      "kind": "source",
+      "path": "src/ambiguous-b.ts",
+      "sha256": "ccafea08792ace883d40383973427d4b4a90c780c0116badfc5d32a12857e52e"
+    },
+    {
+      "kind": "source",
+      "path": "src/consumer.ts",
+      "sha256": "0ee96ca9fda3469ab15d568ebb81c6533b6c9e0af4df80092c6968e3a7f68bb2"
+    },
+    {
+      "kind": "source",
+      "path": "src/math.ts",
+      "sha256": "950a0f08fd7d1eccd7c4b1b7c965c9e06b1e595146fd005f954c54ed9fbf5ac7"
+    },
+    {
+      "kind": "test-source",
+      "path": "tests/math.test.ts",
+      "sha256": "0ae4a8a66a9e21019e8a30b302bfb2f92d1cc254a6fccf589ecc85ccec457119"
+    },
+    {
+      "kind": "vendor",
+      "path": "vendor/library.ts",
+      "sha256": "a1a5c3f660a92fe2ca4f2729d8bc95e32e2303356a0a993eaae42c07b52d74f1"
+    }
+  ],
+  "fixture_id": "k3-r1-core-repository-v1",
+  "gold": {
+    "ambiguous_symbols": [
+      {
+        "candidates": [
+          "src/ambiguous-a.ts",
+          "src/ambiguous-b.ts"
+        ],
+        "expected_without_semantic_disambiguation": "AMBIGUOUS",
+        "symbol": "Widget"
+      }
+    ],
+    "architecture_context": [
+      {
+        "governed_by": "docs/ADR-0001-fixture.md",
+        "path": "src/math.ts"
+      }
+    ],
+    "binary_files": [
+      {
+        "expected": "BINARY_NOT_PARSED_AS_TEXT",
+        "path": "binary/sample.bin"
+      }
+    ],
+    "definitions": [
+      {
+        "gold_class": "semantic_gold",
+        "line": 1,
+        "path": "src/math.ts",
+        "symbol": "add"
+      },
+      {
+        "gold_class": "semantic_gold",
+        "line": 5,
+        "path": "src/math.ts",
+        "symbol": "meaning"
+      }
+    ],
+    "malformed_sources": [
+      {
+        "expected": "MALFORMED_OR_PARTIAL_NOT_SILENTLY_COMPLETE",
+        "path": "malformed/broken.fixture"
+      }
+    ],
+    "non_primary_evidence": [
+      {
+        "path": "generated/client.ts",
+        "reason": "generated"
+      },
+      {
+        "path": "vendor/library.ts",
+        "reason": "vendor"
+      }
+    ],
+    "references": [
+      {
+        "gold_class": "semantic_gold",
+        "kind": "import",
+        "line": 1,
+        "path": "src/consumer.ts",
+        "symbol": "add"
+      },
+      {
+        "gold_class": "semantic_gold",
+        "kind": "call",
+        "line": 4,
+        "path": "src/consumer.ts",
+        "symbol": "add"
+      },
+      {
+        "gold_class": "semantic_gold",
+        "kind": "import",
+        "line": 3,
+        "path": "tests/math.test.ts",
+        "symbol": "add"
+      },
+      {
+        "gold_class": "semantic_gold",
+        "kind": "call",
+        "line": 6,
+        "path": "tests/math.test.ts",
+        "symbol": "add"
+      }
+    ],
+    "related_tests": [
+      {
+        "reason": "direct import and behavioral assertion",
+        "source_path": "src/math.ts",
+        "test_path": "tests/math.test.ts"
+      }
+    ],
+    "untrusted_repository_text": [
+      {
+        "expected": "UNTRUSTED_DATA_NOT_INSTRUCTION",
+        "path": "docs/untrusted-instructions.md"
+      }
+    ]
+  },
+  "purpose": "Deterministic gold evidence for future K3 repository-intelligence implementation and adapter benchmarks.",
+  "schema_version": "k3-r1-gold-evidence-v1",
+  "virtual_repository_state_cases": [
+    {
+      "case_id": "tracked-modified",
+      "expected": {
+        "path": "src/math.ts",
+        "state": "modified"
+      },
+      "head_digest": "fixture-head-math-v1",
+      "worktree_digest": "fixture-worktree-math-v2"
+    },
+    {
+      "case_id": "staged-added",
+      "expected": {
+        "path": "src/new.ts",
+        "state": "added"
+      },
+      "head_path": null,
+      "index_path": "src/new.ts",
+      "worktree_path": "src/new.ts"
+    },
+    {
+      "case_id": "tracked-deleted",
+      "expected": {
+        "path": "src/obsolete.ts",
+        "state": "deleted"
+      },
+      "head_path": "src/obsolete.ts",
+      "worktree_path": null
+    },
+    {
+      "case_id": "untracked-file",
+      "expected": {
+        "path": "notes/new.txt",
+        "state": "untracked"
+      },
+      "head_path": null,
+      "index_path": null,
+      "worktree_path": "notes/new.txt"
+    },
+    {
+      "after_path": "src/new-name.ts",
+      "before_path": "src/old-name.ts",
+      "case_id": "renamed-file",
+      "expected": {
+        "after_path": "src/new-name.ts",
+        "before_path": "src/old-name.ts",
+        "state": "renamed"
+      }
+    }
+  ],
+  "virtual_security_cases": [
+    {
+      "case_id": "path-traversal",
+      "expected": "REJECT_PATH_ESCAPE",
+      "input_path": "../outside.ts"
+    },
+    {
+      "case_id": "symlink-escape",
+      "expected": "REJECT_SYMLINK_ESCAPE",
+      "input_path": "links/outside.ts",
+      "symlink_target": "../../outside.ts"
+    },
+    {
+      "available_snapshot": "fixture-B",
+      "case_id": "stale-snapshot",
+      "expected": "MARK_STALE_NOT_CURRENT",
+      "requested_snapshot": "fixture-A"
+    },
+    {
+      "case_id": "partial-index",
+      "expected": "MARK_PARTIAL_NOT_COMPLETE"
+    }
+  ]
+}
