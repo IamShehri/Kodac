@@ -8,7 +8,9 @@ import {
   ModelProviderError,
   type ModelMessage,
   type ModelProvider,
+  type ModelProviderMetadata,
   type ModelProviderResponse,
+  type ModelProviderStreamEvent,
   type ModelToolCall,
   type ProviderRegistry,
 } from "./provider.ts"
@@ -22,6 +24,7 @@ export interface AgentTurnInput {
 
 export interface AgentTurnHooks {
   beforeToolCall?(call: ModelToolCall): Promise<void> | void
+  onStreamEvent?(event: ModelProviderStreamEvent): Promise<void> | void
 }
 
 export interface AgentToolResult {
@@ -35,6 +38,7 @@ export interface AgentTurnResult {
   finishReason: ModelProviderResponse["finishReason"]
   toolCalls: ModelToolCall[]
   toolResults: AgentToolResult[]
+  metadata?: ModelProviderMetadata
 }
 
 function sha256(value: string): string {
@@ -109,6 +113,39 @@ export class AgentTurnRunner {
       tools: tools.map((tool) => ({ name: tool.name, capability: tool.capability })),
     })
 
+    const onStreamEvent = async (event: ModelProviderStreamEvent): Promise<void> => {
+      if (event.type === "started") {
+        await this.session.emit("model.stream.started", { provider: provider.name, model: input.model })
+      } else if (event.type === "text_delta") {
+        await this.session.emit("model.stream.text_delta", {
+          provider: provider.name,
+          model: input.model,
+          contentDigest: sha256(event.text),
+          contentLength: event.text.length,
+        })
+      } else if (event.type === "tool_call_delta") {
+        await this.session.emit("model.stream.tool_call_delta", {
+          provider: provider.name,
+          model: input.model,
+          index: event.index,
+          id: event.id,
+          name: event.name,
+          argumentsDigest: event.argumentsDelta === undefined ? undefined : sha256(event.argumentsDelta),
+          argumentsLength: event.argumentsDelta?.length,
+        })
+      } else if (event.type === "usage") {
+        await this.session.emit("model.stream.usage", { provider: provider.name, model: input.model, usage: event.usage })
+      } else {
+        await this.session.emit("model.stream.completed", {
+          provider: provider.name,
+          model: input.model,
+          finishReason: event.finishReason,
+          responseId: event.responseId,
+        })
+      }
+      await hooks.onStreamEvent?.(event)
+    }
+
     let response: ModelProviderResponse
     try {
       response = await provider.generate({
@@ -116,6 +153,7 @@ export class AgentTurnRunner {
         messages: input.messages,
         tools,
         signal: input.signal,
+        onStreamEvent,
       })
       throwIfAborted(input.signal)
       validateResponse(response)
@@ -172,6 +210,7 @@ export class AgentTurnRunner {
       finishReason: response.finishReason,
       toolCalls: response.toolCalls.map((call) => ({ ...call })),
       toolResults,
+      metadata: response.metadata,
     }
   }
 }

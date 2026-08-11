@@ -22,18 +22,26 @@ export interface ModelToolDescriptor {
   inputSchema: JsonSchema
 }
 
-export interface ModelProviderRequest {
-  model: string
-  messages: ModelMessage[]
-  tools: ModelToolDescriptor[]
-  signal?: AbortSignal
-}
-
 export interface ModelProviderUsage {
   inputTokens?: number
   cachedInputTokens?: number
   outputTokens?: number
   totalTokens?: number
+}
+
+export type ModelProviderStreamEvent =
+  | { type: "started" }
+  | { type: "text_delta"; text: string }
+  | { type: "tool_call_delta"; index: number; id?: string; name?: string; argumentsDelta?: string }
+  | { type: "usage"; usage: ModelProviderUsage }
+  | { type: "completed"; finishReason: "stop" | "tool_calls"; responseId?: string }
+
+export interface ModelProviderRequest {
+  model: string
+  messages: ModelMessage[]
+  tools: ModelToolDescriptor[]
+  signal?: AbortSignal
+  onStreamEvent?(event: ModelProviderStreamEvent): Promise<void> | void
 }
 
 export interface ModelProviderMetadata {
