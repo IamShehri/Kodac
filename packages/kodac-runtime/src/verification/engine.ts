@@ -11,6 +11,7 @@ import {
   type VerificationCommandSpec,
   type VerificationContext,
   type VerificationEvidenceRef,
+  type VerificationExecutable,
   type VerificationReport,
   type Verifier,
 } from "./types.ts"
@@ -32,6 +33,13 @@ function sanitizedVerificationEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { NODE_ENV: "test", KODAC_VERIFICATION: "1", NO_COLOR: "1" }
   for (const key of keys) if (process.env[key] !== undefined) env[key] = process.env[key]
   return env
+}
+
+function resolveVerificationExecutable(executable: VerificationExecutable): string {
+  if (executable === "node") return process.execPath
+  if (executable === "python") return process.platform === "win32" ? "python.exe" : "python3"
+  if (executable === "cargo") return process.platform === "win32" ? "cargo.exe" : "cargo"
+  return process.platform === "win32" ? "go.exe" : "go"
 }
 
 function observer(context: VerificationContext, ledger: JsonlReceiptLedger): ExecutionObserver {
@@ -150,7 +158,7 @@ function commandVerifier(spec: VerificationCommandSpec, gateway: ExecutionGatewa
       try {
         const result = await gateway.runCommand(
           `verification.command.${spec.id}`,
-          process.execPath,
+          resolveVerificationExecutable(spec.executable),
           spec.args,
           observer(context, ledger),
           {
@@ -269,13 +277,13 @@ function commandAggregateVerifier(specs: VerificationCommandSpec[]): Verifier {
 export async function runVerificationEngine(input: VerificationContext): Promise<VerificationReport> {
   const startedAt = new Date().toISOString()
   await input.session.emit("verification.started", {
-    commands: input.commands.map((command) => ({ id: command.id, category: command.category })),
+    commands: input.commands.map((command) => ({ id: command.id, category: command.category, executable: command.executable })),
     approveVerification: input.approveVerification,
   })
 
   const fs = new NodeWorkspaceFileSystem(input.workspace)
   const ledger = new JsonlReceiptLedger(input.receiptPath)
-  const readGateway = new ExecutionGateway(fs, fixedPolicy("allow", "K2-S6 verification read-only evidence"))
+  const readGateway = new ExecutionGateway(fs, fixedPolicy("allow", "K2-S7 verification read-only evidence"))
   const commandGateway = new ExecutionGateway(
     fs,
     fixedPolicy(input.approveVerification ? "allow" : "ask", input.approveVerification ? "explicit --approve-verification authorization" : "verification process authorization required"),
