@@ -1,54 +1,110 @@
-# Version Plan
+# Kodac Version Plan
 
-## Versioning Philosophy
+## Purpose
 
-Kernux should version around product maturity, not internal technical milestones.
+Kodac engineering milestones and public product versions are separate governance tracks.
 
-## Versions
+This document removes the obsolete Kernux observability version promises from current roadmap authority. The earlier content remains recoverable from repository history and the pre-reconstitution canonical base.
 
-| Version | Audience | Promise |
-| --- | --- | --- |
-| 0.1 MVP | Founder/design partners | Basic AI observability works |
-| 0.2 Beta | Early teams | Observability plus quality/cost monitoring is reliable |
-| 1.0 | Production teams | Kernux can be trusted in daily operations |
-| 2.0 | Platform teams | Kernux controls and governs AI operations across teams |
+## Engineering milestones
 
-## Version 0.1
+Engineering milestones describe architectural and technical progress:
 
-- Private deployment.
-- Trace ingestion.
-- Trace explorer.
-- Basic dashboard.
-- Basic alerts.
+```text
+K0/K1 — architecture, governance, provenance, donor-selection foundation
+K2    — trusted runtime spine
+K3    — evidence-backed repository intelligence & context engine
+K4+   — later milestones only when separately defined/authorized
+```
 
-## Version 0.2
+Current state:
 
-- SDKs.
-- More integrations.
-- Improved dashboards.
-- Prompt comparison.
-- Managed evaluator preview.
+| Engineering milestone | Status |
+| --- | --- |
+| K0/K1 | CLOSED |
+| K2 | CLOSED |
+| K3 | DEFINED; IMPLEMENTATION NOT AUTHORIZED |
+| K4-K7 | PROPOSED DIRECTIONS ONLY |
 
-## Version 1.0
+Engineering milestone closure does not itself establish a distributable product version.
 
-- Gateway GA.
-- Routing/fallbacks.
-- Budgets.
-- Teams and audit logs.
-- Strong docs and support workflows.
+## Public product versions
 
-## Version 2.0
+Public product versions may later use version identifiers such as:
 
-- Enterprise governance.
-- Advanced analytics.
-- Data export pipelines.
-- Compliance reporting.
-- Multi-region and custom retention options.
+```text
+0.x
+1.x
+```
 
-## Recommendations
+No specific public version number is authorized by this document.
 
-| Recommendation | Why | Benefits | Risks | Alternatives | Trade-offs | Effort |
-| --- | --- | --- | --- | --- | --- | --- |
-| Keep 1.0 for production trust, not first release | Version numbers shape expectations | Better credibility | Marketing may want earlier 1.0 | Call MVP 1.0 | More honest maturity | Ongoing |
-| Use breaking API changes only before 1.0 | Integrations need stability | Cleaner post-1.0 support | Slower iteration later | Break anytime | More discipline | Ongoing |
-| Publish changelogs starting at beta | Users need operational awareness | Trust | Documentation overhead | No changelog | Better communication | 30 minutes/release |
+In particular:
+
+```text
+PUBLIC RELEASE VERSION:
+NOT AUTHORIZED
+
+PACKAGE PUBLICATION:
+NOT AUTHORIZED
+
+1.0 PROMISE:
+NOT ESTABLISHED
+```
+
+Version numbering, release channels, package publication, compatibility promises, support expectations, and public release criteria require separate founder decisions and applicable governance evidence.
+
+## Separation of authority
+
+The following statements are intentionally distinct:
+
+```text
+engineering milestone closed
+!= package publishable
+!= public version declared
+!= production-readiness claim
+!= brand launch authorized
+```
+
+Likewise:
+
+```text
+K3 defined
+!= K3 implementation authorized
+```
+
+## Release-gate direction
+
+A future public-release decision should be evidence-gated and separately review at least the applicable subsets of:
+
+- product scope and supported surfaces;
+- compatibility/versioning contract;
+- installation and upgrade behavior;
+- security and trust posture;
+- provenance/license completeness;
+- required CI and platform support;
+- packaging and distribution artifacts;
+- benchmark/claim evidence;
+- documentation and support expectations;
+- brand/name/trademark status.
+
+This list is planning direction only. It does not authorize release work or establish a release checklist as complete.
+
+## Current authority boundary
+
+```text
+K3 IMPLEMENTATION:
+NOT AUTHORIZED
+
+PUBLIC RELEASE:
+NOT AUTHORIZED
+
+PACKAGE PUBLICATION:
+NOT AUTHORIZED
+
+BRAND LAUNCH:
+NOT AUTHORIZED
+
+KODAC NAME / TRADEMARK CLEARANCE:
+NOT ESTABLISHED
+```
