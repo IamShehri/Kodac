@@ -1,7 +1,18 @@
 import type { RuntimeSession } from "../session/session.ts"
 
-export type VerificationCategory = "agent" | "workspace" | "diff" | "receipts" | "policy" | "syntax" | "types" | "tests" | "custom"
+export type VerificationCategory =
+  | "agent"
+  | "workspace"
+  | "diff"
+  | "receipts"
+  | "policy"
+  | "syntax"
+  | "types"
+  | "lint"
+  | "tests"
+  | "custom"
 export type VerificationStatus = "pass" | "fail"
+export type VerificationExecutable = "node" | "npm" | "pnpm" | "yarn" | "bun" | "python" | "cargo" | "go"
 
 export interface VerificationEvidenceRef {
   kind: "receipt" | "artifact" | "event" | "workspace"
@@ -29,8 +40,8 @@ export interface VerificationReport {
 
 export interface VerificationCommandSpec {
   id: string
-  category: "syntax" | "types" | "tests" | "custom"
-  executable: "node"
+  category: "syntax" | "types" | "lint" | "tests" | "custom"
+  executable: VerificationExecutable
   args: string[]
   timeoutMs?: number
   maxOutputBytes?: number

@@ -24,6 +24,7 @@ export type KodacEventType =
   | "agent.turn.failed"
   | "agent.loop.completed"
   | "agent.loop.stopped"
+  | "verification.plan.created"
   | "verification.started"
   | "verification.check.completed"
   | "verification.completed"
