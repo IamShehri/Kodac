@@ -3,8 +3,9 @@ import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import test from "node:test"
+import { fileURLToPath } from "node:url"
 
-const fixtureRoot = join("test", "fixtures", "k3-r1")
+const fixtureRoot = fileURLToPath(new URL("./fixtures/k3-r1/", import.meta.url))
 const manifestPath = join(fixtureRoot, "manifest.json")
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
 
