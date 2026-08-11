@@ -255,7 +255,13 @@ export class BoundedAgentLoop {
       }
 
       assistant = result.assistant
-      if (result.assistant) messages.push({ role: "assistant", content: result.assistant })
+      if (result.assistant || result.toolCalls.length > 0) {
+        messages.push({
+          role: "assistant",
+          content: result.assistant,
+          toolCalls: result.toolCalls.map((call) => ({ ...call })),
+        })
+      }
       for (const toolResult of result.toolResults) {
         messages.push({
           role: "tool",
