@@ -73,7 +73,7 @@ test("AgentTurnRunner records stream evidence without raw assistant deltas", asy
   const providers = new ProviderRegistry()
   providers.register(provider)
   const runner = new AgentTurnRunner(providers, tools, new RuntimeOrchestrator(tools, session), session)
-  await session.start({ test: true })
+  await session.start({ workspace: process.cwd(), command: "stream-test", runtimeSlice: "k2-s8b" })
   const result = await runner.run({ provider: "openai-compatible", model: "m", messages: [{ role: "user", content: "x" }] })
   assert.equal(result.assistant, secretText)
   assert.ok(sink.events.some((event) => event.type === "model.stream.text_delta"))

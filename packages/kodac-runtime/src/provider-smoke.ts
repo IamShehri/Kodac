@@ -59,14 +59,14 @@ export async function runProviderSmoke(argv: string[], env: NodeJS.ProcessEnv = 
   const runner = new AgentTurnRunner(providers, tools, orchestrator, session)
   let streamed = false
 
-  await session.start({ command: "provider-smoke", runtimeSlice: "k2-s8b", provider: args.provider, model: args.model })
+  await session.start({ workspace: process.cwd(), command: "provider-smoke", runtimeSlice: "k2-s8b" })
   try {
     const result = await runner.run({ provider: args.provider, model: args.model, messages: [{ role: "user", content: args.prompt }] }, {
       onStreamEvent(event) {
         if (!args.json && event.type === "text_delta") { streamed = true; process.stdout.write(event.text) }
       },
     })
-    await session.complete({ mode: "provider_smoke", provider: args.provider, model: args.model, attempts: result.metadata?.attempts, usage: result.metadata?.usage })
+    await session.complete({ mode: "model_turn", provider: args.provider, model: args.model })
     if (args.json) {
       process.stdout.write(`${JSON.stringify({ status: "PASS", provider: args.provider, model: args.model, assistant: result.assistant, metadata: result.metadata, evidence: { events: eventPath } })}\n`)
     } else {
