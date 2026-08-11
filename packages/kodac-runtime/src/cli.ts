@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { BoundedAgentLoop, DEFAULT_AGENT_LOOP_LIMITS, type AgentLoopLimits } from "./agent/loop.ts"
 import { NodeWorkspaceFileSystem } from "./edit/filesystem.ts"
-import { JsonlReceiptLedger } from "./evidence/ledger.ts"
+import { JsonlReceiptLedger, readReceiptLedger } from "./evidence/ledger.ts"
 import { ExecutionGateway } from "./execution/gateway.ts"
 import { FixtureModelProvider } from "./model/fixture.ts"
 import { ProviderRegistry, type ModelProvider } from "./model/provider.ts"
@@ -20,6 +20,7 @@ import { fixedPolicy } from "./trust/policy.ts"
 import { parseVerificationCommandSpec } from "./verification/commands.ts"
 import { DoneGate, type DoneGateResult } from "./verification/done-gate.ts"
 import { runVerificationEngine } from "./verification/engine.ts"
+import { planVerification, type VerificationPlan } from "./verification/planner.ts"
 import type { VerificationCommandSpec, VerificationReport } from "./verification/types.ts"
 
 export interface CliIO {
@@ -225,19 +226,62 @@ function defaultIO(): CliIO {
   }
 }
 
-function sessionPaths(args: CommonArgs, sessionId: string): { eventPath: string; receiptPath: string; proofPath: string } {
+function sessionPaths(args: CommonArgs, sessionId: string): {
+  eventPath: string
+  receiptPath: string
+  planPath: string
+  proofPath: string
+} {
   const evidenceRoot = args.evidenceDir ?? defaultEvidenceRoot(args.workspace)
   const sessionEvidenceDir = join(evidenceRoot, sessionId)
   return {
     eventPath: join(sessionEvidenceDir, "events.jsonl"),
     receiptPath: join(sessionEvidenceDir, "receipts.jsonl"),
+    planPath: join(sessionEvidenceDir, "verification-plan.json"),
     proofPath: join(sessionEvidenceDir, "proof.json"),
   }
 }
 
-async function writeProofArtifact(path: string, report: VerificationReport, gate: DoneGateResult): Promise<void> {
+async function writePlanArtifact(path: string, plan: VerificationPlan): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, `${JSON.stringify({ protocol: "kodac.proof", version: 1, sessionId: report.sessionId, verification: report, doneGate: gate }, null, 2)}\n`, "utf8")
+  await writeFile(path, `${JSON.stringify(plan, null, 2)}\n`, "utf8")
+}
+
+async function writeProofArtifact(
+  path: string,
+  plan: VerificationPlan,
+  report: VerificationReport,
+  gate: DoneGateResult,
+): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(
+    path,
+    `${JSON.stringify({
+      protocol: "kodac.proof",
+      version: 1,
+      sessionId: report.sessionId,
+      verificationPlan: plan,
+      verification: report,
+      doneGate: gate,
+    }, null, 2)}\n`,
+    "utf8",
+  )
+}
+
+async function changedPathsFromReceipts(receiptPath: string): Promise<string[]> {
+  try {
+    const receipts = await readReceiptLedger(receiptPath)
+    const changed = new Set<string>()
+    for (const receipt of receipts) {
+      if (receipt.capability !== "repo.apply_patch" || receipt.result.status !== "success" || !("affected" in receipt.result)) continue
+      for (const path of receipt.result.affected.added) changed.add(path)
+      for (const path of receipt.result.affected.modified) changed.add(path)
+      for (const path of receipt.result.affected.deleted) changed.add(path)
+    }
+    return [...changed].sort()
+  } catch {
+    return []
+  }
 }
 
 function modelRuntime(
@@ -356,7 +400,7 @@ async function runSolve(
   runtimeOptions: CliRuntimeOptions,
 ): Promise<number> {
   const sessionId = randomUUID()
-  const { eventPath, receiptPath, proofPath } = sessionPaths(args, sessionId)
+  const { eventPath, receiptPath, planPath, proofPath } = sessionPaths(args, sessionId)
   const session = new RuntimeSession(new JsonlEventSink(eventPath), sessionId)
   activateSession(session)
   const { runner } = modelRuntime(session, {
@@ -368,7 +412,7 @@ async function runSolve(
   })
   const loop = new BoundedAgentLoop(runner, session)
 
-  await session.start({ workspace: args.workspace, command: "solve", runtimeSlice: "k2-s6" })
+  await session.start({ workspace: args.workspace, command: "solve", runtimeSlice: "k2-s7" })
   const result = await loop.run({
     provider: args.provider,
     model: args.model,
@@ -393,6 +437,27 @@ async function runSolve(
     return 2
   }
 
+  const changedPaths = await changedPathsFromReceipts(receiptPath)
+  const plan = await planVerification({
+    workspace: args.workspace,
+    changedPaths,
+    manualCommands: args.verificationCommands,
+  })
+  await session.emit("verification.plan.created", {
+    risk: plan.risk,
+    budget: plan.budget,
+    planDigest: plan.planDigest,
+    changedPaths: plan.changedPaths,
+    signals: plan.signals,
+    warnings: plan.warnings,
+    commands: plan.commands.map((command) => ({
+      id: command.id,
+      category: command.category,
+      executable: command.executable,
+    })),
+  })
+  await writePlanArtifact(planPath, plan)
+
   const report = await runVerificationEngine({
     workspace: args.workspace,
     sessionId,
@@ -400,15 +465,16 @@ async function runSolve(
     session,
     agentCompleted: true,
     approveVerification: args.approveVerification,
-    commands: args.verificationCommands,
+    commands: plan.commands,
   })
   const gate = new DoneGate().evaluate(report)
   await session.emit("done_gate.evaluated", {
     status: gate.status,
     reasons: gate.reasons,
     evidenceCount: gate.evidence.length,
+    planDigest: plan.planDigest,
   })
-  await writeProofArtifact(proofPath, report, gate)
+  await writeProofArtifact(proofPath, plan, report, gate)
   await session.complete({
     mode: "agent_loop",
     provider: args.provider,
@@ -426,12 +492,18 @@ async function runSolve(
       model: args.model,
       assistant: result.assistant,
       budget: result.budget,
+      verificationRisk: plan.risk,
+      verificationCommands: plan.commands.map((command) => command.id),
+      warnings: plan.warnings,
       reasons: gate.reasons,
-      evidence: { events: eventPath, receipts: receiptPath, proof: proofPath },
+      evidence: { events: eventPath, receipts: receiptPath, plan: planPath, proof: proofPath },
     }))
   } else {
     if (result.assistant) io.stdout(result.assistant)
     io.stdout(`Agent loop complete: ${result.budget.turnsUsed} turn(s), ${result.budget.toolCallsUsed} tool call(s)`)
+    io.stdout(`Verification plan: ${plan.risk} risk, ${plan.commands.length} command(s)`)
+    for (const warning of plan.warnings) io.stdout(`! ${warning}`)
+    io.stdout(`Plan: ${planPath}`)
     io.stdout(`Proof: ${proofPath}`)
     if (gate.status === "PROVEN_READY") {
       io.stdout("PROVEN READY")
