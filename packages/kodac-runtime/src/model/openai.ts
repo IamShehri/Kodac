@@ -300,6 +300,7 @@ export class OpenAIResponsesProvider implements ModelProvider {
       payload.tool_choice = "auto"
     }
 
+    const apiKey = this.credential()
     const startedAt = this.clock()
     let lastError: ModelProviderError | undefined
 
@@ -312,7 +313,7 @@ export class OpenAIResponsesProvider implements ModelProvider {
         response = await this.fetchImpl(this.endpoint, {
           method: "POST",
           headers: {
-            authorization: `Bearer ${this.credential()}`,
+            authorization: `Bearer ${apiKey}`,
             "content-type": "application/json",
           },
           body: JSON.stringify(payload),
