@@ -36,6 +36,7 @@ test("Verification Planner detects manifests, classifies risk, and refuses shell
     await writeFile(
       join(workspace, "package.json"),
       JSON.stringify({
+        type: "module",
         packageManager: "npm@11.0.0",
         scripts: {
           test: "node --test verify.test.js",
@@ -75,7 +76,7 @@ test("kodac solve reaches PROVEN READY from an automatic verification plan witho
     )
     await writeFile(
       join(workspace, "package.json"),
-      JSON.stringify({ scripts: { test: "node --test verify.test.js" } }),
+      JSON.stringify({ type: "module", scripts: { test: "node --test verify.test.js" } }),
       "utf8",
     )
     execFileSync("git", ["add", "note.txt", "verify.test.js", "package.json"], { cwd: workspace })
