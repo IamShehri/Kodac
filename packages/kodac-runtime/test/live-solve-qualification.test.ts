@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { readFile, mkdir, mkdtemp, writeFile } from "node:fs/promises"
+import { access, readFile, mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import test from "node:test"
@@ -84,6 +84,26 @@ class FailingOpenAIProvider implements ModelProvider {
   }
 }
 
+class UnauthorizedPatchProvider implements ModelProvider {
+  readonly name = "openai"
+  calls = 0
+
+  async generate(_request: ModelProviderRequest): Promise<ModelProviderResponse> {
+    this.calls += 1
+    return {
+      assistant: "",
+      toolCalls: [{
+        id: "call-denied",
+        name: "repo.apply_patch",
+        input: {
+          patchText: "*** Begin Patch\n*** Add File: forbidden.txt\n+not authorized\n*** End Patch",
+        },
+      }],
+      finishReason: "tool_calls",
+    }
+  }
+}
+
 test("qualification gate accepts a fresh matching PASS report", async () => {
   const { workspace, report } = await fixture()
   const result = await verifyProviderQualificationReport({
@@ -135,7 +155,32 @@ test("controlled live solve requires explicit write and verification approval be
   assert.match(errors.join("\n"), /approve-writes/)
 })
 
-test("controlled live solve verifies qualification before invoking an injected production provider", async () => {
+test("controlled live solve requires an exact write scope before model execution", async () => {
+  const { workspace, evidence, report } = await fixture()
+  const provider = new FailingOpenAIProvider()
+  const errors: string[] = []
+  const code = await runControlledLiveSolve(
+    [
+      "task",
+      "--provider", "openai",
+      "--model", "gpt-test",
+      "--qualification-report", report,
+      "--workspace", workspace,
+      "--evidence-dir", evidence,
+      "--approve-writes",
+      "--approve-verification",
+    ],
+    {},
+    { stdout() {}, stderr(line) { errors.push(line) } },
+    workspace,
+    { modelProvider: provider, now: () => NOW },
+  )
+  assert.equal(code, 1)
+  assert.equal(provider.calls, 0)
+  assert.match(errors.join("\n"), /allow-write-path/)
+})
+
+test("controlled live solve verifies qualification and records exact write scope before invoking provider", async () => {
   const { workspace, evidence, report } = await fixture()
   const provider = new FailingOpenAIProvider()
   const output: string[] = []
@@ -148,6 +193,7 @@ test("controlled live solve verifies qualification before invoking an injected p
       "--qualification-report", report,
       "--workspace", workspace,
       "--evidence-dir", evidence,
+      "--allow-write-path", "README.md",
       "--approve-writes",
       "--approve-verification",
       "--max-failures", "1",
@@ -163,6 +209,7 @@ test("controlled live solve verifies qualification before invoking an injected p
   assert.equal(errors.length, 0)
   const result = JSON.parse(output.at(-1) ?? "{}") as Record<string, unknown>
   assert.equal(result.status, "STOPPED")
+  assert.deepEqual(result.allowedWritePaths, ["README.md"])
   const authorizationPath = result.authorization
   const controlledReportPath = result.controlledReport
   assert.equal(typeof authorizationPath, "string")
@@ -170,6 +217,39 @@ test("controlled live solve verifies qualification before invoking an injected p
   const authorization = JSON.parse(await readFile(authorizationPath as string, "utf8")) as Record<string, unknown>
   const controlled = JSON.parse(await readFile(controlledReportPath as string, "utf8")) as Record<string, unknown>
   assert.equal(authorization.protocol, "kodac.live-solve-authorization")
+  assert.deepEqual(authorization.writeScope, { mode: "exact_paths", paths: ["README.md"] })
   assert.equal(controlled.protocol, "kodac.controlled-live-solve")
+  assert.deepEqual(controlled.writeScope, { mode: "exact_paths", paths: ["README.md"] })
   assert.equal(controlled.exitCode, 2)
+})
+
+test("controlled live solve rejects an out-of-scope patch before workspace mutation", async () => {
+  const { workspace, evidence, report } = await fixture()
+  const provider = new UnauthorizedPatchProvider()
+  const output: string[] = []
+  const code = await runControlledLiveSolve(
+    [
+      "task",
+      "--provider", "openai",
+      "--model", "gpt-test",
+      "--qualification-report", report,
+      "--workspace", workspace,
+      "--evidence-dir", evidence,
+      "--allow-write-path", "README.md",
+      "--approve-writes",
+      "--approve-verification",
+      "--max-failures", "1",
+      "--json",
+    ],
+    {},
+    { stdout(line) { output.push(line) }, stderr() {} },
+    workspace,
+    { modelProvider: provider, now: () => NOW },
+  )
+  assert.equal(code, 2)
+  assert.equal(provider.calls, 1)
+  await assert.rejects(access(join(workspace, "forbidden.txt")))
+  assert.equal(await readFile(join(workspace, "README.md"), "utf8"), "Kodac controlled live solve fixture\n")
+  const result = JSON.parse(output.at(-1) ?? "{}") as Record<string, unknown>
+  assert.equal(result.status, "STOPPED")
 })

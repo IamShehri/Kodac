@@ -4,9 +4,15 @@ import { homedir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { pathToFileURL } from "node:url"
 import { runCli, type CliIO } from "./cli.ts"
+import { parsePatch } from "./edit/patch.ts"
 import { OpenAICompatibleProvider } from "./model/openai-compatible.ts"
 import { OpenAIResponsesProvider } from "./model/openai.ts"
-import type { ModelProvider } from "./model/provider.ts"
+import {
+  ModelProviderError,
+  type ModelProvider,
+  type ModelProviderRequest,
+  type ModelProviderResponse,
+} from "./model/provider.ts"
 import { verifyProviderQualificationReport, type QualifiedProviderAuthorization } from "./provider-qualification-gate.ts"
 
 interface LiveSolveArgs {
@@ -19,6 +25,7 @@ interface LiveSolveArgs {
   json: boolean
   approveWrites: boolean
   approveVerification: boolean
+  allowedWritePaths: string[]
   passthrough: string[]
 }
 
@@ -60,9 +67,33 @@ function pathIsInside(parent: string, candidate: string): boolean {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
 }
 
+function normalizeWriteScopePath(workspace: string, value: string): string {
+  if (!value.trim()) throw new Error("--allow-write-path must not be empty.")
+  if (isAbsolute(value)) throw new Error("--allow-write-path must be workspace-relative, not absolute.")
+  const target = resolve(workspace, value)
+  const rel = relative(resolve(workspace), target)
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`--allow-write-path escapes or names the workspace root: ${value}`)
+  }
+  return rel.split(sep).join("/")
+}
+
+function normalizePatchPath(value: string): string | undefined {
+  let normalized = value.replaceAll("\\", "/").trim()
+  while (normalized.startsWith("./")) normalized = normalized.slice(2)
+  if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) return undefined
+  const parts: string[] = []
+  for (const part of normalized.split("/")) {
+    if (!part || part === ".") continue
+    if (part === "..") return undefined
+    parts.push(part)
+  }
+  return parts.length > 0 ? parts.join("/") : undefined
+}
+
 function parseArgs(argv: string[], cwd: string): LiveSolveArgs {
   const task = argv[0]
-  if (!task) throw new Error("Usage: kodac live-solve <task> --provider <openai|openai-compatible> --model <id> --qualification-report <path> --workspace <dir> --approve-writes --approve-verification [solve options]")
+  if (!task) throw new Error("Usage: kodac live-solve <task> --provider <openai|openai-compatible> --model <id> --qualification-report <path> --workspace <dir> --allow-write-path <relative-path> --approve-writes --approve-verification [solve options]")
 
   let provider: LiveSolveArgs["provider"] = "openai"
   let model = ""
@@ -72,6 +103,7 @@ function parseArgs(argv: string[], cwd: string): LiveSolveArgs {
   let json = false
   let approveWrites = false
   let approveVerification = false
+  const rawWritePaths: string[] = []
   const passthrough: string[] = []
 
   const valuedPassthrough = new Set(["--verify-command", "--max-turns", "--max-tool-calls", "--max-elapsed-ms", "--max-failures"])
@@ -89,7 +121,7 @@ function parseArgs(argv: string[], cwd: string): LiveSolveArgs {
       approveVerification = true
       continue
     }
-    if (token === "--provider" || token === "--model" || token === "--workspace" || token === "--qualification-report" || token === "--evidence-dir" || valuedPassthrough.has(token)) {
+    if (token === "--provider" || token === "--model" || token === "--workspace" || token === "--qualification-report" || token === "--evidence-dir" || token === "--allow-write-path" || valuedPassthrough.has(token)) {
       const value = argv[++index]
       if (!value) throw new Error(`Missing value for ${token}`)
       if (token === "--provider") {
@@ -99,6 +131,7 @@ function parseArgs(argv: string[], cwd: string): LiveSolveArgs {
       else if (token === "--workspace") workspace = resolve(cwd, value)
       else if (token === "--qualification-report") qualificationReport = resolve(cwd, value)
       else if (token === "--evidence-dir") evidenceDir = resolve(cwd, value)
+      else if (token === "--allow-write-path") rawWritePaths.push(value)
       else passthrough.push(token, value)
       continue
     }
@@ -109,11 +142,13 @@ function parseArgs(argv: string[], cwd: string): LiveSolveArgs {
   if (!qualificationReport) throw new Error("Controlled live solve requires --qualification-report <path> from a PASS provider-qualify run.")
   if (!approveWrites) throw new Error("Controlled live solve requires explicit --approve-writes authorization.")
   if (!approveVerification) throw new Error("Controlled live solve requires explicit --approve-verification authorization.")
+  if (rawWritePaths.length === 0) throw new Error("Controlled live solve requires at least one exact --allow-write-path <workspace-relative-path>.")
   if (evidenceDir && pathIsInside(workspace, evidenceDir)) {
     throw new Error("Controlled live-solve evidence directory must be outside the target workspace.")
   }
 
-  return { task, provider, model, workspace, qualificationReport, evidenceDir, json, approveWrites, approveVerification, passthrough }
+  const allowedWritePaths = [...new Set(rawWritePaths.map((value) => normalizeWriteScopePath(workspace, value)))].sort()
+  return { task, provider, model, workspace, qualificationReport, evidenceDir, json, approveWrites, approveVerification, allowedWritePaths, passthrough }
 }
 
 function providerFromEnv(name: LiveSolveArgs["provider"], env: NodeJS.ProcessEnv): ModelProvider {
@@ -121,12 +156,58 @@ function providerFromEnv(name: LiveSolveArgs["provider"], env: NodeJS.ProcessEnv
   return OpenAICompatibleProvider.fromEnv(env, { stream: true })
 }
 
+class ExactWriteScopeProvider implements ModelProvider {
+  readonly name: string
+  private readonly delegate: ModelProvider
+  private readonly allowed: Set<string>
+
+  constructor(delegate: ModelProvider, allowedWritePaths: readonly string[]) {
+    this.delegate = delegate
+    this.name = delegate.name
+    this.allowed = new Set(allowedWritePaths)
+  }
+
+  async generate(request: ModelProviderRequest): Promise<ModelProviderResponse> {
+    const response = await this.delegate.generate(request)
+    for (const call of response.toolCalls) {
+      if (call.name !== "repo.apply_patch") continue
+      if (!call.input || typeof call.input !== "object" || Array.isArray(call.input)) {
+        throw new ModelProviderError("live_solve_write_scope_invalid", "repo.apply_patch input is not an object during controlled live solve.", { retryable: false })
+      }
+      const patchText = (call.input as Record<string, unknown>).patchText
+      if (typeof patchText !== "string") {
+        throw new ModelProviderError("live_solve_write_scope_invalid", "repo.apply_patch patchText is missing during controlled live solve.", { retryable: false })
+      }
+      let parsed: ReturnType<typeof parsePatch>
+      try {
+        parsed = parsePatch(patchText)
+      } catch (error) {
+        throw new ModelProviderError("live_solve_write_scope_invalid", "Controlled live-solve patch could not be parsed for write-scope enforcement.", { retryable: false, cause: error })
+      }
+      const requested = [...new Set(parsed.hunks.flatMap((hunk) =>
+        hunk.type === "update" && hunk.movePath ? [hunk.path, hunk.movePath] : [hunk.path],
+      ).map((path) => normalizePatchPath(path)))].sort()
+      const invalid = requested.some((path) => path === undefined)
+      const normalized = requested.filter((path): path is string => path !== undefined)
+      const denied = normalized.filter((path) => !this.allowed.has(path))
+      if (invalid || denied.length > 0) {
+        throw new ModelProviderError(
+          "live_solve_write_scope_denied",
+          `Controlled live solve denied patch outside exact write scope: ${(invalid ? ["<invalid-path>"] : denied).join(", ")}`,
+          { retryable: false },
+        )
+      }
+    }
+    return response
+  }
+}
+
 function providerForRun(args: LiveSolveArgs, env: NodeJS.ProcessEnv, injected?: ModelProvider): ModelProvider {
   const provider = injected ?? providerFromEnv(args.provider, env)
   if (provider.name !== args.provider) {
     throw new Error(`Controlled live-solve provider mismatch: requested ${args.provider}, runtime provider is ${provider.name}.`)
   }
-  return provider
+  return new ExactWriteScopeProvider(provider, args.allowedWritePaths)
 }
 
 async function writeSecureJson(path: string, value: unknown): Promise<void> {
@@ -134,7 +215,12 @@ async function writeSecureJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
 }
 
-function authorizationArtifact(input: QualifiedProviderAuthorization, authorizationId: string, authorizedAt: string): Record<string, unknown> {
+function authorizationArtifact(
+  input: QualifiedProviderAuthorization,
+  authorizationId: string,
+  authorizedAt: string,
+  allowedWritePaths: readonly string[],
+): Record<string, unknown> {
   const core = {
     protocol: "kodac.live-solve-authorization",
     version: 1,
@@ -149,6 +235,7 @@ function authorizationArtifact(input: QualifiedProviderAuthorization, authorizat
       reportPath: input.qualificationReportPath,
       authorizationDigest: input.authorizationDigest,
     },
+    writeScope: { mode: "exact_paths", paths: [...allowedWritePaths] },
     approvals: { writes: true, verification: true },
     authorizedAt,
   }
@@ -192,7 +279,7 @@ export async function runControlledLiveSolve(
     const authorizationPath = join(authorizationDir, "authorization.json")
     const controlledReportPath = join(authorizationDir, "controlled-live-solve-report.json")
     const authorizedAt = new Date(nowMs).toISOString()
-    const authorization = authorizationArtifact(qualification, authorizationId, authorizedAt)
+    const authorization = authorizationArtifact(qualification, authorizationId, authorizedAt, args.allowedWritePaths)
     await writeSecureJson(authorizationPath, authorization)
 
     const capturedOut: string[] = []
@@ -239,6 +326,7 @@ export async function runControlledLiveSolve(
         path: authorizationPath,
         digest: authorization.authorizationDigest,
       },
+      writeScope: { mode: "exact_paths", paths: [...args.allowedWritePaths] },
       solve: solve ?? {
         status: "ERROR",
         proven: false,
@@ -257,6 +345,7 @@ export async function runControlledLiveSolve(
         proven: solve?.proven === true,
         provider: args.provider,
         model: args.model,
+        allowedWritePaths: args.allowedWritePaths,
         qualificationReport: args.qualificationReport,
         qualificationReportDigest: qualification.qualificationReportDigest,
         authorization: authorizationPath,
@@ -267,6 +356,7 @@ export async function runControlledLiveSolve(
     } else {
       if (typeof solve?.assistant === "string" && solve.assistant) io.stdout(solve.assistant)
       io.stdout(`Controlled live solve: ${String(solve?.status ?? "ERROR")}`)
+      io.stdout(`Write scope: ${args.allowedWritePaths.join(", ")}`)
       io.stdout(`Qualification: ${args.qualificationReport}`)
       io.stdout(`Authorization: ${authorizationPath}`)
       io.stdout(`Controlled report: ${controlledReportPath}`)
