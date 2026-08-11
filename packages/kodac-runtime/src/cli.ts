@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
-import { readFile } from "node:fs/promises"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { BoundedAgentLoop, DEFAULT_AGENT_LOOP_LIMITS, type AgentLoopLimits } from "./agent/loop.ts"
 import { NodeWorkspaceFileSystem } from "./edit/filesystem.ts"
@@ -17,6 +17,10 @@ import { createApplyPatchTool, type ApplyPatchToolInput, type ApplyPatchToolOutp
 import { ToolRegistry } from "./tools/registry.ts"
 import { registerWorkspaceToolSurface } from "./tools/workspace-surface.ts"
 import { fixedPolicy } from "./trust/policy.ts"
+import { parseVerificationCommandSpec } from "./verification/commands.ts"
+import { DoneGate, type DoneGateResult } from "./verification/done-gate.ts"
+import { runVerificationEngine } from "./verification/engine.ts"
+import type { VerificationCommandSpec, VerificationReport } from "./verification/types.ts"
 
 export interface CliIO {
   stdout(line: string): void
@@ -51,6 +55,8 @@ interface SolveArgs extends CommonArgs {
   provider: string
   model: string
   approveWrites: boolean
+  approveVerification: boolean
+  verificationCommands: VerificationCommandSpec[]
   limits: AgentLoopLimits
 }
 
@@ -83,6 +89,17 @@ function parseCommonOptions(argv: string[], startIndex: number, cwd: string, tar
       target.approveWrites = true
       continue
     }
+    if (token === "--approve-verification") {
+      target.approveVerification = true
+      continue
+    }
+    if (token === "--verify-command") {
+      const value = argv[++index]
+      if (!value) throw new Error("Missing value for --verify-command")
+      const existing = (target.verificationCommands as VerificationCommandSpec[] | undefined) ?? []
+      target.verificationCommands = [...existing, parseVerificationCommandSpec(value)]
+      continue
+    }
     if (
       token === "--workspace" || token === "--evidence-dir" || token === "--provider" || token === "--model" ||
       token === "--max-turns" || token === "--max-tool-calls" || token === "--max-elapsed-ms" || token === "--max-failures"
@@ -103,6 +120,11 @@ function parseCommonOptions(argv: string[], startIndex: number, cwd: string, tar
   }
 }
 
+function hasSolveOnlyOptions(value: object): boolean {
+  return "approveWrites" in value || "approveVerification" in value || "verificationCommands" in value ||
+    "maxTurns" in value || "maxToolCalls" in value || "maxElapsedMs" in value || "maxFailures" in value
+}
+
 function parseCliArgs(argv: string[], cwd: string): CliArgs {
   if (argv[0] === "apply-patch" && argv[1]) {
     const result: ApplyPatchArgs = {
@@ -112,11 +134,8 @@ function parseCliArgs(argv: string[], cwd: string): CliArgs {
       json: false,
     }
     parseCommonOptions(argv, 2, cwd, result as ApplyPatchArgs & Record<string, unknown>)
-    if (
-      "provider" in result || "model" in result || "approveWrites" in result || "maxTurns" in result ||
-      "maxToolCalls" in result || "maxElapsedMs" in result || "maxFailures" in result
-    ) {
-      throw new Error("Model and agent-loop options are not valid with kodac apply-patch")
+    if ("provider" in result || "model" in result || hasSolveOnlyOptions(result)) {
+      throw new Error("Model, write, verification, and agent-loop options are not valid with kodac apply-patch")
     }
     return result
   }
@@ -131,12 +150,7 @@ function parseCliArgs(argv: string[], cwd: string): CliArgs {
       json: false,
     }
     parseCommonOptions(argv, 2, cwd, result as AskArgs & Record<string, unknown>)
-    if (
-      "approveWrites" in result || "maxTurns" in result || "maxToolCalls" in result ||
-      "maxElapsedMs" in result || "maxFailures" in result
-    ) {
-      throw new Error("Agent-loop write/limit options are only valid with kodac solve")
-    }
+    if (hasSolveOnlyOptions(result)) throw new Error("Write, verification, and agent-loop options are only valid with kodac solve")
     return result
   }
 
@@ -147,6 +161,8 @@ function parseCliArgs(argv: string[], cwd: string): CliArgs {
       provider: string
       model: string
       approveWrites: boolean
+      approveVerification: boolean
+      verificationCommands: VerificationCommandSpec[]
       maxTurns: number
       maxToolCalls: number
       maxElapsedMs: number
@@ -159,12 +175,19 @@ function parseCliArgs(argv: string[], cwd: string): CliArgs {
       model: "fixture/deterministic-v1",
       json: false,
       approveWrites: false,
+      approveVerification: false,
+      verificationCommands: [],
       maxTurns: DEFAULT_AGENT_LOOP_LIMITS.maxTurns,
       maxToolCalls: DEFAULT_AGENT_LOOP_LIMITS.maxToolCalls,
       maxElapsedMs: DEFAULT_AGENT_LOOP_LIMITS.maxElapsedMs,
       maxFailures: DEFAULT_AGENT_LOOP_LIMITS.maxFailures,
     }
     parseCommonOptions(argv, 2, cwd, mutable)
+    const ids = new Set<string>()
+    for (const command of mutable.verificationCommands) {
+      if (ids.has(command.id)) throw new Error(`Duplicate verification command id: ${command.id}`)
+      ids.add(command.id)
+    }
     return {
       command: "solve",
       prompt: mutable.prompt,
@@ -174,6 +197,8 @@ function parseCliArgs(argv: string[], cwd: string): CliArgs {
       model: mutable.model,
       json: mutable.json,
       approveWrites: mutable.approveWrites,
+      approveVerification: mutable.approveVerification,
+      verificationCommands: mutable.verificationCommands,
       limits: {
         ...DEFAULT_AGENT_LOOP_LIMITS,
         maxTurns: mutable.maxTurns,
@@ -187,8 +212,9 @@ function parseCliArgs(argv: string[], cwd: string): CliArgs {
   throw new Error(
     "Usage: kodac apply-patch <patch-file> [--workspace <dir>] [--evidence-dir <dir>] [--json]\n" +
       "   or: kodac ask <prompt> [--provider fixture] [--model <id>] [--workspace <dir>] [--evidence-dir <dir>] [--json]\n" +
-      "   or: kodac solve <task> [--provider fixture] [--model <id>] [--approve-writes] [--max-turns <n>] " +
-      "[--max-tool-calls <n>] [--max-elapsed-ms <n>] [--max-failures <n>] [--workspace <dir>] [--evidence-dir <dir>] [--json]",
+      "   or: kodac solve <task> [--provider fixture] [--model <id>] [--approve-writes] [--approve-verification] " +
+      "[--verify-command <json>] [--max-turns <n>] [--max-tool-calls <n>] [--max-elapsed-ms <n>] [--max-failures <n>] " +
+      "[--workspace <dir>] [--evidence-dir <dir>] [--json]",
   )
 }
 
@@ -199,13 +225,19 @@ function defaultIO(): CliIO {
   }
 }
 
-function sessionPaths(args: CommonArgs, sessionId: string): { eventPath: string; receiptPath: string } {
+function sessionPaths(args: CommonArgs, sessionId: string): { eventPath: string; receiptPath: string; proofPath: string } {
   const evidenceRoot = args.evidenceDir ?? defaultEvidenceRoot(args.workspace)
   const sessionEvidenceDir = join(evidenceRoot, sessionId)
   return {
     eventPath: join(sessionEvidenceDir, "events.jsonl"),
     receiptPath: join(sessionEvidenceDir, "receipts.jsonl"),
+    proofPath: join(sessionEvidenceDir, "proof.json"),
   }
+}
+
+async function writeProofArtifact(path: string, report: VerificationReport, gate: DoneGateResult): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, `${JSON.stringify({ protocol: "kodac.proof", version: 1, sessionId: report.sessionId, verification: report, doneGate: gate }, null, 2)}\n`, "utf8")
 }
 
 function modelRuntime(
@@ -250,13 +282,14 @@ async function runApplyPatch(args: ApplyPatchArgs, io: CliIO, activateSession: A
   registry.register(createApplyPatchTool(gateway, receipts))
   const orchestrator = new RuntimeOrchestrator(registry, session)
 
-  await session.start({ workspace: args.workspace, command: "apply-patch", runtimeSlice: "k2-s2" })
+  await session.start({ workspace: args.workspace, command: "apply-patch", runtimeSlice: "k2-s6" })
   const result = await orchestrator.invoke<ApplyPatchToolInput, ApplyPatchToolOutput>("repo.apply_patch", { patchText })
-  await session.complete({ receiptId: result.receipt.receiptId, tool: "repo.apply_patch", mode: "tool" })
+  await session.complete({ receiptId: result.receipt.receiptId, tool: "repo.apply_patch", mode: "tool", verified: false })
 
   if (args.json) {
     io.stdout(JSON.stringify({
-      status: "PROVEN_READY",
+      status: "PATCH_APPLIED",
+      proven: false,
       sessionId,
       affected: result.affected,
       receiptId: result.receipt.receiptId,
@@ -269,7 +302,7 @@ async function runApplyPatch(args: ApplyPatchArgs, io: CliIO, activateSession: A
     io.stdout("✓ workspace boundary verified")
     io.stdout("✓ patch applied")
     io.stdout(`✓ receipt written: ${receiptPath}`)
-    io.stdout("PROVEN READY")
+    io.stdout("PATCH APPLIED — VERIFICATION NOT RUN")
   }
   return 0
 }
@@ -323,7 +356,7 @@ async function runSolve(
   runtimeOptions: CliRuntimeOptions,
 ): Promise<number> {
   const sessionId = randomUUID()
-  const { eventPath, receiptPath } = sessionPaths(args, sessionId)
+  const { eventPath, receiptPath, proofPath } = sessionPaths(args, sessionId)
   const session = new RuntimeSession(new JsonlEventSink(eventPath), sessionId)
   activateSession(session)
   const { runner } = modelRuntime(session, {
@@ -335,7 +368,7 @@ async function runSolve(
   })
   const loop = new BoundedAgentLoop(runner, session)
 
-  await session.start({ workspace: args.workspace, command: "solve", runtimeSlice: "k2-s5" })
+  await session.start({ workspace: args.workspace, command: "solve", runtimeSlice: "k2-s6" })
   const result = await loop.run({
     provider: args.provider,
     model: args.model,
@@ -360,25 +393,54 @@ async function runSolve(
     return 2
   }
 
-  await session.complete({ mode: "agent_loop", provider: args.provider, model: args.model })
+  const report = await runVerificationEngine({
+    workspace: args.workspace,
+    sessionId,
+    receiptPath,
+    session,
+    agentCompleted: true,
+    approveVerification: args.approveVerification,
+    commands: args.verificationCommands,
+  })
+  const gate = new DoneGate().evaluate(report)
+  await session.emit("done_gate.evaluated", {
+    status: gate.status,
+    reasons: gate.reasons,
+    evidenceCount: gate.evidence.length,
+  })
+  await writeProofArtifact(proofPath, report, gate)
+  await session.complete({
+    mode: "agent_loop",
+    provider: args.provider,
+    model: args.model,
+    doneGate: gate.status,
+    proof: proofPath,
+  })
+
   if (args.json) {
     io.stdout(JSON.stringify({
-      status: "AGENT_COMPLETE",
-      proven: false,
+      status: gate.status,
+      proven: gate.status === "PROVEN_READY",
       sessionId,
       provider: args.provider,
       model: args.model,
       assistant: result.assistant,
       budget: result.budget,
-      evidence: { events: eventPath, receipts: receiptPath },
+      reasons: gate.reasons,
+      evidence: { events: eventPath, receipts: receiptPath, proof: proofPath },
     }))
   } else {
     if (result.assistant) io.stdout(result.assistant)
     io.stdout(`Agent loop complete: ${result.budget.turnsUsed} turn(s), ${result.budget.toolCallsUsed} tool call(s)`)
-    io.stdout(`Evidence: ${eventPath}`)
-    io.stdout("NOT PROVEN READY — verification and Done Gate have not run")
+    io.stdout(`Proof: ${proofPath}`)
+    if (gate.status === "PROVEN_READY") {
+      io.stdout("PROVEN READY")
+    } else {
+      io.stdout("NOT READY")
+      for (const reason of gate.reasons) io.stdout(`✗ ${reason}`)
+    }
   }
-  return 0
+  return gate.status === "PROVEN_READY" ? 0 : 3
 }
 
 export async function runCli(

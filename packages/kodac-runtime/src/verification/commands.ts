@@ -11,6 +11,10 @@ function boundedInteger(name: string, value: unknown, maximum: number): number |
   return value as number
 }
 
+function containsTraversal(value: string): boolean {
+  return value === ".." || value.startsWith("../") || value.startsWith("..\\") || value.includes("/../") || value.includes("\\..\\")
+}
+
 export function parseVerificationCommandSpec(raw: string): VerificationCommandSpec {
   let value: unknown
   try {
@@ -31,8 +35,8 @@ export function parseVerificationCommandSpec(raw: string): VerificationCommandSp
     throw new Error("verification command args must be an array of bounded strings")
   }
   for (const arg of args) {
-    if (typeof arg === "string" && isAbsolute(arg)) {
-      throw new Error("verification command args must not contain absolute paths")
+    if (typeof arg === "string" && (isAbsolute(arg) || containsTraversal(arg))) {
+      throw new Error("verification command args must remain workspace-relative")
     }
   }
   return {

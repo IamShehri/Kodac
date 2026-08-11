@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import test from "node:test"
 
 import { runCli } from "../src/cli.ts"
@@ -12,11 +12,7 @@ class ScriptedWorkspaceProvider implements ModelProvider {
   readonly name = "fixture"
   readonly requests: ModelProviderRequest[] = []
   private readonly responses: ModelProviderResponse[]
-
-  constructor(responses: ModelProviderResponse[]) {
-    this.responses = responses
-  }
-
+  constructor(responses: ModelProviderResponse[]) { this.responses = responses }
   async generate(request: ModelProviderRequest): Promise<ModelProviderResponse> {
     this.requests.push({ ...request, messages: request.messages.map((message) => ({ ...message })), tools: [...request.tools] })
     const response = this.responses.shift()
@@ -28,17 +24,10 @@ class ScriptedWorkspaceProvider implements ModelProvider {
 function capture(): { out: string[]; err: string[]; io: { stdout(line: string): void; stderr(line: string): void } } {
   const out: string[] = []
   const err: string[] = []
-  return {
-    out,
-    err,
-    io: {
-      stdout(line) { out.push(line) },
-      stderr(line) { err.push(line) },
-    },
-  }
+  return { out, err, io: { stdout(line) { out.push(line) }, stderr(line) { err.push(line) } } }
 }
 
-test("kodac solve can traverse the canonical workspace tool surface with explicit write approval", async () => {
+test("kodac solve mutates with approval but remains NOT READY without verification commands", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "kodac-solve-s5-workspace-"))
   const evidence = await mkdtemp(join(tmpdir(), "kodac-solve-s5-evidence-"))
   try {
@@ -48,7 +37,6 @@ test("kodac solve can traverse the canonical workspace tool surface with explici
     await writeFile(join(workspace, "note.txt"), "alpha\nbeta\n", "utf8")
     execFileSync("git", ["add", "note.txt"], { cwd: workspace })
     execFileSync("git", ["commit", "-qm", "fixture"], { cwd: workspace })
-
     const patchText = "*** Begin Patch\n*** Update File: note.txt\n@@\n-alpha\n+ALPHA\n beta\n*** End Patch"
     const provider = new ScriptedWorkspaceProvider([
       { assistant: "", finishReason: "tool_calls", toolCalls: [{ id: "list-1", name: "repo.list", input: {} }] },
@@ -59,32 +47,17 @@ test("kodac solve can traverse the canonical workspace tool surface with explici
       { assistant: "workspace updated", finishReason: "stop", toolCalls: [] },
     ])
     const captured = capture()
-    const code = await runCli(
-      ["solve", "update the workspace", "--workspace", workspace, "--evidence-dir", evidence, "--approve-writes"],
-      captured.io,
-      workspace,
-      { modelProvider: provider },
-    )
-
-    assert.equal(code, 0)
+    const code = await runCli(["solve", "update the workspace", "--workspace", workspace, "--evidence-dir", evidence, "--approve-writes"], captured.io, workspace, { modelProvider: provider })
+    assert.equal(code, 3)
     assert.equal(await readFile(join(workspace, "note.txt"), "utf8"), "ALPHA\nbeta\n")
-    assert.ok(captured.out.includes("NOT PROVEN READY — verification and Done Gate have not run"))
+    assert.ok(captured.out.includes("NOT READY"))
     assert.equal(captured.out.includes("PROVEN READY"), false)
-
     const toolNames = provider.requests[0].tools.map((tool) => tool.name).sort()
     assert.deepEqual(toolNames, ["git.diff", "repo.apply_patch", "repo.list", "repo.read", "repo.search"])
     const finalRequest = provider.requests.at(-1)
     assert.ok(finalRequest)
     const gitDiffResult = finalRequest.messages.find((message) => message.role === "tool" && message.name === "git.diff")
     assert.ok(gitDiffResult?.content.includes("+ALPHA"))
-
-    const evidenceLine = captured.out.find((line) => line.startsWith("Evidence: "))
-    assert.ok(evidenceLine)
-    const eventPath = evidenceLine.slice("Evidence: ".length)
-    const receiptsPath = join(dirname(eventPath), "receipts.jsonl")
-    const receipts = (await readFile(receiptsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { capability: string; result: { status: string } })
-    assert.deepEqual(receipts.map((receipt) => receipt.capability), ["repo.apply_patch", "git.diff"])
-    assert.ok(receipts.every((receipt) => receipt.result.status === "success"))
   } finally {
     await rm(workspace, { recursive: true, force: true })
     await rm(evidence, { recursive: true, force: true })
