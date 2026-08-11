@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { mkdir, stat, writeFile } from "node:fs/promises"
-import { dirname, resolve } from "node:path"
+import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 export const LIVE_SOLVE_FIXTURE_TASK =
@@ -29,12 +29,19 @@ function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex")
 }
 
+function childEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  return env
+}
+
 function run(executable: string, args: string[], cwd: string, allowFailure = false): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(executable, args, {
     cwd,
     encoding: "utf8",
     windowsHide: true,
     shell: false,
+    env: childEnv(),
   })
   if (result.error) throw result.error
   const status = result.status ?? 1

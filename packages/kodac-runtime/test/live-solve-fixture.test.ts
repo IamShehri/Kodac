@@ -6,8 +6,14 @@ import { join } from "node:path"
 import test from "node:test"
 import { createLiveSolveFixture, LIVE_SOLVE_FIXTURE_TASK } from "../src/live-solve-fixture.ts"
 
+function childEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  return env
+}
+
 function run(executable: string, args: string[], cwd: string): { status: number; stdout: string; stderr: string } {
-  const result = spawnSync(executable, args, { cwd, encoding: "utf8", windowsHide: true, shell: false })
+  const result = spawnSync(executable, args, { cwd, encoding: "utf8", windowsHide: true, shell: false, env: childEnv() })
   if (result.error) throw result.error
   return { status: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" }
 }
