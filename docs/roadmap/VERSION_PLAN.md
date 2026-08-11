@@ -75,7 +75,7 @@ K3 defined
 
 ## Release-gate direction
 
-A future public-release decision should be evidence-gated and separately review at least the applicable subsets of:
+A future public-release decision should be evidence-gated and separately reviewed at least the applicable subsets of:
 
 - product scope and supported surfaces;
 - compatibility/versioning contract;
