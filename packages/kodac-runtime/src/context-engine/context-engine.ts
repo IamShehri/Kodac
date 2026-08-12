@@ -159,7 +159,7 @@ function normalizeRequest(request: ContextBundleRequest): NormalizedRequest {
 }
 
 function assertDigest(label: string, value: unknown): asserts value is string {
-  if (typeof value !== "string" || !/^[0-9a-f]{64}$/i.test(value)) throw new Error(`${label} must be a SHA-256 identity`)
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new Error(`${label} must be a lowercase SHA-256 identity`)
 }
 
 function validateProvenanceRefs(values: unknown, label: string): string[] {
@@ -284,7 +284,11 @@ function assertStructuralResult(result: AstGrepStructuralQueryResult, snapshot: 
   }
 
   if (!Array.isArray(result.matches)) throw new Error(`${label}.matches must be an array`)
+  if (result.matches.length > HARD_MAX_STRUCTURAL_MATCHES) {
+    throw new Error(`${label}.matches exceeds ${HARD_MAX_STRUCTURAL_MATCHES} items`)
+  }
   for (const [matchIndex, match] of result.matches.entries()) {
+    if (!match || typeof match !== "object") throw new Error(`${label}.matches[${matchIndex}] must be an object`)
     validateCanonicalPath(match.path, `${label}.matches[${matchIndex}].path`)
     if (match.evidenceClass !== "parser-derived") throw new Error(`${label}.matches[${matchIndex}] must remain parser-derived`)
     if (!Number.isInteger(match.line) || match.line <= 0 || !Number.isInteger(match.column) || match.column <= 0) {
