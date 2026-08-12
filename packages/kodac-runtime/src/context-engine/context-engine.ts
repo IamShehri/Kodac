@@ -177,12 +177,16 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
   const sourceIds = new Set<string>()
   for (const [index, source] of snapshot.sources.entries()) {
     const id = assertBoundedString(`snapshot.sources[${index}].id`, source?.id, 256)
+    if (sourceIds.has(id)) throw new Error(`snapshot source identity replay mismatch: ${id}`)
     if (source?.kind !== "builtin") throw new Error(`snapshot.sources[${index}] has an unsupported source kind`)
     validateProvenanceRefs(source.provenanceRefs, `snapshot.sources[${index}].provenanceRefs`)
     sourceIds.add(id)
   }
+  const evidenceIds = new Set<string>()
   for (const [index, evidence] of snapshot.evidence.entries()) {
     assertDigest(`snapshot.evidence[${index}].evidenceId`, evidence?.evidenceId)
+    if (evidenceIds.has(evidence.evidenceId)) throw new Error(`snapshot evidence identity replay mismatch: ${evidence.evidenceId}`)
+    evidenceIds.add(evidence.evidenceId)
     if (evidence.contentIdentity !== snapshot.contentIdentity.value) {
       throw new Error(`snapshot.evidence[${index}] belongs to a different content identity`)
     }
@@ -374,8 +378,13 @@ export function buildContextBundle(input: ContextEngineInput): ContextBundle {
     throw new Error(`structuralResults must contain at most ${HARD_MAX_STRUCTURAL_RESULTS} results`)
   }
   let structuralMatchCount = 0
+  const structuralResultIds = new Set<string>()
   for (const [index, result] of structuralResults.entries()) {
     assertStructuralResult(result, input.snapshot, index)
+    if (structuralResultIds.has(result.resultIdentity)) {
+      throw new Error(`structural result identity replay mismatch: ${result.resultIdentity}`)
+    }
+    structuralResultIds.add(result.resultIdentity)
     structuralMatchCount += result.matches.length
     if (structuralMatchCount > HARD_MAX_STRUCTURAL_MATCHES) {
       throw new Error(`K3-R5 structural matches exceed ${HARD_MAX_STRUCTURAL_MATCHES} items`)
