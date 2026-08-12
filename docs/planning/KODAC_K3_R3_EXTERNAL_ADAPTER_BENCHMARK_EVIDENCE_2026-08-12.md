@@ -62,32 +62,36 @@ Not authorized:
 | --- | --- |
 | Branch | `bench/k3-r3-external-adapter-evidence` |
 | Canonical base | `9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc` |
-| Benchmarked predecessor head | `cf4715b8cb54f412b400c3a41d1696b496cf31e3` |
-| Governance run | `31628826551` — `SUCCESS` |
-| K2 runtime run | `31628826506` — `SUCCESS` |
-| Benchmark run | `31628826428` — `SUCCESS` |
-| Benchmark run number | `15` |
-| Artifact id | `9154212840` |
-| Artifact name | `k3-r3-benchmark-evidence-cf4715b8cb54f412b400c3a41d1696b496cf31e3` |
-| Artifact ZIP digest | `sha256:0248be1e4ffd545cd217a3d32f1861b744ba484035e3e30ec7905a42f9e15a5d` |
-| Raw `k3-r3-results.json` SHA-256 | `8a1c13dbd68fcda3d559fe4468746a7c8abe2385d8fd1f2aee1ff85d0d6941a6` |
-| Canonical result identity | `0f6b6ed86722149987f94d41d23196444e8ae7231b0de2b7edf52e38ade13d5a` |
+| Benchmarked predecessor head | `bb28b9890ce7b228763461986145001e44d7550a` |
+| Governance run | `31633956056` — `SUCCESS` |
+| K2 runtime run | `31633956058` — `SUCCESS` |
+| Benchmark run | `31633956052` — rerun attempt — `SUCCESS` |
+| Benchmark run number | `20` |
+| Artifact id | `9156256575` |
+| Artifact name | `k3-r3-benchmark-evidence-bb28b9890ce7b228763461986145001e44d7550a` |
+| Artifact ZIP digest | `sha256:993752543c64199998e847b2561c59d6ee163289503e4311417f7a19919c6e4b` |
+| Raw `k3-r3-results.json` SHA-256 | `32171d28cb5b8ee851f6352f1fec1514a2090c2781a5d355d0581ec5fafba4b1` |
+| Canonical result identity | `28dbd3c69a666857d34073fc750ff5c750b704ea1149abc773ec709c3c7e5879` |
 | Overall result | `BENCHMARK_EVIDENCE_READY_FOR_REVIEW` |
 
 The artifact records:
 
 ```text
-benchmarkHead = cf4715b8cb54f412b400c3a41d1696b496cf31e3
+benchmarkHead = bb28b9890ce7b228763461986145001e44d7550a
 canonicalBaseline = 9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc
+checkedOutHead = bb28b9890ce7b228763461986145001e44d7550a
 ```
 
-## 4. Fail-closed identity, path, and freshness evidence
+The first attempt of benchmark run `31633956052` failed before candidate execution because the Tree-sitter GitHub Release endpoint returned repeated HTTP `503` responses. The failed attempt preserved a clean workspace and produced no benchmark result. The bounded failed-job rerun on the identical Git head succeeded; no code change was made to convert that transient network failure into evidence.
 
-The predecessor artifact records the following guards as true:
+## 4. Fail-closed identity, provenance, path, and freshness evidence
+
+The inspected predecessor artifact records the following guards as true:
 
 ```text
 canonicalBaseIdentityGuard = true
 exactHeadCheckoutGuard = true
+candidateExecutableDigestGuard = true
 realpathWorkspaceContainmentGuard = true
 perEntryRealpathContainmentGuard = true
 symlinkTargetContainmentGuard = true
@@ -99,7 +103,7 @@ snapshotFreshnessGuard = true
 evidenceSourceProvenanceCompleteness = true
 workspaceFullTreeMutationGuard = true
 canonicalTraversalCaseRejected = true
-canonicalSymlinkTargetEscapeRejected = true
+canonicalSymlinkTargetPathStringRejected = true
 ```
 
 Measured tree state:
@@ -116,19 +120,36 @@ unauthorizedWorkspaceMutationsObservedByHarness = 0
 
 The mutation value is a real changed-entry count derived from the union of before/after snapshot paths. It is not a boolean disguised as a count.
 
-Per-entry path truth is fail-closed:
+Path and output truth is fail-closed:
 
 - manifest-listed files are resolved with `realpathSync` and must remain contained by the real fixture root before reading;
 - candidate result paths are resolved with `realpathSync` and must remain contained before normalization;
 - symlink entries in full-tree snapshots have their resolved targets containment-checked before evidence is recorded;
 - contained symlink file targets include a content digest in the snapshot evidence;
-- fixture and workspace roots themselves are resolved before containment checks.
+- fixture and workspace roots themselves are resolved before containment checks;
+- `K3_R3_RESULT_PATH` must resolve through a parent outside the checked-out workspace before any result write can occur;
+- the virtual `symlink-escape` manifest literal is recorded only as a **symlink target path-string rejection**; it is not presented as a real-symlink execution test;
+- real symlink containment is enforced independently by full-tree/per-entry `realpathSync` containment guards.
 
-The previous literal `pathEscapesObserved: 0` field was removed because successful fail-closed execution cannot honestly present that constant as an independently measured counter. Path safety is represented by explicit containment guards and rejection cases instead.
+The previous literal `pathEscapesObserved: 0` field remains removed because successful fail-closed execution cannot honestly present that constant as an independently measured counter.
 
 The outer GitHub Actions workflow separately attests tracked, untracked, and ignored checkout state before and after execution.
 
-## 5. ast-grep result
+## 5. Candidate executable identity evidence
+
+Candidate archives remain pinned by immutable release URL/version plus archive SHA-256. The workflow additionally requires **exactly one** executable match for each candidate and checks that executable against an independently committed expected SHA-256 before the harness runs.
+
+Validated executable identities for the inspected predecessor are:
+
+| Candidate | Version | Executable SHA-256 |
+| --- | --- | --- |
+| ast-grep | `0.45.1` | `6a66162e0a2447af4b7524ee04195239eb1911d07f4868f918909e7d4f453eea` |
+| Tree-sitter CLI | `0.26.12` | `bb749301651689aeeec0bdbc7fa390a7f9ee21f249249de8cf0afa760b143e44` |
+| SCIP CLI | `0.9.0` | `c1f2e049b5b33b8de73e90212aeec4ad10d49be858d01f11c86386b5bfc53994` |
+
+The executable-digest guard therefore no longer derives the “expected” hash from the same binary being checked.
+
+## 6. ast-grep result
 
 Disposition:
 
@@ -144,6 +165,19 @@ Measured on canonical K3-R1 gold evidence:
 | `add` structural occurrences | 5 | 5 | 5 | 1.0 | 1.0 |
 | `meaning` structural occurrence | 1 | 1 | 1 | 1.0 | 1.0 |
 
+Occurrence comparison is now keyed by exact `path:line:column`, not only `path:line`. Gold columns are deterministically derived from the canonical fixture source at the declared gold line and require exactly one identifier-boundary match on that line.
+
+The inspected exact occurrences are:
+
+```text
+src/consumer.ts:1:10      add
+src/consumer.ts:4:10      add
+src/math.ts:1:17          add
+tests/math.test.ts:3:10   add
+tests/math.test.ts:6:16   add
+src/math.ts:5:14          meaning
+```
+
 Both canonical ambiguous `Widget` candidates were preserved. Repeated normalized output was deterministic and evidence provenance was complete.
 
 The qualification remains narrow:
@@ -155,7 +189,26 @@ semanticStrength = structural-only-not-compiler-resolved
 
 This does not establish compiler-resolved symbol identity, semantic references, type flow, call-graph correctness, or product-wide superiority.
 
-## 6. Other candidate dispositions
+## 7. Fixture digest policy hardening
+
+The harness validates the canonical manifest digest policy and fails closed on unsupported `expected.kind` values.
+
+Authorized fixture kinds in this benchmark implementation are:
+
+```text
+binary
+architecture-document
+untrusted-document
+generated
+malformed-source
+source
+test-source
+vendor
+```
+
+`binary` uses raw bytes. The listed non-binary kinds use the canonical UTF-8/LF-normalized text policy. Unknown kinds are rejected rather than silently treated as text.
+
+## 8. Other candidate dispositions
 
 ### Tree-sitter
 
@@ -163,7 +216,7 @@ This does not establish compiler-resolved symbol identity, semantic references, 
 SECURITY REVIEW REQUIRED
 ```
 
-CLI identity/artifact evidence is verified, but TypeScript parser execution remains outside the authorized execution-security envelope.
+CLI archive and executable identity evidence are verified, but TypeScript parser execution remains outside the authorized execution-security envelope.
 
 ### SCIP
 
@@ -171,7 +224,7 @@ CLI identity/artifact evidence is verified, but TypeScript parser execution rema
 INSUFFICIENT EVIDENCE
 ```
 
-The CLI consumes semantic indexes but does not itself create the TypeScript semantic index required for definition/reference evaluation. No concrete TypeScript indexer is authorized.
+The CLI archive and executable identity are verified. The CLI consumes semantic indexes but does not itself create the TypeScript semantic index required for definition/reference evaluation. No concrete TypeScript indexer is authorized.
 
 ### LSP
 
@@ -185,7 +238,7 @@ Only LSP `3.18` protocol capability is assessed. No concrete language server is 
 
 K3-R2 remains the canonical exact snapshot / Git-derived truth anchor for freshness, provenance, and repository/workspace state.
 
-## 7. Review-hardening history
+## 9. Review-hardening history
 
 Accepted Cubic findings were incorporated in successive fail-closed hardening steps, including:
 
@@ -202,21 +255,28 @@ Accepted Cubic findings were incorporated in successive fail-closed hardening st
 - manifest-file per-entry realpath containment;
 - candidate-result per-entry realpath containment;
 - symlink-target realpath containment in full-tree snapshots;
-- removal of the non-measured `pathEscapesObserved` literal.
+- removal of the non-measured `pathEscapesObserved` literal;
+- fail-closed fixture digest-kind validation;
+- result-output containment outside the checked-out workspace;
+- exactly-one candidate binary selection;
+- independently pinned executable SHA-256 verification;
+- column-aware structural occurrence metrics;
+- accurate relabeling of the virtual symlink target path-string rejection evidence.
 
-The latest five findings were raised against head:
+The six findings addressed by the latest predecessor evidence were raised against:
 
 ```text
-91422c0a1b787ba2348e9b9166da08aa7bcf1cdf
+3808df90e810a9c97b770c6efe573cb10a893aa5
 ```
 
-and addressed by predecessor evidence commit:
+and implemented by:
 
 ```text
-cf4715b8cb54f412b400c3a41d1696b496cf31e3
+66dbb8a7a20ba7ebe6b73d147fb999038eb3dd2d
+bb28b9890ce7b228763461986145001e44d7550a
 ```
 
-## 8. Claim limits
+## 10. Claim limits
 
 The benchmark does not claim:
 
@@ -226,11 +286,12 @@ The benchmark does not claim:
 - LSP server safety;
 - Tree-sitter parser safety for a broader execution envelope;
 - SCIP TypeScript indexing quality;
+- a real synthetic symlink-escape test from the manifest virtual case;
 - external candidate adoption.
 
 Any future claim must be traceable to an exact benchmark dimension and evidence identity.
 
-## 9. Founder review boundary
+## 11. Founder review boundary
 
 A final exact-current-head certification must verify, on one identical PR head:
 
@@ -238,11 +299,12 @@ A final exact-current-head certification must verify, on one identical PR head:
 2. `k2-runtime = SUCCESS`, including `k2-runtime-gate`;
 3. `k3-r3-benchmark = SUCCESS`;
 4. the uploaded artifact records that exact head and canonical base;
-5. per-entry realpath, symlink containment, full-tree freshness, and measured workspace-mutation guards pass;
-6. fresh Cubic exact-head review completes without valid unresolved findings;
-7. all review threads are resolved;
-8. scope remains limited to the authorized K3-R3 harness/workflow/evidence files;
-9. canonical `main` remains compatible with the authorized baseline.
+5. executable pins, per-entry realpath containment, symlink containment, full-tree freshness, output-path containment, and measured workspace-mutation guards pass;
+6. occurrence metrics use exact path/line/column identity;
+7. fresh Cubic exact-head review completes without valid unresolved findings;
+8. all review threads are resolved;
+9. scope remains limited to the authorized K3-R3 harness/workflow/evidence files;
+10. canonical `main` remains compatible with the authorized baseline.
 
 Only then may the PR be marked **Ready for Founder Review**.
 
