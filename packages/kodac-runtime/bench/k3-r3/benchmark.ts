@@ -186,6 +186,7 @@ function assertWriteDenied(root: string, label: string): boolean {
     throw new Error(`Unexpected pre-existing write probe for ${label}: ${probePath}`)
   }
 
+  let createDenied = false
   try {
     const descriptor = openSync(probePath, "wx")
     closeSync(descriptor)
@@ -193,12 +194,47 @@ function assertWriteDenied(root: string, label: string): boolean {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
     if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
-      return true
+      createDenied = true
+    } else {
+      throw error
     }
-    throw error
+  }
+  if (!createDenied) {
+    throw new Error(`${label} permits new-file creation by the benchmark execution identity`)
   }
 
-  throw new Error(`${label} is writable by the benchmark execution identity`)
+  const existingProbePath =
+    label === "checked-out workspace"
+      ? resolve(root, ".github/workflows/k3-r3-benchmark.yml")
+      : label === "benchmark fixture"
+        ? resolve(root, "manifest.json")
+        : null
+  if (!existingProbePath) {
+    throw new Error(`No existing-file write probe configured for ${label}`)
+  }
+  const realExistingProbePath = realContainedPath(
+    root,
+    existingProbePath,
+    `${label} existing-file write probe`,
+  )
+
+  let existingWriteOpenDenied = false
+  try {
+    const descriptor = openSync(realExistingProbePath, "r+")
+    closeSync(descriptor)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
+      existingWriteOpenDenied = true
+    } else {
+      throw error
+    }
+  }
+  if (!existingWriteOpenDenied) {
+    throw new Error(`${label} permits write-open of an existing file by the benchmark execution identity`)
+  }
+
+  return true
 }
 
 function verifyExecutableDigest(
