@@ -99,6 +99,12 @@ function pathIsContained(root: string, candidate: string): boolean {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
 }
 
+export function assertK3R4ExternalExecutablePath(workspaceRoot: string, executableRealPath: string): void {
+  if (pathIsContained(workspaceRoot, executableRealPath)) {
+    throw new Error("K3-R4 ast-grep executable must remain external to the workspace")
+  }
+}
+
 export function assertK3R4AstGrepPlatform(platform = process.platform, architecture = process.arch): void {
   if (platform !== "linux" || architecture !== "x64") {
     throw new Error(`K3-R4 ast-grep execution is qualified only for linux/x64; got ${platform}/${architecture}`)
@@ -399,6 +405,7 @@ export class AstGrepCliRepositoryAdapter {
     assertBoundSnapshot(request.snapshot)
 
     const executable = await measureExecutable(this.executablePath)
+    assertK3R4ExternalExecutablePath(await realpath(this.fs.root), executable.realPath)
     const configPath = await verifyKodacConfig()
     const preSnapshot = await captureRepositorySnapshot(this.fs, createGatewayGitSnapshotSource(this.gateway, this.observer))
     assertSameSnapshot(request.snapshot, preSnapshot, "before executable identity validation")
