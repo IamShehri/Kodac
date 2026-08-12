@@ -96,6 +96,7 @@ interface QueryObservation {
 interface TreeSnapshot {
   digest: string
   entryCount: number
+  records: Record<string, string>
 }
 
 function requiredEnv(name: string): string {
@@ -133,6 +134,24 @@ function normalizeText(bytes: Buffer): Buffer {
   return Buffer.from(bytes.toString("utf8").replace(/\r\n?/g, "\n"), "utf8")
 }
 
+function pathIsContained(root: string, candidate: string): boolean {
+  const relativePath = relative(root, candidate)
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) &&
+      !isAbsolute(relativePath))
+  )
+}
+
+function realContainedPath(root: string, input: string, label: string): string {
+  const realInput = realpathSync(input)
+  if (!pathIsContained(root, realInput)) {
+    throw new Error(`Rejected realpath escape for ${label}: ${input} -> ${realInput}`)
+  }
+  return realInput
+}
+
 function normalizeRelativePath(input: string, fixtureRoot: string): string {
   const slashPath = input.replaceAll("\\", "/")
   if (!slashPath || slashPath.startsWith("/") || /^[A-Za-z]:\//.test(slashPath)) {
@@ -145,12 +164,7 @@ function normalizeRelativePath(input: string, fixtureRoot: string): string {
   }
 
   const absolutePath = resolve(fixtureRoot, ...segments)
-  const relativePath = relative(fixtureRoot, absolutePath)
-  if (
-    relativePath === ".." ||
-    relativePath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
-    isAbsolute(relativePath)
-  ) {
+  if (!pathIsContained(fixtureRoot, absolutePath)) {
     throw new Error(`Rejected fixture path escape: ${input}`)
   }
 
@@ -159,12 +173,16 @@ function normalizeRelativePath(input: string, fixtureRoot: string): string {
 
 function normalizeCandidatePath(input: string, fixtureRoot: string): string {
   const absoluteInput = isAbsolute(input) ? input : resolve(fixtureRoot, input)
-  const relativeInput = relative(fixtureRoot, absoluteInput).replaceAll("\\", "/")
+  const realInput = realContainedPath(fixtureRoot, absoluteInput, `candidate result ${input}`)
+  const relativeInput = relative(fixtureRoot, realInput).replaceAll("\\", "/")
   return normalizeRelativePath(relativeInput, fixtureRoot)
 }
 
-function snapshotTree(root: string, excludedTopLevelNames: ReadonlySet<string> = new Set()): TreeSnapshot {
-  const entries: string[] = []
+function snapshotTree(
+  root: string,
+  excludedTopLevelNames: ReadonlySet<string> = new Set(),
+): TreeSnapshot {
+  const records: Record<string, string> = {}
 
   const walk = (absoluteDirectory: string, relativeDirectory: string): void => {
     const names = readdirSync(absoluteDirectory).sort()
@@ -178,27 +196,57 @@ function snapshotTree(root: string, excludedTopLevelNames: ReadonlySet<string> =
       const stat = lstatSync(absolutePath)
 
       if (stat.isSymbolicLink()) {
-        entries.push(`symlink\0${relativePath}\0${readlinkSync(absolutePath)}\n`)
+        const rawTarget = readlinkSync(absolutePath)
+        const targetRealPath = realContainedPath(root, absolutePath, `symlink ${relativePath}`)
+        const targetRelativePath = relative(root, targetRealPath).replaceAll("\\", "/")
+        const targetStat = lstatSync(targetRealPath)
+        let targetEvidence = `other:${targetStat.mode}:${targetStat.size}`
+        if (targetStat.isFile()) {
+          targetEvidence = `file:${sha256(readFileSync(targetRealPath))}`
+        } else if (targetStat.isDirectory()) {
+          targetEvidence = "directory"
+        }
+        records[relativePath] = `symlink:${rawTarget}:${targetRelativePath}:${targetEvidence}`
         continue
       }
+
       if (stat.isDirectory()) {
-        entries.push(`dir\0${relativePath}\n`)
+        records[relativePath] = "directory"
         walk(absolutePath, relativePath)
         continue
       }
+
       if (stat.isFile()) {
-        entries.push(`file\0${relativePath}\0${sha256(readFileSync(absolutePath))}\n`)
+        records[relativePath] = `file:${sha256(readFileSync(absolutePath))}`
         continue
       }
-      entries.push(`other\0${relativePath}\0${stat.mode}\0${stat.size}\n`)
+
+      records[relativePath] = `other:${stat.mode}:${stat.size}`
     }
   }
 
   walk(root, "")
+  const canonicalRecords = Object.keys(records)
+    .sort()
+    .map((path) => `${path}\0${records[path]}\n`)
+    .join("")
+
   return {
-    digest: sha256(entries.join("")),
-    entryCount: entries.length,
+    digest: sha256(canonicalRecords),
+    entryCount: Object.keys(records).length,
+    records,
   }
+}
+
+function changedEntryCount(before: TreeSnapshot, after: TreeSnapshot): number {
+  const paths = new Set([...Object.keys(before.records), ...Object.keys(after.records)])
+  let changed = 0
+  for (const path of paths) {
+    if (before.records[path] !== after.records[path]) {
+      changed += 1
+    }
+  }
+  return changed
 }
 
 function compareStringSets(actual: string[], expected: string[]): boolean {
@@ -277,7 +325,9 @@ function verifyFixture(manifest: FixtureManifest, fixtureRoot: string): {
   const digestParts: string[] = []
   for (const expected of manifest.expected_files) {
     const path = normalizeRelativePath(expected.path, fixtureRoot)
-    const bytes = readFileSync(resolve(fixtureRoot, path))
+    const logicalPath = resolve(fixtureRoot, path)
+    const realPath = realContainedPath(fixtureRoot, logicalPath, `manifest file ${path}`)
+    const bytes = readFileSync(realPath)
     const canonicalBytes = expected.kind === "binary" ? bytes : normalizeText(bytes)
     const actual = sha256(canonicalBytes)
     if (actual !== expected.sha256) {
@@ -380,16 +430,12 @@ function main(): void {
     throw new Error(`Benchmark checkout identity mismatch: expected ${headSha}, got ${checkedOutHead || "<none>"}`)
   }
 
-  const fixtureRelative = relative(workspaceRoot, fixtureRoot)
-  if (
-    fixtureRelative === ".." ||
-    fixtureRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
-    isAbsolute(fixtureRelative)
-  ) {
+  if (!pathIsContained(workspaceRoot, fixtureRoot)) {
     throw new Error("Fixture root must remain inside the real checked-out workspace")
   }
 
-  const manifestPath = resolve(fixtureRoot, "manifest.json")
+  const manifestLogicalPath = resolve(fixtureRoot, "manifest.json")
+  const manifestPath = realContainedPath(fixtureRoot, manifestLogicalPath, "fixture manifest")
   const manifestBytes = readFileSync(manifestPath)
   const actualManifestBlob = gitBlobSha1(manifestBytes)
   if (actualManifestBlob !== manifestBlob) {
@@ -507,7 +553,8 @@ function main(): void {
     throw new Error("Benchmark evidence provenance is incomplete")
   }
 
-  const manifestAfterBytes = readFileSync(manifestPath)
+  const manifestAfterPath = realContainedPath(fixtureRoot, manifestLogicalPath, "post-run fixture manifest")
+  const manifestAfterBytes = readFileSync(manifestAfterPath)
   const manifestBlobUnchanged = gitBlobSha1(manifestAfterBytes) === manifestBlob
   const manifestBytesUnchanged = manifestAfterBytes.equals(manifestBytes)
   const fixtureAfter = verifyFixture(manifest, fixtureRoot)
@@ -515,9 +562,10 @@ function main(): void {
   const workspaceAfter = snapshotTree(workspaceRoot, new Set([".git"]))
 
   const fixtureFilesUnchanged = fixtureBefore.digest === fixtureAfter.digest
-  const fixtureTreeUnchanged = fixtureTreeBefore.digest === fixtureTreeAfter.digest
-  const workspaceUnchanged = workspaceBefore.digest === workspaceAfter.digest
-  const unauthorizedWorkspaceMutationsObservedByHarness = workspaceUnchanged ? 0 : 1
+  const fixtureTreeMutationCount = changedEntryCount(fixtureTreeBefore, fixtureTreeAfter)
+  const workspaceMutationCount = changedEntryCount(workspaceBefore, workspaceAfter)
+  const fixtureTreeUnchanged = fixtureTreeMutationCount === 0
+  const workspaceUnchanged = workspaceMutationCount === 0
   const fixtureUnchanged =
     fixtureFilesUnchanged && fixtureTreeUnchanged && manifestBlobUnchanged && manifestBytesUnchanged
 
@@ -525,7 +573,7 @@ function main(): void {
     throw new Error("Fixture full-tree or manifest identity changed during benchmark execution")
   }
   if (!workspaceUnchanged) {
-    throw new Error("Workspace tree changed during benchmark execution")
+    throw new Error(`Workspace tree changed during benchmark execution at ${workspaceMutationCount} entries`)
   }
 
   const astPass =
@@ -562,11 +610,13 @@ function main(): void {
       verifiedFileCount: fixtureBefore.verifiedFileCount,
       fullTreeIdentity: fixtureTreeBefore.digest,
       fullTreeEntryCount: fixtureTreeBefore.entryCount,
+      fullTreeMutationCount: fixtureTreeMutationCount,
       fullTreeIdentityUnchanged: fixtureTreeUnchanged,
     },
     workspace: {
       treeIdentity: workspaceBefore.digest,
       treeEntryCount: workspaceBefore.entryCount,
+      treeMutationCount: workspaceMutationCount,
       treeIdentityUnchanged: workspaceUnchanged,
       excludedTopLevelEntries: [".git"],
     },
@@ -635,15 +685,16 @@ function main(): void {
       canonicalBaseIdentityGuard: true,
       exactHeadCheckoutGuard: true,
       realpathWorkspaceContainmentGuard: true,
+      perEntryRealpathContainmentGuard: true,
+      symlinkTargetContainmentGuard: true,
       fixtureManifestGitBlobGuard: true,
       fixtureManifestPostRunBlobGuard: manifestBlobUnchanged,
       fixtureManifestPostRunBytesGuard: manifestBytesUnchanged,
       fixtureFullTreeInventoryGuard: fixtureTreeUnchanged,
       snapshotFreshnessGuard: fixtureUnchanged,
       evidenceSourceProvenanceCompleteness: provenanceComplete,
-      unauthorizedWorkspaceMutationsObservedByHarness,
+      unauthorizedWorkspaceMutationsObservedByHarness: workspaceMutationCount,
       workspaceFullTreeMutationGuard: workspaceUnchanged,
-      pathEscapesObserved: 0,
       canonicalTraversalCaseRejected: traversalRejected,
       canonicalSymlinkTargetEscapeRejected: symlinkTargetRejected,
       unlabeledModelHypothesesAsVerifiedFacts: 0,
@@ -679,7 +730,6 @@ function main(): void {
       "Tree-sitter TypeScript parser execution blocked pending execution-security review",
       "SCIP TypeScript semantic generation not executed because no indexer is authorized",
       "LSP server execution not performed",
-      "external-tool symlink-following behavior not directly exercised by the current fixture",
     ],
   }
 
