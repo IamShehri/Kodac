@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "packages/kodac-runtime/bench/k3-r3/**"
+      - "packages/kodac-runtime/test/fixtures/k3-r1/**"
       - ".github/workflows/k3-r3-benchmark.yml"
       - "docs/planning/KODAC_K3_R3_EXTERNAL_ADAPTER_BENCHMARK_EVIDENCE_*.md"
 
@@ -52,7 +53,7 @@ jobs:
           set -euo pipefail
           test "$K3_R3_PR_BASE_SHA" = "$K3_R3_BASELINE_SHA"
           test "$(git rev-parse HEAD)" = "$K3_R3_PR_HEAD_SHA"
-          git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/k3-r3-status-before"
+          git status --porcelain=v1 -z --untracked-files=all --ignored=matching > "$RUNNER_TEMP/k3-r3-status-before"
           git diff --binary HEAD -- > "$RUNNER_TEMP/k3-r3-diff-before"
           test ! -s "$RUNNER_TEMP/k3-r3-status-before"
           test ! -s "$RUNNER_TEMP/k3-r3-diff-before"
@@ -117,7 +118,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/k3-r3-status-after"
+          git status --porcelain=v1 -z --untracked-files=all --ignored=matching > "$RUNNER_TEMP/k3-r3-status-after"
           git diff --binary HEAD -- > "$RUNNER_TEMP/k3-r3-diff-after"
           cmp "$RUNNER_TEMP/k3-r3-status-before" "$RUNNER_TEMP/k3-r3-status-after"
           cmp "$RUNNER_TEMP/k3-r3-diff-before" "$RUNNER_TEMP/k3-r3-diff-after"
