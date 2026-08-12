@@ -140,7 +140,12 @@ jobs:
           sudo install -o root -g root -m 0555 "$K3_R3_DOWNLOADED_SCIP_BIN" "$sandbox/bin/scip"
 
           sudo chmod a+rx /home/runner /home/runner/work "$workspace_parent" "$GITHUB_WORKSPACE"
-          sudo chmod -R a+rX "$GITHUB_WORKSPACE"
+          sudo find -P "$GITHUB_WORKSPACE" -type d -exec chmod go-w,a+rx {} +
+          sudo find -P "$GITHUB_WORKSPACE" -type f -exec chmod go-w,a+r {} +
+          if sudo find -P "$GITHUB_WORKSPACE" -uid "$bench_uid" -print -quit | grep -q .; then
+            printf 'Benchmark user unexpectedly owns a checkout path\n' >&2
+            exit 1
+          fi
 
           node_bin="$(command -v node)"
           test -x "$node_bin"
