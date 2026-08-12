@@ -70,10 +70,12 @@ function compactMatch(overrides: Record<string, unknown> = {}): Record<string, u
   }
 }
 
-test("K3-R4 exposes only plain TypeScript identifiers, not ast-grep pattern syntax", () => {
-  assert.equal(validateK3R4Symbol("Widget_$1"), "Widget_$1")
-  assert.throws(() => validateK3R4Symbol("class Widget { $$$BODY }"), /pattern syntax is not exposed/)
-  assert.throws(() => validateK3R4Symbol("a.b"), /pattern syntax is not exposed/)
+test("K3-R4 exposes only literal identifiers that cannot enter ast-grep metavariable syntax", () => {
+  assert.equal(validateK3R4Symbol("Widget_1"), "Widget_1")
+  assert.throws(() => validateK3R4Symbol("$FOO"), /without '\$'/)
+  assert.throws(() => validateK3R4Symbol("Widget_$1"), /without '\$'/)
+  assert.throws(() => validateK3R4Symbol("class Widget { $$$BODY }"), /metavariable syntax is not exposed/)
+  assert.throws(() => validateK3R4Symbol("a.b"), /metavariable syntax is not exposed/)
   assert.throws(() => validateK3R4Symbol(""), /non-empty/)
 })
 
