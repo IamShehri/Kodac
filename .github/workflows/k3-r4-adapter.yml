@@ -58,11 +58,25 @@ jobs:
           git fetch --no-tags --depth=1 origin "$K3_R4_BASELINE_SHA"
           test "$(git rev-parse FETCH_HEAD)" = "$K3_R4_BASELINE_SHA"
           mapfile -t changed < <(git diff --name-only "$K3_R4_BASELINE_SHA" HEAD | LC_ALL=C sort)
-          test "${#changed[@]}" -gt 0
-          if printf '%s\n' "${changed[@]}" | grep -Eq '(^|/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.(toml|lock))$'; then
-            printf 'K3-R4 must not add or modify package/crate manifests or lockfiles\n' >&2
-            exit 1
-          fi
+          test "${#changed[@]}" -eq 9
+          for path in "${changed[@]}"; do
+            case "$path" in
+              .github/workflows/k3-r4-adapter.yml|\
+              packages/kodac-runtime/src/execution/gateway.ts|\
+              packages/kodac-runtime/src/index.ts|\
+              packages/kodac-runtime/src/repository-intelligence/ast-grep-cli.ts|\
+              packages/kodac-runtime/src/repository-intelligence/ast-grep-empty-config.yml|\
+              packages/kodac-runtime/src/repository-intelligence/contracts.ts|\
+              packages/kodac-runtime/src/trust/policy.ts|\
+              packages/kodac-runtime/test/gateway.test.ts|\
+              packages/kodac-runtime/test/k3-r4-ast-grep-adapter.test.ts)
+                ;;
+              *)
+                printf 'Unauthorized K3-R4 implementation path: %s\n' "$path" >&2
+                exit 1
+                ;;
+            esac
+          done
 
       - name: Download and verify exact disposable ast-grep binary
         shell: bash
