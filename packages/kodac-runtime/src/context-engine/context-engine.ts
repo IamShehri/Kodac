@@ -40,6 +40,7 @@ const HARD_MAX_ITEM_TEXT_BYTES = 64 * 1024
 const HARD_MAX_PROVENANCE_REFS = 256
 const HARD_MAX_PROVENANCE_REF_BYTES = 1_024
 const HARD_MAX_CANDIDATE_FILES = 4_096
+const HARD_MAX_OMISSION_COUNT = Number.MAX_SAFE_INTEGER - 10_000
 
 interface NormalizedRequest {
   version: typeof K3_R5_CONTEXT_REQUEST_VERSION
@@ -193,7 +194,7 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
   if (!Array.isArray(snapshot.evidence) || snapshot.evidence.length > HARD_MAX_EVIDENCE_INPUTS) {
     throw new Error(`K3-R5 snapshot evidence exceeds ${HARD_MAX_EVIDENCE_INPUTS} items`)
   }
-  if (!Array.isArray(snapshot.sources)) throw new Error("K3-R5 snapshot sources must be an array")
+  if (!Array.isArray(snapshot.sources) || snapshot.sources.length > 64) throw new Error("K3-R5 snapshot sources must be a bounded array")
   const sourceIds = new Set<string>()
   for (const [index, source] of snapshot.sources.entries()) {
     const id = assertBoundedString(`snapshot.sources[${index}].id`, source?.id, 256)
@@ -260,13 +261,13 @@ function assertStructuralResult(result: AstGrepStructuralQueryResult, snapshot: 
 
   if (!result.candidateFiles || typeof result.candidateFiles !== "object") throw new Error(`${label} has invalid candidateFiles metadata`)
   nonNegativeInteger(`${label}.candidateFiles.included`, result.candidateFiles.included, HARD_MAX_CANDIDATE_FILES)
-  nonNegativeInteger(`${label}.candidateFiles.omitted`, result.candidateFiles.omitted, HARD_MAX_STRUCTURAL_MATCHES)
+  nonNegativeInteger(`${label}.candidateFiles.omitted`, result.candidateFiles.omitted, HARD_MAX_OMISSION_COUNT)
   assertDigest(`${label}.candidateFiles.identity`, result.candidateFiles.identity)
 
   if (!result.completeness || !["complete", "truncated"].includes(result.completeness.state)) {
     throw new Error(`${label} has invalid completeness metadata`)
   }
-  const omitted = nonNegativeInteger(`${label}.completeness.omittedAtLeast`, result.completeness.omittedAtLeast, HARD_MAX_STRUCTURAL_MATCHES)
+  const omitted = nonNegativeInteger(`${label}.completeness.omittedAtLeast`, result.completeness.omittedAtLeast, HARD_MAX_OMISSION_COUNT)
   if (!Array.isArray(result.completeness.reasons) || result.completeness.reasons.some((reason) => ![
     "candidate-file-limit",
     "candidate-argument-byte-limit",
@@ -497,10 +498,7 @@ export function buildContextBundle(input: ContextEngineInput): ContextBundle {
     usedUtf8Bytes,
   }
   const requestIdentity = sha256(canonicalize(request))
-  const provenanceRefs = uniqueSorted([
-    ...input.snapshot.sources.flatMap((source) => validateProvenanceRefs(source.provenanceRefs, `snapshot source ${source.id} provenance`)),
-    ...items.flatMap((item) => item.provenanceRefs),
-  ])
+  const provenanceRefs = uniqueSorted(items.flatMap((item) => item.provenanceRefs))
 
   const identityInput = {
     version: K3_R5_CONTEXT_BUNDLE_VERSION,
