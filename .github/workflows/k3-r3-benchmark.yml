@@ -114,14 +114,14 @@ jobs:
             printf 'K3_R3_DOWNLOADED_SCIP_BIN=%s\n' "$scip_bin"
           } >> "$GITHUB_ENV"
 
-      - name: Prepare unprivileged read-only benchmark sandbox
+      - name: Prepare unprivileged read-only benchmark view
         shell: bash
         run: |
           set -euo pipefail
 
           bench_user="kodacbench"
           sandbox="/tmp/kodac-k3-r3-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          canonical_fixture="$GITHUB_WORKSPACE/packages/kodac-runtime/test/fixtures/k3-r1"
+          fixture="$GITHUB_WORKSPACE/packages/kodac-runtime/test/fixtures/k3-r1"
 
           if id "$bench_user" >/dev/null 2>&1; then
             printf 'Unexpected pre-existing benchmark user: %s\n' "$bench_user" >&2
@@ -131,14 +131,8 @@ jobs:
           bench_uid="$(id -u "$bench_user")"
           bench_gid="$(id -g "$bench_user")"
 
-          sudo install -d -o root -g root -m 0755 "$sandbox" "$sandbox/bin" "$sandbox/fixture"
+          sudo install -d -o root -g root -m 0755 "$sandbox" "$sandbox/bin"
           sudo install -d -o "$bench_uid" -g "$bench_gid" -m 0700 "$sandbox/result" "$sandbox/home"
-
-          sudo cp -a "$canonical_fixture/." "$sandbox/fixture/"
-          sudo chown -R root:root "$sandbox/fixture"
-          sudo find "$sandbox/fixture" -type d -exec chmod 0555 {} +
-          sudo find "$sandbox/fixture" -type f -exec chmod 0444 {} +
-
           sudo install -o root -g root -m 0555 "$K3_R3_DOWNLOADED_AST_GREP_BIN" "$sandbox/bin/ast-grep"
           sudo install -o root -g root -m 0555 "$K3_R3_DOWNLOADED_TREE_SITTER_BIN" "$sandbox/bin/tree-sitter"
           sudo install -o root -g root -m 0555 "$K3_R3_DOWNLOADED_SCIP_BIN" "$sandbox/bin/scip"
@@ -146,20 +140,19 @@ jobs:
           node_bin="$(command -v node)"
           test -x "$node_bin"
           sudo -u "$bench_user" "$node_bin" --version >/dev/null
-
           sudo -u "$bench_user" env HOME="$sandbox/home" PATH="/usr/bin:/bin" \
             git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-          fixture_probe="$sandbox/fixture/.kodac-k3-r3-write-probe"
+          fixture_probe="$fixture/.kodac-k3-r3-write-probe"
           workspace_probe="$GITHUB_WORKSPACE/.kodac-k3-r3-write-probe"
           if sudo -u "$bench_user" touch "$fixture_probe" 2>/dev/null; then
             sudo rm -f "$fixture_probe"
-            printf 'Read-only execution fixture probe unexpectedly succeeded\n' >&2
+            printf 'Fixture write probe unexpectedly succeeded for unprivileged benchmark user\n' >&2
             exit 1
           fi
           if sudo -u "$bench_user" touch "$workspace_probe" 2>/dev/null; then
             sudo rm -f "$workspace_probe"
-            printf 'Read-only workspace probe unexpectedly succeeded\n' >&2
+            printf 'Workspace write probe unexpectedly succeeded for unprivileged benchmark user\n' >&2
             exit 1
           fi
 
@@ -168,8 +161,7 @@ jobs:
             printf 'K3_R3_EXPECTED_EXECUTION_UID=%s\n' "$bench_uid"
             printf 'K3_R3_SANDBOX_ROOT=%s\n' "$sandbox"
             printf 'K3_R3_SANDBOX_HOME=%s\n' "$sandbox/home"
-            printf 'K3_R3_CANONICAL_FIXTURE_ROOT=%s\n' "$canonical_fixture"
-            printf 'K3_R3_FIXTURE_ROOT=%s\n' "$sandbox/fixture"
+            printf 'K3_R3_FIXTURE_ROOT=%s\n' "$fixture"
             printf 'K3_R3_RESULT_PATH=%s\n' "$sandbox/result/k3-r3-results.json"
             printf 'K3_R3_NODE_BIN=%s\n' "$node_bin"
             printf 'AST_GREP_BIN=%s\n' "$sandbox/bin/ast-grep"
@@ -190,7 +182,6 @@ jobs:
             HOME="$K3_R3_SANDBOX_HOME" \
             PATH="/usr/bin:/bin" \
             K3_R3_WORKSPACE_ROOT="$K3_R3_WORKSPACE_ROOT" \
-            K3_R3_CANONICAL_FIXTURE_ROOT="$K3_R3_CANONICAL_FIXTURE_ROOT" \
             K3_R3_FIXTURE_ROOT="$K3_R3_FIXTURE_ROOT" \
             K3_R3_RESULT_PATH="$K3_R3_RESULT_PATH" \
             K3_R3_BASELINE_SHA="$K3_R3_BASELINE_SHA" \
