@@ -376,11 +376,9 @@ function main(): void {
   }
 
   const queryConfigs = [
-    { id: "definition-add", pattern: "function add($$$ARGS) { $$$BODY }" },
-    { id: "definition-meaning", pattern: "const meaning = $VALUE" },
-    { id: "reference-add-call", pattern: "add($$$ARGS)" },
-    { id: "reference-add-import", pattern: "import { add } from $SOURCE" },
-    { id: "ambiguous-widget", pattern: "class Widget { $$$BODY }" },
+    { id: "symbol-add", pattern: "add" },
+    { id: "symbol-meaning", pattern: "meaning" },
+    { id: "symbol-widget", pattern: "Widget" },
   ] as const
 
   const runSuite = (): QueryObservation[] =>
@@ -411,32 +409,38 @@ function main(): void {
     return item
   }
 
-  const expectedDefinitions = manifest.gold.definitions.map((item) => ({
+  const expectedAddOccurrences = [
+    ...manifest.gold.definitions
+      .filter((item) => item.symbol === "add")
+      .map((item) => ({ path: item.path, line: item.line })),
+    ...manifest.gold.references
+      .filter((item) => item.symbol === "add")
+      .map((item) => ({ path: item.path, line: item.line })),
+  ]
+  const observedAddOccurrences = query("symbol-add").matches.map((item) => ({
     path: item.path,
     line: item.line,
   }))
-  const observedDefinitions = [
-    ...query("definition-add").matches,
-    ...query("definition-meaning").matches,
-  ].map((item) => ({ path: item.path, line: item.line }))
 
-  const expectedReferences = manifest.gold.references.map((item) => ({
+  const expectedMeaningOccurrences = manifest.gold.definitions
+    .filter((item) => item.symbol === "meaning")
+    .map((item) => ({ path: item.path, line: item.line }))
+  const observedMeaningOccurrences = query("symbol-meaning").matches.map((item) => ({
     path: item.path,
     line: item.line,
   }))
-  const observedReferences = [
-    ...query("reference-add-call").matches,
-    ...query("reference-add-import").matches,
-  ].map((item) => ({ path: item.path, line: item.line }))
 
-  const definitionMetrics = precisionRecall(observedDefinitions, expectedDefinitions)
-  const referenceMetrics = precisionRecall(observedReferences, expectedReferences)
+  const addOccurrenceMetrics = precisionRecall(observedAddOccurrences, expectedAddOccurrences)
+  const meaningOccurrenceMetrics = precisionRecall(
+    observedMeaningOccurrences,
+    expectedMeaningOccurrences,
+  )
 
   const widgetGold = manifest.gold.ambiguous_symbols.find((item) => item.symbol === "Widget")
   if (!widgetGold) {
     throw new Error("Missing canonical Widget ambiguity gold case")
   }
-  const widgetObserved = query("ambiguous-widget").matches.map((item) => item.path)
+  const widgetObserved = query("symbol-widget").matches.map((item) => item.path)
   const ambiguityPreserved = compareStringSets(widgetObserved, widgetGold.candidates)
 
   const allEvidence = firstSuite.flatMap((item) => item.matches)
@@ -459,10 +463,10 @@ function main(): void {
   }
 
   const astPass =
-    definitionMetrics.precision === 1 &&
-    definitionMetrics.recall === 1 &&
-    referenceMetrics.precision === 1 &&
-    referenceMetrics.recall === 1 &&
+    addOccurrenceMetrics.precision === 1 &&
+    addOccurrenceMetrics.recall === 1 &&
+    meaningOccurrenceMetrics.precision === 1 &&
+    meaningOccurrenceMetrics.recall === 1 &&
     ambiguityPreserved &&
     deterministic &&
     provenanceComplete &&
@@ -494,15 +498,20 @@ function main(): void {
       license: "MIT",
       evidenceClass: "parser-derived",
       semanticStrength: "structural-only-not-compiler-resolved",
-      definitionMetrics,
-      referenceMetrics,
+      structuralOccurrenceMetrics: {
+        add: addOccurrenceMetrics,
+        meaning: meaningOccurrenceMetrics,
+      },
       ambiguityPreserved,
+      semanticDefinitionReferenceDifferentiation: "NOT CLAIMED / NOT MEASURED",
       deterministic,
       provenanceComplete,
       fixtureUnchanged,
       normalizedResults: stableAstSuite(firstSuite),
       disposition: astPass ? "QUALIFIED FOR SPECIFIC ADAPTER ROLE" : "NOT QUALIFIED",
-      qualifiedRole: astPass ? "structural-search / parser-derived candidate discovery" : null,
+      qualifiedRole: astPass
+        ? "structural symbol occurrence and ambiguous-candidate discovery"
+        : null,
     },
     treeSitter: {
       candidate: "Tree-sitter",
