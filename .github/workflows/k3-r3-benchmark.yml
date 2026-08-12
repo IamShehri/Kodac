@@ -25,13 +25,16 @@ jobs:
       AST_GREP_VERSION: "0.45.1"
       AST_GREP_URL: "https://github.com/ast-grep/ast-grep/releases/download/0.45.1/app-x86_64-unknown-linux-gnu.zip"
       AST_GREP_SHA256: "76fb6555be6734fb5057dba8d2fb756430f374bb9e1af694cf1ce00e13238d63"
+      AST_GREP_BIN_SHA256: "6a66162e0a2447af4b7524ee04195239eb1911d07f4868f918909e7d4f453eea"
       TREE_SITTER_VERSION: "0.26.12"
       TREE_SITTER_URL: "https://github.com/tree-sitter/tree-sitter/releases/download/v0.26.12/tree-sitter-cli-linux-x64.zip"
       TREE_SITTER_SHA256: "c33ace12fa7a94d09c97054da621bf7a6a3159f765b1839a898232de283d641d"
+      TREE_SITTER_BIN_SHA256: "bb749301651689aeeec0bdbc7fa390a7f9ee21f249249de8cf0afa760b143e44"
       TREE_SITTER_TYPESCRIPT_COMMIT: "75b3874edb2dc714fb1fd77a32013d0f8699989f"
       SCIP_VERSION: "0.9.0"
       SCIP_URL: "https://github.com/scip-code/scip/releases/download/v0.9.0/scip-linux-amd64.tar.gz"
       SCIP_SHA256: "fc2e7273e110be9f35924da1066000183791e8bfdb0391355de6eaaa070fec75"
+      SCIP_BIN_SHA256: "c1f2e049b5b33b8de73e90212aeec4ad10d49be858d01f11c86386b5bfc53994"
       LSP_SPEC_VERSION: "3.18"
 
     steps:
@@ -81,30 +84,34 @@ jobs:
           printf '%s  %s\n' "$SCIP_SHA256" "$root/scip.tar.gz" | sha256sum -c -
           tar -xzf "$root/scip.tar.gz" -C "$root/scip"
 
-          ast_bin="$(find "$root/ast-grep" -type f -name 'ast-grep' -print -quit)"
-          if [[ -z "$ast_bin" ]]; then
-            ast_bin="$(find "$root/ast-grep" -type f -name 'sg' -print -quit)"
-          fi
-          tree_bin="$(find "$root/tree-sitter" -type f -name 'tree-sitter' -print -quit)"
-          scip_bin="$(find "$root/scip" -type f -name 'scip' -print -quit)"
+          select_unique_binary() {
+            local directory="$1"
+            local filename="$2"
+            local label="$3"
+            local -a matches=()
+            mapfile -t matches < <(find "$directory" -type f -name "$filename" -print | LC_ALL=C sort)
+            if [[ "${#matches[@]}" -ne 1 ]]; then
+              printf '%s: expected exactly one %s executable, found %s\n' \
+                "$label" "$filename" "${#matches[@]}" >&2
+              return 1
+            fi
+            printf '%s\n' "${matches[0]}"
+          }
 
-          test -n "$ast_bin"
-          test -n "$tree_bin"
-          test -n "$scip_bin"
+          ast_bin="$(select_unique_binary "$root/ast-grep" 'ast-grep' 'ast-grep')"
+          tree_bin="$(select_unique_binary "$root/tree-sitter" 'tree-sitter' 'Tree-sitter')"
+          scip_bin="$(select_unique_binary "$root/scip" 'scip' 'SCIP')"
 
           chmod +x "$ast_bin" "$tree_bin" "$scip_bin"
 
-          ast_bin_sha="$(sha256sum "$ast_bin" | awk '{print $1}')"
-          tree_bin_sha="$(sha256sum "$tree_bin" | awk '{print $1}')"
-          scip_bin_sha="$(sha256sum "$scip_bin" | awk '{print $1}')"
+          printf '%s  %s\n' "$AST_GREP_BIN_SHA256" "$ast_bin" | sha256sum -c -
+          printf '%s  %s\n' "$TREE_SITTER_BIN_SHA256" "$tree_bin" | sha256sum -c -
+          printf '%s  %s\n' "$SCIP_BIN_SHA256" "$scip_bin" | sha256sum -c -
 
           {
             printf 'AST_GREP_BIN=%s\n' "$ast_bin"
-            printf 'AST_GREP_BIN_SHA256=%s\n' "$ast_bin_sha"
             printf 'TREE_SITTER_BIN=%s\n' "$tree_bin"
-            printf 'TREE_SITTER_BIN_SHA256=%s\n' "$tree_bin_sha"
             printf 'SCIP_BIN=%s\n' "$scip_bin"
-            printf 'SCIP_BIN_SHA256=%s\n' "$scip_bin_sha"
           } >> "$GITHUB_ENV"
 
       - name: Run bounded K3-R3 benchmark
