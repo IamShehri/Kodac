@@ -1,8 +1,15 @@
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { readFileSync, writeFileSync } from "node:fs"
-import { isAbsolute, relative, resolve } from "node:path"
+import {
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs"
 import { arch, platform, release } from "node:os"
+import { isAbsolute, relative, resolve } from "node:path"
 import { performance } from "node:perf_hooks"
 
 interface ExpectedFile {
@@ -58,14 +65,8 @@ interface FixtureManifest {
 interface AstGrepRawMatch {
   text: string
   range: {
-    start: {
-      line: number
-      column: number
-    }
-    end: {
-      line: number
-      column: number
-    }
+    start: { line: number; column: number }
+    end: { line: number; column: number }
   }
   file: string
   language?: string
@@ -92,6 +93,11 @@ interface QueryObservation {
   durationMs: number
 }
 
+interface TreeSnapshot {
+  digest: string
+  entryCount: number
+}
+
 function requiredEnv(name: string): string {
   const value = process.env[name]
   if (!value) {
@@ -113,14 +119,14 @@ function canonicalize(value: unknown): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value)
   }
-
   if (Array.isArray(value)) {
     return `[${value.map((item) => canonicalize(item)).join(",")}]`
   }
-
   const record = value as Record<string, unknown>
-  const keys = Object.keys(record).sort()
-  return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalize(record[key])}`).join(",")}}`
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalize(record[key])}`)
+    .join(",")}}`
 }
 
 function normalizeText(bytes: Buffer): Buffer {
@@ -157,6 +163,44 @@ function normalizeCandidatePath(input: string, fixtureRoot: string): string {
   return normalizeRelativePath(relativeInput, fixtureRoot)
 }
 
+function snapshotTree(root: string, excludedTopLevelNames: ReadonlySet<string> = new Set()): TreeSnapshot {
+  const entries: string[] = []
+
+  const walk = (absoluteDirectory: string, relativeDirectory: string): void => {
+    const names = readdirSync(absoluteDirectory).sort()
+    for (const name of names) {
+      if (!relativeDirectory && excludedTopLevelNames.has(name)) {
+        continue
+      }
+
+      const absolutePath = resolve(absoluteDirectory, name)
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${name}` : name
+      const stat = lstatSync(absolutePath)
+
+      if (stat.isSymbolicLink()) {
+        entries.push(`symlink\0${relativePath}\0${readlinkSync(absolutePath)}\n`)
+        continue
+      }
+      if (stat.isDirectory()) {
+        entries.push(`dir\0${relativePath}\n`)
+        walk(absolutePath, relativePath)
+        continue
+      }
+      if (stat.isFile()) {
+        entries.push(`file\0${relativePath}\0${sha256(readFileSync(absolutePath))}\n`)
+        continue
+      }
+      entries.push(`other\0${relativePath}\0${stat.mode}\0${stat.size}\n`)
+    }
+  }
+
+  walk(root, "")
+  return {
+    digest: sha256(entries.join("")),
+    entryCount: entries.length,
+  }
+}
+
 function compareStringSets(actual: string[], expected: string[]): boolean {
   const left = [...new Set(actual)].sort()
   const right = [...new Set(expected)].sort()
@@ -175,7 +219,6 @@ function precisionRecall(
       truePositive += 1
     }
   }
-
   return {
     precision: observedSet.size === 0 ? (expectedSet.size === 0 ? 1 : 0) : truePositive / observedSet.size,
     recall: expectedSet.size === 0 ? 1 : truePositive / expectedSet.size,
@@ -204,11 +247,9 @@ function runCommand(
       NO_COLOR: "1",
     },
   })
-
   if (result.error) {
     throw result.error
   }
-
   return {
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
@@ -234,7 +275,6 @@ function verifyFixture(manifest: FixtureManifest, fixtureRoot: string): {
   verifiedFileCount: number
 } {
   const digestParts: string[] = []
-
   for (const expected of manifest.expected_files) {
     const path = normalizeRelativePath(expected.path, fixtureRoot)
     const bytes = readFileSync(resolve(fixtureRoot, path))
@@ -245,7 +285,6 @@ function verifyFixture(manifest: FixtureManifest, fixtureRoot: string): {
     }
     digestParts.push(`${path}\0${actual}\n`)
   }
-
   digestParts.sort()
   return {
     digest: sha256(digestParts.join("")),
@@ -268,11 +307,8 @@ function runAstGrepQuery(
     fixtureRoot,
   )
   const durationMs = Number((performance.now() - started).toFixed(3))
-
   if (result.status !== 0) {
-    throw new Error(
-      `ast-grep query ${id} failed with status ${result.status}: ${result.stderr || result.stdout}`,
-    )
+    throw new Error(`ast-grep query ${id} failed with status ${result.status}: ${result.stderr || result.stdout}`)
   }
 
   const parsed = JSON.parse(result.stdout) as AstGrepRawMatch[]
@@ -284,22 +320,19 @@ function runAstGrepQuery(
     left < right ? -1 : left > right ? 1 : 0
 
   const matches = parsed
-    .map((match): NormalizedMatch => {
-      const path = normalizeCandidatePath(match.file, fixtureRoot)
-      return {
-        path,
-        line: match.range.start.line + 1,
-        column: match.range.start.column + 1,
-        text: match.text,
-        evidenceClass: "parser-derived",
-        source: {
-          candidate: "ast-grep",
-          version,
-          artifactSha256,
-          adapterConfig: "k3-r3-ast-grep-structural-v1",
-        },
-      }
-    })
+    .map((match): NormalizedMatch => ({
+      path: normalizeCandidatePath(match.file, fixtureRoot),
+      line: match.range.start.line + 1,
+      column: match.range.start.column + 1,
+      text: match.text,
+      evidenceClass: "parser-derived",
+      source: {
+        candidate: "ast-grep",
+        version,
+        artifactSha256,
+        adapterConfig: "k3-r3-ast-grep-structural-v1",
+      },
+    }))
     .sort((left, right) =>
       compareCodeUnits(left.path, right.path) ||
       left.line - right.line ||
@@ -315,8 +348,8 @@ function stableAstSuite(suite: QueryObservation[]): unknown {
 }
 
 function main(): void {
-  const fixtureRoot = resolve(requiredEnv("K3_R3_FIXTURE_ROOT"))
-  const workspaceRoot = resolve(requiredEnv("K3_R3_WORKSPACE_ROOT"))
+  const workspaceRoot = realpathSync(resolve(requiredEnv("K3_R3_WORKSPACE_ROOT")))
+  const fixtureRoot = realpathSync(resolve(requiredEnv("K3_R3_FIXTURE_ROOT")))
   const resultPath = requiredEnv("K3_R3_RESULT_PATH")
   const baselineSha = requiredEnv("K3_R3_BASELINE_SHA")
   const headSha = requiredEnv("K3_R3_HEAD_SHA")
@@ -353,7 +386,7 @@ function main(): void {
     fixtureRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
     isAbsolute(fixtureRelative)
   ) {
-    throw new Error("Fixture root must remain inside the checked-out workspace")
+    throw new Error("Fixture root must remain inside the real checked-out workspace")
   }
 
   const manifestPath = resolve(fixtureRoot, "manifest.json")
@@ -362,6 +395,7 @@ function main(): void {
   if (actualManifestBlob !== manifestBlob) {
     throw new Error(`Fixture manifest Git blob mismatch: expected ${manifestBlob}, got ${actualManifestBlob}`)
   }
+
   const manifest = JSON.parse(manifestBytes.toString("utf8")) as FixtureManifest
   if (manifest.fixture_id !== "k3-r1-core-repository-v1") {
     throw new Error(`Unexpected fixture id: ${manifest.fixture_id}`)
@@ -371,6 +405,8 @@ function main(): void {
   }
 
   const fixtureBefore = verifyFixture(manifest, fixtureRoot)
+  const fixtureTreeBefore = snapshotTree(fixtureRoot)
+  const workspaceBefore = snapshotTree(workspaceRoot, new Set([".git"]))
 
   const traversalCase = manifest.virtual_security_cases.find((item) => item.case_id === "path-traversal")
   if (!traversalCase?.input_path) {
@@ -400,6 +436,13 @@ function main(): void {
     throw new Error("Canonical symlink target escape was not rejected")
   }
 
+  const candidateIdentityOutput = {
+    astGrep: candidateIdentity(astGrepBin, fixtureRoot),
+    treeSitter: candidateIdentity(treeSitterBin, fixtureRoot),
+    scip: candidateIdentity(scipBin, fixtureRoot),
+    lsp: `protocol-spec-${lspSpecVersion}-no-server-executed`,
+  }
+
   const queryConfigs = [
     { id: "symbol-add", pattern: "add" },
     { id: "symbol-meaning", pattern: "meaning" },
@@ -408,20 +451,12 @@ function main(): void {
 
   const runSuite = (): QueryObservation[] =>
     queryConfigs.map((query) =>
-      runAstGrepQuery(
-        astGrepBin,
-        fixtureRoot,
-        astGrepVersion,
-        astGrepSha,
-        query.id,
-        query.pattern,
-      ),
+      runAstGrepQuery(astGrepBin, fixtureRoot, astGrepVersion, astGrepSha, query.id, query.pattern),
     )
 
   const firstSuite = runSuite()
   const secondSuite = runSuite()
-  const deterministic =
-    canonicalize(stableAstSuite(firstSuite)) === canonicalize(stableAstSuite(secondSuite))
+  const deterministic = canonicalize(stableAstSuite(firstSuite)) === canonicalize(stableAstSuite(secondSuite))
   if (!deterministic) {
     throw new Error("ast-grep deterministic query outputs diverged between identical runs")
   }
@@ -442,24 +477,15 @@ function main(): void {
       .filter((item) => item.symbol === "add")
       .map((item) => ({ path: item.path, line: item.line })),
   ]
-  const observedAddOccurrences = query("symbol-add").matches.map((item) => ({
-    path: item.path,
-    line: item.line,
-  }))
+  const observedAddOccurrences = query("symbol-add").matches.map((item) => ({ path: item.path, line: item.line }))
 
   const expectedMeaningOccurrences = manifest.gold.definitions
     .filter((item) => item.symbol === "meaning")
     .map((item) => ({ path: item.path, line: item.line }))
-  const observedMeaningOccurrences = query("symbol-meaning").matches.map((item) => ({
-    path: item.path,
-    line: item.line,
-  }))
+  const observedMeaningOccurrences = query("symbol-meaning").matches.map((item) => ({ path: item.path, line: item.line }))
 
   const addOccurrenceMetrics = precisionRecall(observedAddOccurrences, expectedAddOccurrences)
-  const meaningOccurrenceMetrics = precisionRecall(
-    observedMeaningOccurrences,
-    expectedMeaningOccurrences,
-  )
+  const meaningOccurrenceMetrics = precisionRecall(observedMeaningOccurrences, expectedMeaningOccurrences)
 
   const widgetGold = manifest.gold.ambiguous_symbols.find((item) => item.symbol === "Widget")
   if (!widgetGold) {
@@ -485,11 +511,21 @@ function main(): void {
   const manifestBlobUnchanged = gitBlobSha1(manifestAfterBytes) === manifestBlob
   const manifestBytesUnchanged = manifestAfterBytes.equals(manifestBytes)
   const fixtureAfter = verifyFixture(manifest, fixtureRoot)
+  const fixtureTreeAfter = snapshotTree(fixtureRoot)
+  const workspaceAfter = snapshotTree(workspaceRoot, new Set([".git"]))
+
   const fixtureFilesUnchanged = fixtureBefore.digest === fixtureAfter.digest
+  const fixtureTreeUnchanged = fixtureTreeBefore.digest === fixtureTreeAfter.digest
+  const workspaceUnchanged = workspaceBefore.digest === workspaceAfter.digest
+  const unauthorizedWorkspaceMutationsObservedByHarness = workspaceUnchanged ? 0 : 1
   const fixtureUnchanged =
-    fixtureFilesUnchanged && manifestBlobUnchanged && manifestBytesUnchanged
+    fixtureFilesUnchanged && fixtureTreeUnchanged && manifestBlobUnchanged && manifestBytesUnchanged
+
   if (!fixtureUnchanged) {
-    throw new Error("Fixture or manifest identity changed during benchmark execution")
+    throw new Error("Fixture full-tree or manifest identity changed during benchmark execution")
+  }
+  if (!workspaceUnchanged) {
+    throw new Error("Workspace tree changed during benchmark execution")
   }
 
   const astPass =
@@ -500,7 +536,8 @@ function main(): void {
     ambiguityPreserved &&
     deterministic &&
     provenanceComplete &&
-    fixtureUnchanged
+    fixtureUnchanged &&
+    workspaceUnchanged
 
   const stableEvidence = {
     schemaVersion: "k3-r3-benchmark-evidence-v1",
@@ -523,6 +560,15 @@ function main(): void {
       manifestBytesUnchanged,
       contentIdentity: fixtureBefore.digest,
       verifiedFileCount: fixtureBefore.verifiedFileCount,
+      fullTreeIdentity: fixtureTreeBefore.digest,
+      fullTreeEntryCount: fixtureTreeBefore.entryCount,
+      fullTreeIdentityUnchanged: fixtureTreeUnchanged,
+    },
+    workspace: {
+      treeIdentity: workspaceBefore.digest,
+      treeEntryCount: workspaceBefore.entryCount,
+      treeIdentityUnchanged: workspaceUnchanged,
+      excludedTopLevelEntries: [".git"],
     },
     adapterConfig: {
       id: "k3-r3-external-adapter-benchmark-v1",
@@ -549,9 +595,7 @@ function main(): void {
       fixtureUnchanged,
       normalizedResults: stableAstSuite(firstSuite),
       disposition: astPass ? "QUALIFIED FOR SPECIFIC ADAPTER ROLE" : "NOT QUALIFIED",
-      qualifiedRole: astPass
-        ? "structural symbol occurrence and ambiguous-candidate discovery"
-        : null,
+      qualifiedRole: astPass ? "structural symbol occurrence and ambiguous-candidate discovery" : null,
     },
     treeSitter: {
       candidate: "Tree-sitter",
@@ -590,12 +634,15 @@ function main(): void {
     invariants: {
       canonicalBaseIdentityGuard: true,
       exactHeadCheckoutGuard: true,
+      realpathWorkspaceContainmentGuard: true,
       fixtureManifestGitBlobGuard: true,
       fixtureManifestPostRunBlobGuard: manifestBlobUnchanged,
       fixtureManifestPostRunBytesGuard: manifestBytesUnchanged,
+      fixtureFullTreeInventoryGuard: fixtureTreeUnchanged,
       snapshotFreshnessGuard: fixtureUnchanged,
       evidenceSourceProvenanceCompleteness: provenanceComplete,
-      unauthorizedWorkspaceMutationsObservedByHarness: 0,
+      unauthorizedWorkspaceMutationsObservedByHarness,
+      workspaceFullTreeMutationGuard: workspaceUnchanged,
       pathEscapesObserved: 0,
       canonicalTraversalCaseRejected: traversalRejected,
       canonicalSymlinkTargetEscapeRejected: symlinkTargetRejected,
@@ -614,7 +661,6 @@ function main(): void {
   }
 
   const canonicalResultIdentity = sha256(canonicalize(stableEvidence))
-
   const observation = {
     runId,
     environment: {
@@ -623,18 +669,9 @@ function main(): void {
       arch: arch(),
       node: process.version,
     },
-    candidateIdentityOutput: {
-      astGrep: candidateIdentity(astGrepBin, fixtureRoot),
-      treeSitter: candidateIdentity(treeSitterBin, fixtureRoot),
-      scip: candidateIdentity(scipBin, fixtureRoot),
-      lsp: `protocol-spec-${lspSpecVersion}-no-server-executed`,
-    },
-    queryDurationsMs: Object.fromEntries(
-      firstSuite.map((item) => [item.id, item.durationMs]),
-    ),
-    repeatedQueryDurationsMs: Object.fromEntries(
-      secondSuite.map((item) => [item.id, item.durationMs]),
-    ),
+    candidateIdentityOutput,
+    queryDurationsMs: Object.fromEntries(firstSuite.map((item) => [item.id, item.durationMs])),
+    repeatedQueryDurationsMs: Object.fromEntries(secondSuite.map((item) => [item.id, item.durationMs])),
     astGrepSubprocessCount: firstSuite.length + secondSuite.length,
     resourceLimitations: [
       "peak memory not measured in this slice",
@@ -657,7 +694,6 @@ function main(): void {
   }
 
   writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8")
-
   if (!astPass) {
     throw new Error("ast-grep did not satisfy the claimed structural adapter acceptance checks")
   }
