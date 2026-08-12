@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
+import { isAbsolute, relative, resolve, sep } from "node:path"
 import type { WorkspaceFileSystem } from "../edit/filesystem.ts"
 import { applyHunks, parsePatch, type AffectedPaths } from "../edit/patch.ts"
 import { createReceipt, type ExecutionReceipt } from "../evidence/receipt.ts"
+import { isFullGitObjectId } from "../repository/contracts.ts"
 import type { ExecutionIntent, PolicyEngine, PolicyResult } from "../trust/policy.ts"
 
 export interface ExecutionObserver {
@@ -49,6 +51,25 @@ function uniquePaths(paths: string[]): string[] {
   return [...new Set(paths)].sort()
 }
 
+function portablePath(path: string): string {
+  return path.split(sep).join("/")
+}
+
+function canonicalWorkspaceRelativePath(root: string, path: string): string {
+  const absoluteRoot = resolve(root)
+  const absoluteTarget = resolve(absoluteRoot, path)
+  const rel = relative(absoluteRoot, absoluteTarget)
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`Workspace path must resolve to a regular relative file: ${path}`)
+  }
+  return rel.split(sep).join("/")
+}
+
+function canonicalParent(path: string): string {
+  const separator = path.lastIndexOf("/")
+  return separator < 0 ? "." : path.slice(0, separator)
+}
+
 function blockedReceipt(intent: ExecutionIntent, policy: PolicyResult, startedAt: string): ExecutionReceipt {
   return createReceipt({
     capability: intent.capability,
@@ -69,16 +90,18 @@ async function persistReceipt(observer: ExecutionObserver | undefined, receipt: 
   }
 }
 
+interface ProcessOptions {
+  signal?: AbortSignal
+  maxOutputBytes: number
+  timeoutMs: number
+  env?: NodeJS.ProcessEnv
+}
+
 function runProcess(
   executable: string,
   args: string[],
   cwd: string,
-  options: {
-    signal?: AbortSignal
-    maxOutputBytes: number
-    timeoutMs: number
-    env?: NodeJS.ProcessEnv
-  },
+  options: ProcessOptions,
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolvePromise, rejectPromise) => {
     execFile(
@@ -101,6 +124,21 @@ function runProcess(
         resolvePromise({ stdout, stderr })
       },
     )
+  })
+}
+
+function parseGitHeadOutput(stdout: string): string {
+  const head = stdout.trim()
+  if (!isFullGitObjectId(head)) throw new Error("git rev-parse HEAD did not return a full object id")
+  return head.toLowerCase()
+}
+
+function parseGitHashObjectOutput(stdout: string, expectedCount: number): string[] {
+  const objectIds = stdout.split(/\r?\n/).filter(Boolean)
+  if (objectIds.length !== expectedCount) throw new Error("git hash-object result count does not match requested path count")
+  return objectIds.map((gitObjectId) => {
+    if (!isFullGitObjectId(gitObjectId)) throw new Error("git hash-object returned an invalid object id")
+    return gitObjectId.toLowerCase()
   })
 }
 
@@ -200,6 +238,25 @@ export class ExecutionGateway {
     ).then(({ stdout, receipt }) => ({ diff: stdout, receipt }))
   }
 
+  async gitHead(
+    observer?: ExecutionObserver,
+    options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number } = {},
+  ): Promise<{ head: string; receipt: ExecutionReceipt }> {
+    const result = await this.runReadOnlyCommand(
+      "git.head",
+      "git",
+      ["rev-parse", "--verify", "HEAD"],
+      [],
+      observer,
+      { ...options, maxOutputBytes: options.maxOutputBytes ?? 4096, timeoutMs: options.timeoutMs ?? 5_000 },
+      "git rev-parse HEAD",
+      (stdout) => {
+        parseGitHeadOutput(stdout)
+      },
+    )
+    return { head: parseGitHeadOutput(result.stdout), receipt: result.receipt }
+  }
+
   async gitStatus(
     observer?: ExecutionObserver,
     options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number } = {},
@@ -207,12 +264,65 @@ export class ExecutionGateway {
     return this.runReadOnlyCommand(
       "git.status",
       "git",
-      ["status", "--porcelain=v1", "--untracked-files=all"],
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
       [],
       observer,
       options,
       "git status",
     ).then(({ stdout, receipt }) => ({ status: stdout, receipt }))
+  }
+
+  async gitHashObjects(
+    paths: string[],
+    observer?: ExecutionObserver,
+    options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number } = {},
+  ): Promise<{ objects: { path: string; gitObjectId: string }[]; receipt: ExecutionReceipt }> {
+    if (!Array.isArray(paths) || paths.length === 0 || paths.length > 128) throw new Error("git.hash-object paths must contain 1..128 entries")
+
+    const canonicalPaths: string[] = []
+    for (const path of paths) {
+      await this.fs.validatePath(path)
+      canonicalPaths.push(canonicalWorkspaceRelativePath(this.fs.root, path))
+    }
+
+    const pathsByParent = new Map<string, string[]>()
+    for (const path of canonicalPaths) {
+      const parent = canonicalParent(path)
+      const siblings = pathsByParent.get(parent)
+      if (siblings) siblings.push(path)
+      else pathsByParent.set(parent, [path])
+    }
+
+    for (const [parent, parentPaths] of pathsByParent) {
+      const entries = await this.fs.list(parent, { recursive: false, maxEntries: 20_000, maxDepth: 1 })
+      const regularFiles = new Set(
+        entries
+          .filter((entry) => entry.type === "file")
+          .map((entry) => portablePath(entry.path)),
+      )
+      for (const path of parentPaths) {
+        if (!regularFiles.has(path)) throw new Error(`git.hash-object path is not a regular workspace file: ${path}`)
+      }
+    }
+
+    const result = await this.runReadOnlyCommand(
+      "git.hash-object",
+      "git",
+      ["hash-object", "--no-filters", "--", ...canonicalPaths],
+      canonicalPaths,
+      observer,
+      { ...options, maxOutputBytes: options.maxOutputBytes ?? 64 * 1024, timeoutMs: options.timeoutMs ?? 10_000 },
+      "git hash-object",
+      (stdout) => {
+        parseGitHashObjectOutput(stdout, canonicalPaths.length)
+      },
+    )
+    const objectIds = parseGitHashObjectOutput(result.stdout, canonicalPaths.length)
+    const objects = canonicalPaths.map((path, index) => ({
+      path,
+      gitObjectId: objectIds[index],
+    }))
+    return { objects, receipt: result.receipt }
   }
 
   async runCommand(
@@ -227,6 +337,9 @@ export class ExecutionGateway {
       env?: NodeJS.ProcessEnv
     } = {},
   ): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
+    if (capability.startsWith("git.") || capability.startsWith("repo.")) {
+      throw new Error(`Generic runCommand cannot use reserved capability: ${capability}`)
+    }
     return this.runReadOnlyCommand(capability, executable, args, [], observer, options, capability)
   }
 
@@ -243,6 +356,7 @@ export class ExecutionGateway {
       env?: NodeJS.ProcessEnv
     },
     label: string,
+    validateOutput?: (stdout: string, stderr: string) => void,
   ): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
     const startedAt = new Date().toISOString()
     const maxOutputBytes = options.maxOutputBytes ?? 256 * 1024
@@ -276,6 +390,7 @@ export class ExecutionGateway {
         timeoutMs,
         env: options.env,
       })
+      validateOutput?.(stdout, stderr)
       const combined = `${stdout}\0${stderr}`
       const receipt = createReceipt({
         capability: intent.capability,

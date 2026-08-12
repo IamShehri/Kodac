@@ -8,6 +8,16 @@ export class WorkspaceBoundaryError extends Error {
   }
 }
 
+export class WorkspaceNotDirectoryError extends Error {
+  readonly path: string
+
+  constructor(path: string) {
+    super(`Workspace path is not a directory: ${path}`)
+    this.name = "WorkspaceNotDirectoryError"
+    this.path = path
+  }
+}
+
 export interface WorkspaceEntry {
   path: string
   type: "file" | "directory" | "symlink"
@@ -60,6 +70,10 @@ async function nearestExistingAncestor(path: string): Promise<string> {
 
 function positiveInteger(name: string, value: number): void {
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`)
+}
+
+function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 function portableRelative(root: string, candidate: string): string {
@@ -143,12 +157,12 @@ export class NodeWorkspaceFileSystem implements WorkspaceFileSystem {
 
     const target = await this.resolveWithin(path || ".", true)
     const targetInfo = await stat(target)
-    if (!targetInfo.isDirectory()) throw new Error(`Workspace path is not a directory: ${path}`)
+    if (!targetInfo.isDirectory()) throw new WorkspaceNotDirectoryError(path)
 
     const entries: WorkspaceEntry[] = []
     const walk = async (directory: string, depth: number): Promise<void> => {
       if (entries.length >= maxEntries) return
-      const children = (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))
+      const children = (await readdir(directory, { withFileTypes: true })).sort((a, b) => compareCodeUnits(a.name, b.name))
       for (const child of children) {
         if (entries.length >= maxEntries) return
         if (DEFAULT_IGNORED_NAMES.has(child.name)) continue
