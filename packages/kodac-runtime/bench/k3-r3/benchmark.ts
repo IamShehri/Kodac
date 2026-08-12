@@ -378,7 +378,7 @@ function main(): void {
   const queryConfigs = [
     { id: "symbol-add", pattern: "add" },
     { id: "symbol-meaning", pattern: "meaning" },
-    { id: "symbol-widget", pattern: "Widget" },
+    { id: "symbol-widget", pattern: "class Widget { readonly source = $VALUE }" },
   ] as const
 
   const runSuite = (): QueryObservation[] =>
