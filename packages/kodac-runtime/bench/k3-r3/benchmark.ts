@@ -82,6 +82,7 @@ interface NormalizedMatch {
     candidate: "ast-grep"
     version: string
     artifactSha256: string
+    executableSha256: string
     adapterConfig: "k3-r3-ast-grep-structural-v1"
   }
 }
@@ -97,6 +98,11 @@ interface TreeSnapshot {
   digest: string
   entryCount: number
   records: Record<string, string>
+}
+
+interface VerifiedExecutable {
+  realPath: string
+  sha256: string
 }
 
 function requiredEnv(name: string): string {
@@ -150,6 +156,21 @@ function realContainedPath(root: string, input: string, label: string): string {
     throw new Error(`Rejected realpath escape for ${label}: ${input} -> ${realInput}`)
   }
   return realInput
+}
+
+function verifyExecutableDigest(
+  executable: string,
+  expectedSha256: string,
+  label: string,
+): VerifiedExecutable {
+  const realPath = realpathSync(executable)
+  const measuredSha256 = sha256(readFileSync(realPath))
+  if (measuredSha256 !== expectedSha256) {
+    throw new Error(
+      `${label} executable digest mismatch: expected ${expectedSha256}, got ${measuredSha256}`,
+    )
+  }
+  return { realPath, sha256: measuredSha256 }
 }
 
 function normalizeRelativePath(input: string, fixtureRoot: string): string {
@@ -347,6 +368,7 @@ function runAstGrepQuery(
   fixtureRoot: string,
   version: string,
   artifactSha256: string,
+  executableSha256: string,
   id: string,
   pattern: string,
 ): QueryObservation {
@@ -380,6 +402,7 @@ function runAstGrepQuery(
         candidate: "ast-grep",
         version,
         artifactSha256,
+        executableSha256,
         adapterConfig: "k3-r3-ast-grep-structural-v1",
       },
     }))
@@ -410,14 +433,17 @@ function main(): void {
 
   const astGrepBin = requiredEnv("AST_GREP_BIN")
   const astGrepVersion = requiredEnv("AST_GREP_VERSION")
-  const astGrepSha = requiredEnv("AST_GREP_SHA256")
+  const astGrepArchiveSha = requiredEnv("AST_GREP_SHA256")
+  const astGrepExpectedBinSha = requiredEnv("AST_GREP_BIN_SHA256")
   const treeSitterBin = requiredEnv("TREE_SITTER_BIN")
   const treeSitterVersion = requiredEnv("TREE_SITTER_VERSION")
-  const treeSitterSha = requiredEnv("TREE_SITTER_SHA256")
+  const treeSitterArchiveSha = requiredEnv("TREE_SITTER_SHA256")
+  const treeSitterExpectedBinSha = requiredEnv("TREE_SITTER_BIN_SHA256")
   const treeSitterTypeScriptCommit = requiredEnv("TREE_SITTER_TYPESCRIPT_COMMIT")
   const scipBin = requiredEnv("SCIP_BIN")
   const scipVersion = requiredEnv("SCIP_VERSION")
-  const scipSha = requiredEnv("SCIP_SHA256")
+  const scipArchiveSha = requiredEnv("SCIP_SHA256")
+  const scipExpectedBinSha = requiredEnv("SCIP_BIN_SHA256")
   const lspSpecVersion = requiredEnv("LSP_SPEC_VERSION")
 
   if (prBaseSha !== baselineSha) {
@@ -433,6 +459,14 @@ function main(): void {
   if (!pathIsContained(workspaceRoot, fixtureRoot)) {
     throw new Error("Fixture root must remain inside the real checked-out workspace")
   }
+
+  const astGrepExecutable = verifyExecutableDigest(astGrepBin, astGrepExpectedBinSha, "ast-grep")
+  const treeSitterExecutable = verifyExecutableDigest(
+    treeSitterBin,
+    treeSitterExpectedBinSha,
+    "Tree-sitter",
+  )
+  const scipExecutable = verifyExecutableDigest(scipBin, scipExpectedBinSha, "SCIP")
 
   const manifestLogicalPath = resolve(fixtureRoot, "manifest.json")
   const manifestPath = realContainedPath(fixtureRoot, manifestLogicalPath, "fixture manifest")
@@ -483,9 +517,9 @@ function main(): void {
   }
 
   const candidateIdentityOutput = {
-    astGrep: candidateIdentity(astGrepBin, fixtureRoot),
-    treeSitter: candidateIdentity(treeSitterBin, fixtureRoot),
-    scip: candidateIdentity(scipBin, fixtureRoot),
+    astGrep: candidateIdentity(astGrepExecutable.realPath, fixtureRoot),
+    treeSitter: candidateIdentity(treeSitterExecutable.realPath, fixtureRoot),
+    scip: candidateIdentity(scipExecutable.realPath, fixtureRoot),
     lsp: `protocol-spec-${lspSpecVersion}-no-server-executed`,
   }
 
@@ -497,7 +531,15 @@ function main(): void {
 
   const runSuite = (): QueryObservation[] =>
     queryConfigs.map((query) =>
-      runAstGrepQuery(astGrepBin, fixtureRoot, astGrepVersion, astGrepSha, query.id, query.pattern),
+      runAstGrepQuery(
+        astGrepExecutable.realPath,
+        fixtureRoot,
+        astGrepVersion,
+        astGrepArchiveSha,
+        astGrepExecutable.sha256,
+        query.id,
+        query.pattern,
+      ),
     )
 
   const firstSuite = runSuite()
@@ -546,7 +588,8 @@ function main(): void {
       item.evidenceClass === "parser-derived" &&
       item.source.candidate === "ast-grep" &&
       item.source.version === astGrepVersion &&
-      item.source.artifactSha256 === astGrepSha &&
+      item.source.artifactSha256 === astGrepArchiveSha &&
+      item.source.executableSha256 === astGrepExecutable.sha256 &&
       item.source.adapterConfig === "k3-r3-ast-grep-structural-v1",
   )
   if (!provenanceComplete) {
@@ -630,7 +673,9 @@ function main(): void {
     astGrep: {
       candidate: "ast-grep",
       version: astGrepVersion,
-      artifactSha256: astGrepSha,
+      artifactSha256: astGrepArchiveSha,
+      executableSha256: astGrepExecutable.sha256,
+      executableSha256Verified: true,
       license: "MIT",
       evidenceClass: "parser-derived",
       semanticStrength: "structural-only-not-compiler-resolved",
@@ -650,7 +695,9 @@ function main(): void {
     treeSitter: {
       candidate: "Tree-sitter",
       version: treeSitterVersion,
-      artifactSha256: treeSitterSha,
+      artifactSha256: treeSitterArchiveSha,
+      executableSha256: treeSitterExecutable.sha256,
+      executableSha256Verified: true,
       typeScriptGrammarCommit: treeSitterTypeScriptCommit,
       license: "MIT",
       mode: "identity-and-capability-assessment-only",
@@ -661,7 +708,9 @@ function main(): void {
     scip: {
       candidate: "SCIP",
       version: scipVersion,
-      artifactSha256: scipSha,
+      artifactSha256: scipArchiveSha,
+      executableSha256: scipExecutable.sha256,
+      executableSha256Verified: true,
       license: "Apache-2.0",
       mode: "identity-and-protocol-capability-assessment-only",
       disposition: "INSUFFICIENT EVIDENCE",
@@ -684,6 +733,7 @@ function main(): void {
     invariants: {
       canonicalBaseIdentityGuard: true,
       exactHeadCheckoutGuard: true,
+      candidateExecutableDigestGuard: true,
       realpathWorkspaceContainmentGuard: true,
       perEntryRealpathContainmentGuard: true,
       symlinkTargetContainmentGuard: true,
