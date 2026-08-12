@@ -104,6 +104,11 @@ function sha256(data: Buffer | string): string {
   return createHash("sha256").update(data).digest("hex")
 }
 
+function gitBlobSha1(data: Buffer): string {
+  const header = Buffer.from(`blob ${data.length}\0`, "utf8")
+  return createHash("sha1").update(header).update(data).digest("hex")
+}
+
 function canonicalize(value: unknown): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value)
@@ -315,6 +320,7 @@ function main(): void {
   const resultPath = requiredEnv("K3_R3_RESULT_PATH")
   const baselineSha = requiredEnv("K3_R3_BASELINE_SHA")
   const headSha = requiredEnv("K3_R3_HEAD_SHA")
+  const prBaseSha = requiredEnv("K3_R3_PR_BASE_SHA")
   const protocolId = requiredEnv("K3_R3_PROTOCOL_ID")
   const manifestBlob = requiredEnv("K3_R3_FIXTURE_MANIFEST_BLOB")
   const runId = requiredEnv("K3_R3_RUN_ID")
@@ -331,13 +337,28 @@ function main(): void {
   const scipSha = requiredEnv("SCIP_SHA256")
   const lspSpecVersion = requiredEnv("LSP_SPEC_VERSION")
 
+  if (prBaseSha !== baselineSha) {
+    throw new Error(`Canonical benchmark base moved: expected ${baselineSha}, got ${prBaseSha}`)
+  }
+
+  const checkedOutHeadResult = runCommand("git", ["rev-parse", "HEAD"], workspaceRoot)
+  const checkedOutHead = checkedOutHeadResult.stdout.trim()
+  if (checkedOutHeadResult.status !== 0 || checkedOutHead !== headSha) {
+    throw new Error(`Benchmark checkout identity mismatch: expected ${headSha}, got ${checkedOutHead || "<none>"}`)
+  }
+
   const fixtureRelative = relative(workspaceRoot, fixtureRoot)
   if (fixtureRelative === ".." || fixtureRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
     throw new Error("Fixture root must remain inside the checked-out workspace")
   }
 
   const manifestPath = resolve(fixtureRoot, "manifest.json")
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as FixtureManifest
+  const manifestBytes = readFileSync(manifestPath)
+  const actualManifestBlob = gitBlobSha1(manifestBytes)
+  if (actualManifestBlob !== manifestBlob) {
+    throw new Error(`Fixture manifest Git blob mismatch: expected ${manifestBlob}, got ${actualManifestBlob}`)
+  }
+  const manifest = JSON.parse(manifestBytes.toString("utf8")) as FixtureManifest
   if (manifest.fixture_id !== "k3-r1-core-repository-v1") {
     throw new Error(`Unexpected fixture id: ${manifest.fixture_id}`)
   }
@@ -477,10 +498,18 @@ function main(): void {
     protocolId,
     canonicalBaseline: baselineSha,
     benchmarkHead: headSha,
+    pullRequestIdentity: {
+      baseSha: prBaseSha,
+      headSha,
+      checkedOutHead,
+      canonicalBaseVerified: true,
+      exactHeadCheckoutVerified: true,
+    },
     fixture: {
       id: manifest.fixture_id,
       schemaVersion: manifest.schema_version,
       manifestGitBlob: manifestBlob,
+      manifestGitBlobVerified: true,
       contentIdentity: fixtureBefore.digest,
       verifiedFileCount: fixtureBefore.verifiedFileCount,
     },
@@ -548,6 +577,9 @@ function main(): void {
       externalAdapterComparisonRole: "freshness, provenance, and workspace-state truth anchor",
     },
     invariants: {
+      canonicalBaseIdentityGuard: true,
+      exactHeadCheckoutGuard: true,
+      fixtureManifestGitBlobGuard: true,
       snapshotFreshnessGuard: fixtureUnchanged,
       evidenceSourceProvenanceCompleteness: provenanceComplete,
       unauthorizedWorkspaceMutationsObservedByHarness: 0,
