@@ -254,17 +254,21 @@ The Context Engine may rank or select evidence, but it must not silently promote
 
 The first implementation must preserve evidence class on every item and use a documented deterministic selection strategy.
 
+There is no canonical global total order between evidence classes that describe different claim domains. For example, a Git-derived working-tree fact and a parser-derived structural occurrence are not interchangeable claims and must not be ranked as if one globally invalidates the other.
+
 At minimum, the strategy must obey these principles:
 
 ```text
-precise verified fact > parser-derived fact > Git-derived fact
-verified fact > heuristic inference
-verified fact > model hypothesis
+evidence classes remain explicit and domain-specific
+within the same claim domain, weaker evidence must not silently override stronger verified evidence
+verified fact > heuristic inference when they address the same claim
+verified fact > model hypothesis when they address the same claim
 similarity/relevance score != evidence truth strength
 selection rank != factual confidence
+cross-domain relevance ordering != truth precedence
 ```
 
-If heuristic or model-hypothesis inputs are ever accepted by the contract, they must remain visibly labeled and must not override contradictory verified evidence.
+If heuristic or model-hypothesis inputs are ever accepted by the contract, they must remain visibly labeled and must not override contradictory verified evidence about the same claim.
 
 The first implementation is permitted to exclude model hypotheses entirely.
 
@@ -279,7 +283,7 @@ The first slice may use deterministic signals such as:
 - bounded lexical token overlap with task objective;
 - working-tree relevance;
 - architecture/specification evidence relevance;
-- evidence strength;
+- evidence class as a transparent selection signal only where comparable;
 - stable path/order tie breaking.
 
 It must not claim semantic understanding beyond those measured rules.
