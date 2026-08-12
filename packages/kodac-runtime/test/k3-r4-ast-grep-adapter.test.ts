@@ -18,6 +18,7 @@ import {
 import {
   AstGrepCliRepositoryAdapter,
   assertK3R4AstGrepPlatform,
+  assertK3R4ExternalExecutablePath,
   parseAstGrepCompactOutput,
   selectK3R4TypeScriptCandidates,
   validateK3R4Scope,
@@ -162,6 +163,12 @@ test("platform qualification fails closed outside Linux x64", () => {
   assert.throws(() => assertK3R4AstGrepPlatform("linux", "arm64"), /qualified only/)
   assert.throws(() => assertK3R4AstGrepPlatform("darwin", "x64"), /qualified only/)
   assert.throws(() => assertK3R4AstGrepPlatform("win32", "x64"), /qualified only/)
+})
+
+test("external ast-grep executable path must remain outside the workspace", () => {
+  const root = join(tmpdir(), "kodac-k3-r4-workspace")
+  assert.throws(() => assertK3R4ExternalExecutablePath(root, join(root, "tools", "ast-grep")), /must remain external/)
+  assert.doesNotThrow(() => assertK3R4ExternalExecutablePath(root, join(tmpdir(), "kodac-k3-r4-external", "ast-grep")))
 })
 
 test("adapter rejects a stale snapshot before external candidate execution", { skip: process.platform !== "linux" || process.arch !== "x64" }, async () => {
