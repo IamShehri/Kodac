@@ -53,6 +53,22 @@ function fixtureSnapshot(input: {
   }
 }
 
+function compactMatch(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    text: "a",
+    range: {
+      byteOffset: { start: 2, end: 3 },
+      start: { line: 0, column: 2 },
+      end: { line: 0, column: 3 },
+    },
+    file: "a.ts",
+    lines: "a",
+    charCount: { leading: 0, trailing: 0 },
+    language: "TypeScript",
+    ...overrides,
+  }
+}
+
 test("K3-R4 exposes only plain TypeScript identifiers, not ast-grep pattern syntax", () => {
   assert.equal(validateK3R4Symbol("Widget_$1"), "Widget_$1")
   assert.throws(() => validateK3R4Symbol("class Widget { $$$BODY }"), /pattern syntax is not exposed/)
@@ -103,18 +119,32 @@ test("candidate selection fails closed on an unknown or symlink scope", () => {
   assert.throws(() => selectK3R4TypeScriptCandidates(symlinkSnapshot, "linked"), /must not be a symlink/)
 })
 
-test("ast-grep compact output parser fails closed on malformed, rewrite, and reversed-range output", () => {
+test("ast-grep compact output parser requires the exact bounded 0.45.1 schema", () => {
   assert.throws(() => parseAstGrepCompactOutput("not-json"), /malformed JSON/)
   assert.throws(
-    () => parseAstGrepCompactOutput(JSON.stringify([{ file: "a.ts", text: "a", replacement: "b", range: { start: { line: 0, column: 0 }, end: { line: 0, column: 1 } } }])),
-    /rewrite output/,
+    () => parseAstGrepCompactOutput(JSON.stringify([{ ...compactMatch(), replacement: "b" }])),
+    /unexpected output schema/,
   )
   assert.throws(
-    () => parseAstGrepCompactOutput(JSON.stringify([{ file: "a.ts", text: "a", range: { start: { line: 2, column: 3 }, end: { line: 1, column: 1 } } }])),
+    () => parseAstGrepCompactOutput(JSON.stringify([{ ...compactMatch(), futureField: true }])),
+    /unexpected output schema/,
+  )
+  assert.throws(
+    () => parseAstGrepCompactOutput(JSON.stringify([compactMatch({ language: "JavaScript" })])),
+    /unexpected language identity/,
+  )
+  assert.throws(
+    () => parseAstGrepCompactOutput(JSON.stringify([compactMatch({
+      range: {
+        byteOffset: { start: 2, end: 3 },
+        start: { line: 2, column: 3 },
+        end: { line: 1, column: 1 },
+      },
+    })])),
     /reversed range/,
   )
   assert.deepEqual(
-    parseAstGrepCompactOutput(JSON.stringify([{ file: "a.ts", text: "a", range: { start: { line: 0, column: 2 }, end: { line: 0, column: 3 } } }])),
+    parseAstGrepCompactOutput(JSON.stringify([compactMatch()])),
     [{ file: "a.ts", text: "a", range: { start: { line: 0, column: 2 }, end: { line: 0, column: 3 } } }],
   )
 })
