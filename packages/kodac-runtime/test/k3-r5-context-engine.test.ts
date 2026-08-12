@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import test from "node:test"
 
 import { buildContextBundle } from "../src/context-engine/context-engine.ts"
@@ -15,6 +16,20 @@ const REPOSITORY_ID = "a".repeat(64)
 const CONTENT_ID = "b".repeat(64)
 const SNAPSHOT_ID = "c".repeat(64)
 const GIT_HEAD = "d".repeat(40)
+
+function canonicalize(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalize(item)).join(",")}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalize(record[key])}`)
+    .join(",")}}`
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex")
+}
 
 function request(overrides: Partial<ContextBundleRequest> = {}): ContextBundleRequest {
   return {
@@ -86,8 +101,41 @@ function snapshot(overrides: Partial<RepositorySnapshot> = {}): RepositorySnapsh
   }
 }
 
+function structuralIdentity(result: AstGrepStructuralQueryResult): string {
+  return sha256(canonicalize({
+    version: "k3-r4-ast-grep-query-v1",
+    query: {
+      kind: result.query.kind,
+      symbol: result.query.symbol,
+      scope: result.query.scope,
+    },
+    repositoryIdentity: result.repositoryIdentity,
+    snapshotIdentity: result.snapshotIdentity,
+    contentIdentity: result.contentIdentity,
+    candidateFiles: {
+      included: result.candidateFiles.included,
+      omitted: result.candidateFiles.omitted,
+      identity: result.candidateFiles.identity,
+    },
+    completeness: result.completeness,
+    matches: result.matches,
+    source: {
+      adapterId: result.source.adapterId,
+      candidate: result.source.candidate,
+      upstreamRepository: result.source.upstreamRepository,
+      upstreamTag: result.source.upstreamTag,
+      upstreamCommit: result.source.upstreamCommit,
+      measuredVersion: result.source.measuredVersion,
+      platformQualification: result.source.platformQualification,
+      executableSha256: result.source.executableSha256,
+      kodacConfigSha256: result.source.kodacConfigSha256,
+      semanticStrength: result.source.semanticStrength,
+    },
+  }))
+}
+
 function structuralResult(overrides: Partial<AstGrepStructuralQueryResult> = {}): AstGrepStructuralQueryResult {
-  return {
+  const result: AstGrepStructuralQueryResult = {
     version: "k3-r4-ast-grep-query-v1",
     query: { kind: "find_symbol_candidates", symbol: "Widget", scope: "." },
     repositoryIdentity: REPOSITORY_ID,
@@ -113,13 +161,16 @@ function structuralResult(overrides: Partial<AstGrepStructuralQueryResult> = {})
       provenanceRefs: ["receipt:ast-grep"],
     },
     deterministic: true,
-    resultIdentity: "3".repeat(64),
+    resultIdentity: "0".repeat(64),
     ...overrides,
   }
+  if (!("resultIdentity" in overrides)) result.resultIdentity = structuralIdentity(result)
+  return result
 }
 
 test("K3-R5 builds a deterministic bounded ContextBundle from current normalized evidence", () => {
-  const input = { request: request(), snapshot: snapshot(), structuralResults: [structuralResult()] }
+  const structural = structuralResult()
+  const input = { request: request(), snapshot: snapshot(), structuralResults: [structural] }
   const first = buildContextBundle(input)
   const second = buildContextBundle(input)
 
@@ -157,7 +208,8 @@ test("K3-R5 selection is stable across source-array ordering and request hint or
 })
 
 test("K3-R5 keeps task relevance separate from evidence truth class", () => {
-  const bundle = buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [structuralResult()] })
+  const structuralInput = structuralResult()
+  const bundle = buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [structuralInput] })
   const structural = bundle.items.find((item) => item.sourceKind === "ast-grep-structural-match")
   const git = bundle.items.find((item) => item.sourceKind === "repository-evidence" && item.evidenceClass === "git-derived")
   const heuristic = bundle.items.find((item) => item.evidenceClass === "heuristic-inference")
@@ -165,7 +217,7 @@ test("K3-R5 keeps task relevance separate from evidence truth class", () => {
   assert.ok(structural)
   assert.equal(structural.evidenceClass, "parser-derived")
   assert.equal(structural.sourceAdapter, "kodac.ast-grep-cli.structural.v1")
-  assert.equal(structural.sourceIdentity, "3".repeat(64))
+  assert.equal(structural.sourceIdentity, structuralInput.resultIdentity)
   assert.equal(structural.trust, "untrusted-repository-data")
   assert.ok(structural.relevance.reasons.includes("exact-target-path"))
   assert.ok(structural.relevance.reasons.includes("exact-symbol-hint"))
@@ -182,6 +234,30 @@ test("K3-R5 preserves item provenance without laundering unrelated snapshot-sour
   assert.deepEqual(heuristic.provenanceRefs, [])
   assert.ok(bundle.provenanceRefs.includes("receipt:git-status"))
   assert.equal(bundle.provenanceRefs.includes("receipt:git-status-post"), false)
+})
+
+test("K3-R5 rejects evidence provenance that its bound snapshot source did not declare", () => {
+  const injected = gitEvidence({
+    source: {
+      id: "builtin.git.status-porcelain-v1-z.v1",
+      kind: "builtin",
+      provenanceRefs: ["receipt:git-status", "receipt:unbound"],
+    },
+  })
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: snapshot({ evidence: [injected, architectureEvidence()] }) }),
+    /provenance not declared/,
+  )
+})
+
+test("K3-R5 binds bundle identity to selected item provenance membership", () => {
+  const aResult = structuralResult({ source: { ...structuralResult().source, provenanceRefs: ["receipt:a"] } })
+  const bResult = structuralResult({ source: { ...structuralResult().source, provenanceRefs: ["receipt:b"] } })
+  assert.equal(aResult.resultIdentity, bResult.resultIdentity)
+
+  const a = buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [aResult] })
+  const b = buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [bResult] })
+  assert.notEqual(a.bundleIdentity, b.bundleIdentity)
 })
 
 test("K3-R5 treats prompt-injection-shaped repository text as inert untrusted data", () => {
@@ -228,13 +304,12 @@ test("K3-R5 propagates upstream R4 truncation instead of claiming complete conte
   assert.equal(bundle.completeness.omittedAtLeast, 5)
 })
 
-test("K3-R5 preserves a conservative lower bound across multiple truncated R4 sources", () => {
+test("K3-R5 preserves a conservative lower bound across potentially overlapping truncated R4 sources", () => {
   const first = structuralResult({
     candidateFiles: { included: 2, omitted: 5_000, identity: "7".repeat(64) },
     completeness: { state: "truncated", reasons: ["candidate-file-limit"], omittedAtLeast: 5_000 },
   })
   const second = structuralResult({
-    resultIdentity: "4".repeat(64),
     candidateFiles: { included: 2, omitted: 7_000, identity: "8".repeat(64) },
     completeness: { state: "truncated", reasons: ["candidate-file-limit"], omittedAtLeast: 7_000 },
     matches: [{ path: "src/widget.ts", line: 8, column: 1, text: "Widget", evidenceClass: "parser-derived" }],
@@ -245,18 +320,17 @@ test("K3-R5 preserves a conservative lower bound across multiple truncated R4 so
   assert.equal(bundle.completeness.omittedAtLeast, 7_000)
 })
 
-test("K3-R5 excludes model hypotheses and exposes the omission", () => {
+test("K3-R5 rejects noncanonical model-hypothesis evidence in the exact K3-R2 v1 producer contract", () => {
   const modelHypothesis = architectureEvidence({
     evidenceId: "4".repeat(64),
     evidenceClass: "model-hypothesis",
     subjectPath: "src/hypothesis.ts",
   })
   const bound = snapshot({ evidence: [...snapshot().evidence, modelHypothesis] })
-  const bundle = buildContextBundle({ request: request(), snapshot: bound })
-  assert.equal(bundle.items.some((item) => item.evidenceClass === "model-hypothesis"), false)
-  assert.equal(bundle.completeness.state, "truncated")
-  assert.ok(bundle.completeness.reasons.includes("unsupported-evidence"))
-  assert.ok(bundle.completeness.omittedAtLeast >= 1)
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: bound }),
+    /canonical architecture evidence mapping/,
+  )
 })
 
 test("K3-R5 fails closed for stale, partial, truncated, unsupported, or malformed snapshots", () => {
@@ -273,6 +347,11 @@ test("K3-R5 fails closed for stale, partial, truncated, unsupported, or malforme
     repositoryIdentity: { scheme: "wrong", scope: "workspace-local", value: REPOSITORY_ID },
   } as unknown as RepositorySnapshot
   assert.throws(() => buildContextBundle({ request: request(), snapshot: wrongScheme }), /canonical K3-R2 repository identity scheme/)
+
+  const uppercaseIdentity = snapshot({
+    repositoryIdentity: { scheme: "workspace-root-sha256-v1", scope: "workspace-local", value: REPOSITORY_ID.toUpperCase() },
+  })
+  assert.throws(() => buildContextBundle({ request: request(), snapshot: uppercaseIdentity }), /lowercase SHA-256 identity/)
 })
 
 test("K3-R5 rejects mixed or stale R4 structural results", () => {
@@ -298,6 +377,62 @@ test("K3-R5 rejects contradictory R4 completeness metadata", () => {
   assert.throws(
     () => buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [contradictory] }),
     /contradictory complete metadata/,
+  )
+})
+
+test("K3-R5 rejects malformed structural match shapes and per-result match overflows before consuming them", () => {
+  const malformed = structuralResult()
+  malformed.matches = [null] as unknown as AstGrepStructuralQueryResult["matches"]
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [malformed] }),
+    /matches\[0\] must be an object/,
+  )
+
+  const oversized = structuralResult()
+  oversized.matches = Array.from({ length: 4_097 }, () => ({
+    path: "src/widget.ts",
+    line: 7,
+    column: 3,
+    text: "Widget",
+    evidenceClass: "parser-derived" as const,
+  }))
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [oversized] }),
+    /matches exceeds 4096 items/,
+  )
+})
+
+test("K3-R5 rejects R4 payload mutation when the supplied result identity is stale", () => {
+  const produced = structuralResult()
+  const tampered = {
+    ...produced,
+    matches: [{ path: "src/widget.ts", line: 99, column: 1, text: "Widget", evidenceClass: "parser-derived" as const }],
+  }
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [tampered] }),
+    /result identity does not match its canonical payload/,
+  )
+})
+
+test("K3-R5 rejects duplicate canonical R4 result identities", () => {
+  const produced = structuralResult()
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [produced, produced] }),
+    /structural result identity replay mismatch/,
+  )
+})
+
+test("K3-R5 rejects incompatible canonical K3-R2 source/evidence/claim mappings", () => {
+  const wrongWorkingTreeClass = gitEvidence({ evidenceClass: "heuristic-inference" })
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: snapshot({ evidence: [wrongWorkingTreeClass, architectureEvidence()] }) }),
+    /canonical working-tree evidence mapping/,
+  )
+
+  const wrongArchitectureClass = architectureEvidence({ evidenceClass: "git-derived" })
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: snapshot({ evidence: [gitEvidence(), wrongArchitectureClass] }) }),
+    /canonical architecture evidence mapping/,
   )
 })
 
@@ -343,26 +478,24 @@ test("K3-R5 fails closed on oversized evidence and item text inputs", () => {
   assert.throws(() => buildContextBundle({ request: request(), snapshot: snapshot({ evidence: [oversized] }) }), /claim.value exceeds 65536/)
 })
 
-test("K3-R5 rejects structural replay identity collisions with different payloads", () => {
-  const first = structuralResult()
-  const second = structuralResult({
-    matches: [{ path: "src/widget.ts", line: 99, column: 1, text: "Widget", evidenceClass: "parser-derived" }],
-  })
-  assert.throws(
-    () => buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [first, second] }),
-    /structural result identity replay mismatch/,
-  )
-})
-
-test("K3-R5 deterministic identity does not depend on provenance receipt ordering", () => {
+test("K3-R5 deterministic identity normalizes provenance order but changes with provenance membership", () => {
   const first = structuralResult({
     source: { ...structuralResult().source, provenanceRefs: ["receipt:z", "receipt:a"] },
   })
   const second = structuralResult({
     source: { ...structuralResult().source, provenanceRefs: ["receipt:a", "receipt:z"] },
   })
+  const third = structuralResult({
+    source: { ...structuralResult().source, provenanceRefs: ["receipt:a", "receipt:different"] },
+  })
+
+  assert.equal(first.resultIdentity, second.resultIdentity)
+  assert.equal(second.resultIdentity, third.resultIdentity)
+
   const a = buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [first] })
   const b = buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [second] })
+  const c = buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [third] })
   assert.equal(a.bundleIdentity, b.bundleIdentity)
   assert.deepEqual(a.provenanceRefs, b.provenanceRefs)
+  assert.notEqual(a.bundleIdentity, c.bundleIdentity)
 })
