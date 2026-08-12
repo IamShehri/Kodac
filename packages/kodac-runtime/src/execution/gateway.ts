@@ -90,11 +90,22 @@ async function persistReceipt(observer: ExecutionObserver | undefined, receipt: 
   }
 }
 
+function normalizedAllowedExitCodes(values: number[] | undefined): number[] {
+  const resolved = values ?? [0]
+  if (resolved.length === 0) throw new Error("allowedExitCodes must contain at least one exit code")
+  const unique = [...new Set(resolved)]
+  for (const value of unique) {
+    if (!Number.isInteger(value) || value < 0 || value > 255) throw new Error("allowedExitCodes must contain integers from 0 through 255")
+  }
+  return unique.sort((left, right) => left - right)
+}
+
 interface ProcessOptions {
   signal?: AbortSignal
   maxOutputBytes: number
   timeoutMs: number
   env?: NodeJS.ProcessEnv
+  allowedExitCodes: number[]
 }
 
 function runProcess(
@@ -102,7 +113,7 @@ function runProcess(
   args: string[],
   cwd: string,
   options: ProcessOptions,
-): Promise<{ stdout: string; stderr: string }> {
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolvePromise, rejectPromise) => {
     execFile(
       executable,
@@ -118,10 +129,15 @@ function runProcess(
       },
       (error, stdout, stderr) => {
         if (error) {
+          const code = (error as { code?: unknown }).code
+          if (typeof code === "number" && options.allowedExitCodes.includes(code)) {
+            resolvePromise({ stdout, stderr, exitCode: code })
+            return
+          }
           rejectPromise(error)
           return
         }
-        resolvePromise({ stdout, stderr })
+        resolvePromise({ stdout, stderr, exitCode: 0 })
       },
     )
   })
@@ -335,12 +351,15 @@ export class ExecutionGateway {
       maxOutputBytes?: number
       timeoutMs?: number
       env?: NodeJS.ProcessEnv
+      paths?: string[]
+      allowedExitCodes?: number[]
     } = {},
   ): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
     if (capability.startsWith("git.") || capability.startsWith("repo.")) {
       throw new Error(`Generic runCommand cannot use reserved capability: ${capability}`)
     }
-    return this.runReadOnlyCommand(capability, executable, args, [], observer, options, capability)
+    const paths = uniquePaths(options.paths ?? [])
+    return this.runReadOnlyCommand(capability, executable, args, paths, observer, options, capability)
   }
 
   private async runReadOnlyCommand(
@@ -354,6 +373,7 @@ export class ExecutionGateway {
       maxOutputBytes?: number
       timeoutMs?: number
       env?: NodeJS.ProcessEnv
+      allowedExitCodes?: number[]
     },
     label: string,
     validateOutput?: (stdout: string, stderr: string) => void,
@@ -361,13 +381,14 @@ export class ExecutionGateway {
     const startedAt = new Date().toISOString()
     const maxOutputBytes = options.maxOutputBytes ?? 256 * 1024
     const timeoutMs = options.timeoutMs ?? 5_000
+    const allowedExitCodes = normalizedAllowedExitCodes(options.allowedExitCodes)
     if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) throw new Error("maxOutputBytes must be a positive integer")
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive integer")
 
     const intent: ExecutionIntent = {
       capability,
       paths,
-      inputDigest: sha256(JSON.stringify({ executable, args })),
+      inputDigest: sha256(JSON.stringify({ executable, args, allowedExitCodes })),
     }
     await observer?.onIntent?.(intent)
     const policy = await this.policy.evaluate(intent)
@@ -384,11 +405,12 @@ export class ExecutionGateway {
 
     try {
       for (const path of paths) await this.fs.validatePath(path)
-      const { stdout, stderr } = await runProcess(executable, args, this.fs.root, {
+      const { stdout, stderr, exitCode } = await runProcess(executable, args, this.fs.root, {
         signal: options.signal,
         maxOutputBytes,
         timeoutMs,
         env: options.env,
+        allowedExitCodes,
       })
       validateOutput?.(stdout, stderr)
       const combined = `${stdout}\0${stderr}`
@@ -403,7 +425,7 @@ export class ExecutionGateway {
           status: "success",
           outputDigest: sha256(combined),
           outputBytes: Buffer.byteLength(combined, "utf8"),
-          exitCode: 0,
+          exitCode,
         },
       })
       await persistReceipt(observer, receipt)
