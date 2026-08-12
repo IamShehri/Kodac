@@ -36,16 +36,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
 
-      - name: Attest clean checkout before benchmark
+      - name: Attest exact PR identity and clean checkout before benchmark
         shell: bash
+        env:
+          K3_R3_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          K3_R3_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          test "$K3_R3_PR_BASE_SHA" = "$K3_R3_BASELINE_SHA"
+          test "$(git rev-parse HEAD)" = "$K3_R3_PR_HEAD_SHA"
           git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/k3-r3-status-before"
           git diff --binary HEAD -- > "$RUNNER_TEMP/k3-r3-diff-before"
           test ! -s "$RUNNER_TEMP/k3-r3-status-before"
@@ -100,6 +106,7 @@ jobs:
           K3_R3_FIXTURE_ROOT: ${{ github.workspace }}/packages/kodac-runtime/test/fixtures/k3-r1
           K3_R3_WORKSPACE_ROOT: ${{ github.workspace }}
           K3_R3_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          K3_R3_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           K3_R3_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
