@@ -73,7 +73,7 @@ jobs:
             done
           fi
 
-      - name: Prove bounded pure Context Engine import surface
+      - name: Prove bounded pure deterministic Context Engine surface
         shell: bash
         run: |
           set -euo pipefail
@@ -81,9 +81,9 @@ jobs:
           test -d "$root"
 
           if grep -R -nE \
-            'node:(fs|fs/promises|child_process|http|https|http2|net|tls|dgram|worker_threads)|ExecutionGateway|WorkspaceFileSystem|\bfetch[[:space:]]*\(|\brequire[[:space:]]*\(|\bimport[[:space:]]*\(' \
+            'node:(fs|child_process|http|https|http2|net|tls|dgram|worker_threads|os)|ExecutionGateway|WorkspaceFileSystem|fetch[[:space:]]*\(|require[[:space:]]*\(|import[[:space:]]*\(|process[[:space:]]*\.|Date[[:space:]]*\(|Date\.now|Math\.random|randomUUID|getRandomValues|performance\.now' \
             "$root"; then
-            echo "K3-R5 Context Engine purity boundary violation" >&2
+            echo "K3-R5 Context Engine purity/determinism boundary violation" >&2
             exit 1
           fi
 
@@ -92,8 +92,11 @@ jobs:
           const root = "packages/kodac-runtime/src/context-engine"
           for (const name of readdirSync(root).filter((entry) => entry.endsWith(".ts")).sort()) {
             const source = readFileSync(`${root}/${name}`, "utf8")
-            for (const match of source.matchAll(/\bfrom\s+["']([^"']+)["']/g)) {
-              const specifier = match[1]
+            const specifiers = [
+              ...source.matchAll(/\bfrom\s+["']([^"']+)["']/g),
+              ...source.matchAll(/\bimport\s+["']([^"']+)["']/g),
+            ].map((match) => match[1])
+            for (const specifier of specifiers) {
               if (specifier !== "node:crypto" && !specifier.startsWith(".")) {
                 throw new Error(`Unauthorized K3-R5 import in ${name}: ${specifier}`)
               }
