@@ -1,0 +1,247 @@
+name: k3-r3-benchmark
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/kodac-runtime/bench/k3-r3/**"
+      - "packages/kodac-runtime/test/fixtures/k3-r1/**"
+      - ".github/workflows/k3-r3-benchmark.yml"
+      - "docs/planning/KODAC_K3_R3_EXTERNAL_ADAPTER_BENCHMARK_EVIDENCE_*.md"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: k3-r3-benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      K3_R3_BASELINE_SHA: "9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc"
+      K3_R3_PROTOCOL_ID: "KODAC_K3_BENCHMARK_AND_EVIDENCE_PROTOCOL_2026-08-12"
+      K3_R3_FIXTURE_MANIFEST_BLOB: "6f812003a4b33e62ad1be672a39c7f42509fc500"
+      AST_GREP_VERSION: "0.45.1"
+      AST_GREP_URL: "https://github.com/ast-grep/ast-grep/releases/download/0.45.1/app-x86_64-unknown-linux-gnu.zip"
+      AST_GREP_SHA256: "76fb6555be6734fb5057dba8d2fb756430f374bb9e1af694cf1ce00e13238d63"
+      AST_GREP_BIN_SHA256: "6a66162e0a2447af4b7524ee04195239eb1911d07f4868f918909e7d4f453eea"
+      TREE_SITTER_VERSION: "0.26.12"
+      TREE_SITTER_URL: "https://github.com/tree-sitter/tree-sitter/releases/download/v0.26.12/tree-sitter-cli-linux-x64.zip"
+      TREE_SITTER_SHA256: "c33ace12fa7a94d09c97054da621bf7a6a3159f765b1839a898232de283d641d"
+      TREE_SITTER_BIN_SHA256: "bb749301651689aeeec0bdbc7fa390a7f9ee21f249249de8cf0afa760b143e44"
+      TREE_SITTER_TYPESCRIPT_COMMIT: "75b3874edb2dc714fb1fd77a32013d0f8699989f"
+      SCIP_VERSION: "0.9.0"
+      SCIP_URL: "https://github.com/scip-code/scip/releases/download/v0.9.0/scip-linux-amd64.tar.gz"
+      SCIP_SHA256: "fc2e7273e110be9f35924da1066000183791e8bfdb0391355de6eaaa070fec75"
+      SCIP_BIN_SHA256: "c1f2e049b5b33b8de73e90212aeec4ad10d49be858d01f11c86386b5bfc53994"
+      LSP_SPEC_VERSION: "3.18"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Attest exact PR identity and clean checkout before benchmark
+        shell: bash
+        env:
+          K3_R3_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          K3_R3_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$K3_R3_PR_BASE_SHA" = "$K3_R3_BASELINE_SHA"
+          test "$(git rev-parse HEAD)" = "$K3_R3_PR_HEAD_SHA"
+          git status --porcelain=v1 -z --untracked-files=all --ignored=matching > "$RUNNER_TEMP/k3-r3-status-before"
+          git diff --binary HEAD -- > "$RUNNER_TEMP/k3-r3-diff-before"
+          test ! -s "$RUNNER_TEMP/k3-r3-status-before"
+          test ! -s "$RUNNER_TEMP/k3-r3-diff-before"
+
+      - name: Download and verify exact candidate binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          root="$RUNNER_TEMP/kodac-k3-r3-candidates"
+          mkdir -p "$root/ast-grep" "$root/tree-sitter" "$root/scip"
+
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 4 --retry-all-errors --retry-delay 2 \
+            "$AST_GREP_URL" -o "$root/ast-grep.zip"
+          printf '%s  %s\n' "$AST_GREP_SHA256" "$root/ast-grep.zip" | sha256sum -c -
+          unzip -q "$root/ast-grep.zip" -d "$root/ast-grep"
+
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 4 --retry-all-errors --retry-delay 2 \
+            "$TREE_SITTER_URL" -o "$root/tree-sitter.zip"
+          printf '%s  %s\n' "$TREE_SITTER_SHA256" "$root/tree-sitter.zip" | sha256sum -c -
+          unzip -q "$root/tree-sitter.zip" -d "$root/tree-sitter"
+
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 4 --retry-all-errors --retry-delay 2 \
+            "$SCIP_URL" -o "$root/scip.tar.gz"
+          printf '%s  %s\n' "$SCIP_SHA256" "$root/scip.tar.gz" | sha256sum -c -
+          tar -xzf "$root/scip.tar.gz" -C "$root/scip"
+
+          select_unique_binary() {
+            local directory="$1"
+            local filename="$2"
+            local label="$3"
+            local -a matches=()
+            mapfile -t matches < <(find "$directory" -type f -name "$filename" -print | LC_ALL=C sort)
+            if [[ "${#matches[@]}" -ne 1 ]]; then
+              printf '%s: expected exactly one %s executable, found %s\n' \
+                "$label" "$filename" "${#matches[@]}" >&2
+              return 1
+            fi
+            printf '%s\n' "${matches[0]}"
+          }
+
+          ast_bin="$(select_unique_binary "$root/ast-grep" 'ast-grep' 'ast-grep')"
+          tree_bin="$(select_unique_binary "$root/tree-sitter" 'tree-sitter' 'Tree-sitter')"
+          scip_bin="$(select_unique_binary "$root/scip" 'scip' 'SCIP')"
+
+          chmod +x "$ast_bin" "$tree_bin" "$scip_bin"
+
+          printf '%s  %s\n' "$AST_GREP_BIN_SHA256" "$ast_bin" | sha256sum -c -
+          printf '%s  %s\n' "$TREE_SITTER_BIN_SHA256" "$tree_bin" | sha256sum -c -
+          printf '%s  %s\n' "$SCIP_BIN_SHA256" "$scip_bin" | sha256sum -c -
+
+          {
+            printf 'K3_R3_DOWNLOADED_AST_GREP_BIN=%s\n' "$ast_bin"
+            printf 'K3_R3_DOWNLOADED_TREE_SITTER_BIN=%s\n' "$tree_bin"
+            printf 'K3_R3_DOWNLOADED_SCIP_BIN=%s\n' "$scip_bin"
+          } >> "$GITHUB_ENV"
+
+      - name: Prepare unprivileged read-only benchmark view
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bench_user="kodacbench"
+          sandbox="/tmp/kodac-k3-r3-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          fixture="$GITHUB_WORKSPACE/packages/kodac-runtime/test/fixtures/k3-r1"
+          workspace_parent="$(dirname "$GITHUB_WORKSPACE")"
+
+          if id "$bench_user" >/dev/null 2>&1; then
+            printf 'Unexpected pre-existing benchmark user: %s\n' "$bench_user" >&2
+            exit 1
+          fi
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$bench_user"
+          bench_uid="$(id -u "$bench_user")"
+          bench_gid="$(id -g "$bench_user")"
+
+          sudo install -d -o root -g root -m 0755 "$sandbox" "$sandbox/bin"
+          sudo install -d -o "$bench_uid" -g "$bench_gid" -m 0755 "$sandbox/result"
+          sudo install -d -o "$bench_uid" -g "$bench_gid" -m 0700 "$sandbox/home"
+          sudo install -o root -g root -m 0555 "$K3_R3_DOWNLOADED_AST_GREP_BIN" "$sandbox/bin/ast-grep"
+          sudo install -o root -g root -m 0555 "$K3_R3_DOWNLOADED_TREE_SITTER_BIN" "$sandbox/bin/tree-sitter"
+          sudo install -o root -g root -m 0555 "$K3_R3_DOWNLOADED_SCIP_BIN" "$sandbox/bin/scip"
+
+          sudo chmod a+rx /home/runner /home/runner/work "$workspace_parent" "$GITHUB_WORKSPACE"
+          sudo find -P "$GITHUB_WORKSPACE" -type d -exec chmod go-w,a+rx {} +
+          sudo find -P "$GITHUB_WORKSPACE" -type f -exec chmod go-w,a+r {} +
+          if sudo find -P "$GITHUB_WORKSPACE" -uid "$bench_uid" -print -quit | grep -q .; then
+            printf 'Benchmark user unexpectedly owns a checkout path\n' >&2
+            exit 1
+          fi
+
+          node_bin="$(command -v node)"
+          test -x "$node_bin"
+          sudo -u "$bench_user" "$node_bin" --version >/dev/null
+          sudo -u "$bench_user" env HOME="$sandbox/home" PATH="/usr/bin:/bin" \
+            git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          fixture_probe="$fixture/.kodac-k3-r3-write-probe"
+          workspace_probe="$GITHUB_WORKSPACE/.kodac-k3-r3-write-probe"
+          if sudo -u "$bench_user" touch "$fixture_probe" 2>/dev/null; then
+            sudo rm -f "$fixture_probe"
+            printf 'Fixture write probe unexpectedly succeeded for unprivileged benchmark user\n' >&2
+            exit 1
+          fi
+          if sudo -u "$bench_user" touch "$workspace_probe" 2>/dev/null; then
+            sudo rm -f "$workspace_probe"
+            printf 'Workspace write probe unexpectedly succeeded for unprivileged benchmark user\n' >&2
+            exit 1
+          fi
+
+          {
+            printf 'K3_R3_BENCH_USER=%s\n' "$bench_user"
+            printf 'K3_R3_EXPECTED_EXECUTION_UID=%s\n' "$bench_uid"
+            printf 'K3_R3_SANDBOX_ROOT=%s\n' "$sandbox"
+            printf 'K3_R3_SANDBOX_HOME=%s\n' "$sandbox/home"
+            printf 'K3_R3_FIXTURE_ROOT=%s\n' "$fixture"
+            printf 'K3_R3_RESULT_PATH=%s\n' "$sandbox/result/k3-r3-results.json"
+            printf 'K3_R3_NODE_BIN=%s\n' "$node_bin"
+            printf 'AST_GREP_BIN=%s\n' "$sandbox/bin/ast-grep"
+            printf 'TREE_SITTER_BIN=%s\n' "$sandbox/bin/tree-sitter"
+            printf 'SCIP_BIN=%s\n' "$sandbox/bin/scip"
+          } >> "$GITHUB_ENV"
+
+      - name: Run bounded K3-R3 benchmark as unprivileged user
+        shell: bash
+        env:
+          K3_R3_WORKSPACE_ROOT: ${{ github.workspace }}
+          K3_R3_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          K3_R3_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          K3_R3_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          sudo -u "$K3_R3_BENCH_USER" env \
+            HOME="$K3_R3_SANDBOX_HOME" \
+            PATH="/usr/bin:/bin" \
+            K3_R3_WORKSPACE_ROOT="$K3_R3_WORKSPACE_ROOT" \
+            K3_R3_FIXTURE_ROOT="$K3_R3_FIXTURE_ROOT" \
+            K3_R3_RESULT_PATH="$K3_R3_RESULT_PATH" \
+            K3_R3_BASELINE_SHA="$K3_R3_BASELINE_SHA" \
+            K3_R3_HEAD_SHA="$K3_R3_HEAD_SHA" \
+            K3_R3_PR_BASE_SHA="$K3_R3_PR_BASE_SHA" \
+            K3_R3_PROTOCOL_ID="$K3_R3_PROTOCOL_ID" \
+            K3_R3_FIXTURE_MANIFEST_BLOB="$K3_R3_FIXTURE_MANIFEST_BLOB" \
+            K3_R3_RUN_ID="$K3_R3_RUN_ID" \
+            K3_R3_EXPECTED_EXECUTION_UID="$K3_R3_EXPECTED_EXECUTION_UID" \
+            AST_GREP_BIN="$AST_GREP_BIN" \
+            AST_GREP_VERSION="$AST_GREP_VERSION" \
+            AST_GREP_SHA256="$AST_GREP_SHA256" \
+            AST_GREP_BIN_SHA256="$AST_GREP_BIN_SHA256" \
+            TREE_SITTER_BIN="$TREE_SITTER_BIN" \
+            TREE_SITTER_VERSION="$TREE_SITTER_VERSION" \
+            TREE_SITTER_SHA256="$TREE_SITTER_SHA256" \
+            TREE_SITTER_BIN_SHA256="$TREE_SITTER_BIN_SHA256" \
+            TREE_SITTER_TYPESCRIPT_COMMIT="$TREE_SITTER_TYPESCRIPT_COMMIT" \
+            SCIP_BIN="$SCIP_BIN" \
+            SCIP_VERSION="$SCIP_VERSION" \
+            SCIP_SHA256="$SCIP_SHA256" \
+            SCIP_BIN_SHA256="$SCIP_BIN_SHA256" \
+            LSP_SPEC_VERSION="$LSP_SPEC_VERSION" \
+            "$K3_R3_NODE_BIN" --experimental-strip-types \
+            "$GITHUB_WORKSPACE/packages/kodac-runtime/bench/k3-r3/benchmark.ts"
+
+      - name: Attest checkout unchanged after benchmark
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git status --porcelain=v1 -z --untracked-files=all --ignored=matching > "$RUNNER_TEMP/k3-r3-status-after"
+          git diff --binary HEAD -- > "$RUNNER_TEMP/k3-r3-diff-after"
+          cmp "$RUNNER_TEMP/k3-r3-status-before" "$RUNNER_TEMP/k3-r3-status-after"
+          cmp "$RUNNER_TEMP/k3-r3-diff-before" "$RUNNER_TEMP/k3-r3-diff-after"
+          test ! -s "$RUNNER_TEMP/k3-r3-status-after"
+          test ! -s "$RUNNER_TEMP/k3-r3-diff-after"
+
+      - name: Upload benchmark evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: k3-r3-benchmark-evidence-${{ github.event.pull_request.head.sha }}
+          path: /tmp/kodac-k3-r3-${{ github.run_id }}-${{ github.run_attempt }}/result/k3-r3-results.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Remove disposable benchmark sandbox
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf "/tmp/kodac-k3-r3-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
