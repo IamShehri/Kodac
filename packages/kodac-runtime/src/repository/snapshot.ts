@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { sep } from "node:path"
-import { WorkspaceBoundaryError, type WorkspaceFileSystem } from "../edit/filesystem.ts"
+import { WorkspaceBoundaryError, WorkspaceNotDirectoryError, type WorkspaceFileSystem } from "../edit/filesystem.ts"
 import type { ExecutionGateway, ExecutionObserver } from "../execution/gateway.ts"
 import {
   isFullGitObjectId,
@@ -143,11 +143,11 @@ interface DepthOmissionProbe {
   unstable: boolean
 }
 
-function isTransientDepthProbeError(error: unknown, path: string): boolean {
+function isTransientDepthProbeError(error: unknown): boolean {
   if (error instanceof WorkspaceBoundaryError) return false
   const code = (error as NodeJS.ErrnoException | undefined)?.code
   if (code === "ENOENT" || code === "ENOTDIR") return true
-  return error instanceof Error && error.message === `Workspace path is not a directory: ${path}`
+  return error instanceof WorkspaceNotDirectoryError
 }
 
 async function probeDepthOmission(
@@ -165,7 +165,7 @@ async function probeDepthOmission(
       const children = await fs.list(entry.path, { recursive: false, maxEntries: 1, maxDepth: 1 })
       if (children.length > 0) omitted = true
     } catch (error) {
-      if (!isTransientDepthProbeError(error, entry.path)) throw error
+      if (!isTransientDepthProbeError(error)) throw error
       unstable = true
     }
   }

@@ -7,7 +7,7 @@ import { dirname, join } from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 
-import { NodeWorkspaceFileSystem, WorkspaceBoundaryError, type WorkspaceFileSystem } from "../src/edit/filesystem.ts"
+import { NodeWorkspaceFileSystem, WorkspaceBoundaryError, WorkspaceNotDirectoryError, type WorkspaceFileSystem } from "../src/edit/filesystem.ts"
 import type { ExecutionReceipt } from "../src/evidence/receipt.ts"
 import { ExecutionGateway } from "../src/execution/gateway.ts"
 import {
@@ -72,6 +72,48 @@ function fakeFs(root: string, entries: { path: string; type: "file" | "directory
     async writeText() { throw new Error("fake snapshot filesystem is read-only") },
     async remove() { throw new Error("fake snapshot filesystem is read-only") },
     async move() { throw new Error("fake snapshot filesystem is read-only") },
+  }
+}
+
+function depthProbeRaceFixture(probeError: unknown): {
+  fs: WorkspaceFileSystem
+  source: GitSnapshotSource
+  headCalls(): number
+  statusCalls(): number
+} {
+  let listCalls = 0
+  const fs = fakeFs("/fixture", [])
+  fs.list = async () => {
+    listCalls++
+    if (listCalls === 1) {
+      return [
+        { path: "level", type: "directory" },
+        { path: "level/boundary", type: "directory" },
+      ]
+    }
+    throw probeError
+  }
+
+  const base = fakeSource(["a".repeat(40)], [""])
+  let headCallCount = 0
+  let statusCallCount = 0
+  const source: GitSnapshotSource = {
+    ...base,
+    async head() {
+      headCallCount++
+      return base.head()
+    },
+    async status() {
+      statusCallCount++
+      return base.status()
+    },
+  }
+
+  return {
+    fs,
+    source,
+    headCalls: () => headCallCount,
+    statusCalls: () => statusCallCount,
   }
 }
 
@@ -601,124 +643,74 @@ test("K3-R2 keeps the canonical K3-R1 manifest repository-content identity uncha
   assert.equal(gitBlobSha1(bytes), "6f812003a4b33e62ad1be672a39c7f42509fc500")
 })
 
-test("K3-R2 recoverable ENOENT max-depth probe race marks stale and completes post observation", async () => {
-  let listCalls = 0
-  const fs = fakeFs("/fixture", [])
-  fs.list = async () => {
-    listCalls++
-    if (listCalls === 1) {
-      return [
-        { path: "level", type: "directory" },
-        { path: "level/boundary", type: "directory" },
-      ]
-    }
-    const error = new Error("boundary disappeared") as NodeJS.ErrnoException
-    error.code = "ENOENT"
-    throw error
+test("K3-R2 NodeWorkspaceFileSystem.list emits a structural not-directory error with the workspace path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "kodac-k3-r2-not-directory-"))
+  try {
+    await writeFile(join(root, "boundary"), "file\n", "utf8")
+    const fs = new NodeWorkspaceFileSystem(root)
+    await assert.rejects(
+      () => fs.list("boundary", { recursive: false, maxEntries: 1, maxDepth: 1 }),
+      (error: unknown) => {
+        assert.ok(error instanceof WorkspaceNotDirectoryError)
+        assert.equal(error.name, "WorkspaceNotDirectoryError")
+        assert.equal(error.path, "boundary")
+        return true
+      },
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
-  const base = fakeSource(["a".repeat(40)], [""])
-  let headCalls = 0
-  let statusCalls = 0
-  const source: GitSnapshotSource = {
-    ...base,
-    async head() {
-      headCalls++
-      return base.head()
-    },
-    async status() {
-      statusCalls++
-      return base.status()
-    },
-  }
-  const snapshot = await captureRepositorySnapshot(fs, source, { maxDepth: 1 })
-  assert.equal(snapshot.freshness, "stale")
-  assert.equal(snapshot.completeness.omittedAtLeast, 0)
-  assert.ok(!snapshot.completeness.reasons.includes("max-depth"))
-  assert.equal(headCalls, 2)
-  assert.equal(statusCalls, 2)
 })
 
-test("K3-R2 ENOTDIR and directory-to-file probe races mark stale without inventing omission", async () => {
-  const errors: Error[] = []
+test("K3-R2 recoverable depth-probe race types mark stale and complete post observation", async () => {
+  const enoent = new Error("boundary disappeared") as NodeJS.ErrnoException
+  enoent.code = "ENOENT"
   const enotdir = new Error("boundary changed type") as NodeJS.ErrnoException
   enotdir.code = "ENOTDIR"
-  errors.push(enotdir)
-  errors.push(new Error("Workspace path is not a directory: level/boundary"))
+  const errors: unknown[] = [
+    enoent,
+    enotdir,
+    new WorkspaceNotDirectoryError("level/boundary"),
+  ]
 
-  for (const raceError of errors) {
-    let listCalls = 0
-    const fs = fakeFs("/fixture", [])
-    fs.list = async () => {
-      listCalls++
-      if (listCalls === 1) {
-        return [
-          { path: "level", type: "directory" },
-          { path: "level/boundary", type: "directory" },
-        ]
-      }
-      throw raceError
-    }
-    const base = fakeSource(["a".repeat(40)], [""])
-    let headCalls = 0
-    let statusCalls = 0
-    const source: GitSnapshotSource = {
-      ...base,
-      async head() {
-        headCalls++
-        return base.head()
-      },
-      async status() {
-        statusCalls++
-        return base.status()
-      },
-    }
-    const snapshot = await captureRepositorySnapshot(fs, source, { maxDepth: 1 })
+  for (const probeError of errors) {
+    const fixture = depthProbeRaceFixture(probeError)
+    const snapshot = await captureRepositorySnapshot(fixture.fs, fixture.source, { maxDepth: 1 })
     assert.equal(snapshot.freshness, "stale")
     assert.equal(snapshot.completeness.omittedAtLeast, 0)
     assert.ok(!snapshot.completeness.reasons.includes("max-depth"))
-    assert.equal(headCalls, 2)
-    assert.equal(statusCalls, 2)
+    assert.equal(fixture.headCalls(), 2)
+    assert.equal(fixture.statusCalls(), 2)
   }
 })
 
-test("K3-R2 non-transient depth-probe errors remain fail-closed", async () => {
+test("K3-R2 generic same-message depth-probe error remains fail-closed", async () => {
+  const probeError = new Error("Workspace path is not a directory: level/boundary")
+  const fixture = depthProbeRaceFixture(probeError)
+  await assert.rejects(
+    () => captureRepositorySnapshot(fixture.fs, fixture.source, { maxDepth: 1 }),
+    (error: unknown) => error === probeError,
+  )
+  assert.equal(fixture.headCalls(), 1)
+  assert.equal(fixture.statusCalls(), 1)
+})
+
+test("K3-R2 boundary and permission depth-probe errors remain fail-closed", async () => {
   const eacces = new Error("permission denied") as NodeJS.ErrnoException
   eacces.code = "EACCES"
-  const errors: Error[] = [
+  const eperm = new Error("operation not permitted") as NodeJS.ErrnoException
+  eperm.code = "EPERM"
+  const errors: unknown[] = [
     eacces,
+    eperm,
     new WorkspaceBoundaryError("Path escapes workspace: level/boundary"),
   ]
 
   for (const probeError of errors) {
-    let listCalls = 0
-    const fs = fakeFs("/fixture", [])
-    fs.list = async () => {
-      listCalls++
-      if (listCalls === 1) {
-        return [
-          { path: "level", type: "directory" },
-          { path: "level/boundary", type: "directory" },
-        ]
-      }
-      throw probeError
-    }
-    const base = fakeSource(["a".repeat(40)], [""])
-    let headCalls = 0
-    let statusCalls = 0
-    const source: GitSnapshotSource = {
-      ...base,
-      async head() {
-        headCalls++
-        return base.head()
-      },
-      async status() {
-        statusCalls++
-        return base.status()
-      },
-    }
-    await assert.rejects(() => captureRepositorySnapshot(fs, source, { maxDepth: 1 }))
-    assert.equal(headCalls, 1)
-    assert.equal(statusCalls, 1)
+    const fixture = depthProbeRaceFixture(probeError)
+    await assert.rejects(() => captureRepositorySnapshot(fixture.fs, fixture.source, { maxDepth: 1 }))
+    assert.equal(fixture.headCalls(), 1)
+    assert.equal(fixture.statusCalls(), 1)
   }
 })
 

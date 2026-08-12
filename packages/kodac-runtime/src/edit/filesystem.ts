@@ -8,6 +8,16 @@ export class WorkspaceBoundaryError extends Error {
   }
 }
 
+export class WorkspaceNotDirectoryError extends Error {
+  readonly path: string
+
+  constructor(path: string) {
+    super(`Workspace path is not a directory: ${path}`)
+    this.name = "WorkspaceNotDirectoryError"
+    this.path = path
+  }
+}
+
 export interface WorkspaceEntry {
   path: string
   type: "file" | "directory" | "symlink"
@@ -147,7 +157,7 @@ export class NodeWorkspaceFileSystem implements WorkspaceFileSystem {
 
     const target = await this.resolveWithin(path || ".", true)
     const targetInfo = await stat(target)
-    if (!targetInfo.isDirectory()) throw new Error(`Workspace path is not a directory: ${path}`)
+    if (!targetInfo.isDirectory()) throw new WorkspaceNotDirectoryError(path)
 
     const entries: WorkspaceEntry[] = []
     const walk = async (directory: string, depth: number): Promise<void> => {
