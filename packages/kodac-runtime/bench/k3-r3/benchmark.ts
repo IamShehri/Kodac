@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
+  existsSync,
   lstatSync,
   readFileSync,
   readdirSync,
@@ -9,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import { arch, platform, release } from "node:os"
-import { isAbsolute, relative, resolve } from "node:path"
+import { dirname, isAbsolute, relative, resolve } from "node:path"
 import { performance } from "node:perf_hooks"
 
 interface ExpectedFile {
@@ -104,6 +105,22 @@ interface VerifiedExecutable {
   realPath: string
   sha256: string
 }
+
+interface SourceOccurrence {
+  path: string
+  line: number
+  column: number
+}
+
+const TEXT_EXPECTED_KINDS = new Set([
+  "architecture-document",
+  "untrusted-document",
+  "generated",
+  "malformed-source",
+  "source",
+  "test-source",
+  "vendor",
+])
 
 function requiredEnv(name: string): string {
   const value = process.env[name]
@@ -277,11 +294,11 @@ function compareStringSets(actual: string[], expected: string[]): boolean {
 }
 
 function precisionRecall(
-  observed: Array<{ path: string; line: number }>,
-  expected: Array<{ path: string; line: number }>,
+  observed: SourceOccurrence[],
+  expected: SourceOccurrence[],
 ): { precision: number; recall: number; truePositive: number; observed: number; expected: number } {
-  const observedSet = new Set(observed.map((item) => `${item.path}:${item.line}`))
-  const expectedSet = new Set(expected.map((item) => `${item.path}:${item.line}`))
+  const observedSet = new Set(observed.map((item) => `${item.path}:${item.line}:${item.column}`))
+  const expectedSet = new Set(expected.map((item) => `${item.path}:${item.line}:${item.column}`))
   let truePositive = 0
   for (const item of observedSet) {
     if (expectedSet.has(item)) {
@@ -295,6 +312,48 @@ function precisionRecall(
     observed: observedSet.size,
     expected: expectedSet.size,
   }
+}
+
+function identifierChar(character: string): boolean {
+  return /^[A-Za-z0-9_$]$/.test(character)
+}
+
+function locateGoldOccurrence(
+  fixtureRoot: string,
+  item: { path: string; line: number; symbol: string },
+): SourceOccurrence {
+  const path = normalizeRelativePath(item.path, fixtureRoot)
+  const logicalPath = resolve(fixtureRoot, path)
+  const realPath = realContainedPath(fixtureRoot, logicalPath, `gold occurrence ${path}:${item.line}`)
+  const lines = normalizeText(readFileSync(realPath)).toString("utf8").split("\n")
+  const lineText = lines[item.line - 1]
+  if (lineText === undefined) {
+    throw new Error(`Gold occurrence line is out of range: ${path}:${item.line}`)
+  }
+
+  const columns: number[] = []
+  let searchFrom = 0
+  while (searchFrom <= lineText.length - item.symbol.length) {
+    const index = lineText.indexOf(item.symbol, searchFrom)
+    if (index < 0) {
+      break
+    }
+    const before = index === 0 ? "" : lineText[index - 1] ?? ""
+    const afterIndex = index + item.symbol.length
+    const after = afterIndex >= lineText.length ? "" : lineText[afterIndex] ?? ""
+    if ((!before || !identifierChar(before)) && (!after || !identifierChar(after))) {
+      columns.push(index + 1)
+    }
+    searchFrom = index + Math.max(1, item.symbol.length)
+  }
+
+  if (columns.length !== 1) {
+    throw new Error(
+      `Gold occurrence must resolve to exactly one identifier on its declared line: ${path}:${item.line}:${item.symbol} (${columns.length} matches)`,
+    )
+  }
+
+  return { path, line: item.line, column: columns[0] }
 }
 
 function runCommand(
@@ -349,7 +408,14 @@ function verifyFixture(manifest: FixtureManifest, fixtureRoot: string): {
     const logicalPath = resolve(fixtureRoot, path)
     const realPath = realContainedPath(fixtureRoot, logicalPath, `manifest file ${path}`)
     const bytes = readFileSync(realPath)
-    const canonicalBytes = expected.kind === "binary" ? bytes : normalizeText(bytes)
+    let canonicalBytes: Buffer
+    if (expected.kind === "binary") {
+      canonicalBytes = bytes
+    } else if (TEXT_EXPECTED_KINDS.has(expected.kind)) {
+      canonicalBytes = normalizeText(bytes)
+    } else {
+      throw new Error(`Unsupported fixture digest kind for ${path}: ${expected.kind}`)
+    }
     const actual = sha256(canonicalBytes)
     if (actual !== expected.sha256) {
       throw new Error(`Fixture digest mismatch for ${path}: expected ${expected.sha256}, got ${actual}`)
@@ -423,7 +489,7 @@ function stableAstSuite(suite: QueryObservation[]): unknown {
 function main(): void {
   const workspaceRoot = realpathSync(resolve(requiredEnv("K3_R3_WORKSPACE_ROOT")))
   const fixtureRoot = realpathSync(resolve(requiredEnv("K3_R3_FIXTURE_ROOT")))
-  const resultPath = requiredEnv("K3_R3_RESULT_PATH")
+  const resultPath = resolve(requiredEnv("K3_R3_RESULT_PATH"))
   const baselineSha = requiredEnv("K3_R3_BASELINE_SHA")
   const headSha = requiredEnv("K3_R3_HEAD_SHA")
   const prBaseSha = requiredEnv("K3_R3_PR_BASE_SHA")
@@ -460,6 +526,17 @@ function main(): void {
     throw new Error("Fixture root must remain inside the real checked-out workspace")
   }
 
+  const resultParent = realpathSync(dirname(resultPath))
+  if (pathIsContained(workspaceRoot, resultParent)) {
+    throw new Error(`Benchmark result path parent must remain outside the workspace: ${resultParent}`)
+  }
+  if (existsSync(resultPath)) {
+    const resultRealPath = realpathSync(resultPath)
+    if (pathIsContained(workspaceRoot, resultRealPath)) {
+      throw new Error(`Benchmark result path must remain outside the workspace: ${resultRealPath}`)
+    }
+  }
+
   const astGrepExecutable = verifyExecutableDigest(astGrepBin, astGrepExpectedBinSha, "ast-grep")
   const treeSitterExecutable = verifyExecutableDigest(
     treeSitterBin,
@@ -482,6 +559,12 @@ function main(): void {
   }
   if (manifest.schema_version !== "k3-r1-gold-evidence-v1") {
     throw new Error(`Unexpected fixture schema: ${manifest.schema_version}`)
+  }
+  if (
+    manifest.digest_policy.binary !== "raw-bytes" ||
+    manifest.digest_policy.text !== "utf8-lf-normalized"
+  ) {
+    throw new Error("Unexpected fixture digest policy")
   }
 
   const fixtureBefore = verifyFixture(manifest, fixtureRoot)
@@ -506,14 +589,14 @@ function main(): void {
   if (!symlinkCase?.symlink_target) {
     throw new Error("Missing canonical symlink-escape security case")
   }
-  let symlinkTargetRejected = false
+  let symlinkTargetPathStringRejected = false
   try {
     normalizeRelativePath(symlinkCase.symlink_target, fixtureRoot)
   } catch {
-    symlinkTargetRejected = true
+    symlinkTargetPathStringRejected = true
   }
-  if (!symlinkTargetRejected) {
-    throw new Error("Canonical symlink target escape was not rejected")
+  if (!symlinkTargetPathStringRejected) {
+    throw new Error("Canonical virtual symlink target path string was not rejected")
   }
 
   const candidateIdentityOutput = {
@@ -560,17 +643,25 @@ function main(): void {
   const expectedAddOccurrences = [
     ...manifest.gold.definitions
       .filter((item) => item.symbol === "add")
-      .map((item) => ({ path: item.path, line: item.line })),
+      .map((item) => locateGoldOccurrence(fixtureRoot, item)),
     ...manifest.gold.references
       .filter((item) => item.symbol === "add")
-      .map((item) => ({ path: item.path, line: item.line })),
+      .map((item) => locateGoldOccurrence(fixtureRoot, item)),
   ]
-  const observedAddOccurrences = query("symbol-add").matches.map((item) => ({ path: item.path, line: item.line }))
+  const observedAddOccurrences = query("symbol-add").matches.map((item) => ({
+    path: item.path,
+    line: item.line,
+    column: item.column,
+  }))
 
   const expectedMeaningOccurrences = manifest.gold.definitions
     .filter((item) => item.symbol === "meaning")
-    .map((item) => ({ path: item.path, line: item.line }))
-  const observedMeaningOccurrences = query("symbol-meaning").matches.map((item) => ({ path: item.path, line: item.line }))
+    .map((item) => locateGoldOccurrence(fixtureRoot, item))
+  const observedMeaningOccurrences = query("symbol-meaning").matches.map((item) => ({
+    path: item.path,
+    line: item.line,
+    column: item.column,
+  }))
 
   const addOccurrenceMetrics = precisionRecall(observedAddOccurrences, expectedAddOccurrences)
   const meaningOccurrenceMetrics = precisionRecall(observedMeaningOccurrences, expectedMeaningOccurrences)
@@ -746,7 +837,7 @@ function main(): void {
       unauthorizedWorkspaceMutationsObservedByHarness: workspaceMutationCount,
       workspaceFullTreeMutationGuard: workspaceUnchanged,
       canonicalTraversalCaseRejected: traversalRejected,
-      canonicalSymlinkTargetEscapeRejected: symlinkTargetRejected,
+      canonicalSymlinkTargetPathStringRejected: symlinkTargetPathStringRejected,
       unlabeledModelHypothesesAsVerifiedFacts: 0,
       truncation: "not-triggered-on-k3-r1-core-repository-v1",
       partialResults: "none-for-ast-grep-claimed-structural-capabilities",
