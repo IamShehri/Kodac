@@ -23,6 +23,7 @@ export function fixedPolicy(decision: PolicyDecision, reason = `fixed:${decision
 
 const READ_ONLY_AGENT_CAPABILITIES = new Set(["repo.read", "repo.list", "repo.search", "git.diff"])
 const K3_R2_READ_ONLY_CAPABILITIES = new Set(["git.head", "git.status", "git.hash-object"])
+const K3_R4_READ_ONLY_CAPABILITIES = new Set(["k3.ast-grep.identity", "k3.ast-grep.structural-query"])
 
 export function workspaceAgentPolicy(approveWrites: boolean): PolicyEngine {
   return {
@@ -46,7 +47,10 @@ export function repositoryIntelligenceReadPolicy(): PolicyEngine {
       if (K3_R2_READ_ONLY_CAPABILITIES.has(intent.capability)) {
         return { decision: "allow", reason: `K3-R2 bounded repository-intelligence read: ${intent.capability}` }
       }
-      return { decision: "deny", reason: `capability not authorized for K3-R2 repository intelligence: ${intent.capability}` }
+      if (K3_R4_READ_ONLY_CAPABILITIES.has(intent.capability)) {
+        return { decision: "allow", reason: `K3-R4 bounded external structural read: ${intent.capability}` }
+      }
+      return { decision: "deny", reason: `capability not authorized for K3 repository intelligence: ${intent.capability}` }
     },
   }
 }

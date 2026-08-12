@@ -1,0 +1,126 @@
+name: k3-r4-adapter
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/kodac-runtime/src/repository-intelligence/**"
+      - "packages/kodac-runtime/src/repository/**"
+      - "packages/kodac-runtime/src/execution/gateway.ts"
+      - "packages/kodac-runtime/src/trust/policy.ts"
+      - "packages/kodac-runtime/src/index.ts"
+      - "packages/kodac-runtime/test/k3-r4-ast-grep-adapter.test.ts"
+      - "packages/kodac-runtime/test/gateway.test.ts"
+      - "packages/kodac-runtime/test/fixtures/k3-r1/**"
+      - ".github/workflows/k3-r4-adapter.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    name: k3-r4-adapter
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      K3_R4_IMPLEMENTATION_BASELINE_SHA: "f6ed202d11c3eb279447c2a55cf11e46db09973c"
+      K3_R4_IMPLEMENTATION_BRANCH: "feat/k3-r4-ast-grep-cli-adapter"
+      AST_GREP_VERSION: "0.45.1"
+      AST_GREP_URL: "https://github.com/ast-grep/ast-grep/releases/download/0.45.1/app-x86_64-unknown-linux-gnu.zip"
+      AST_GREP_SHA256: "76fb6555be6734fb5057dba8d2fb756430f374bb9e1af694cf1ce00e13238d63"
+      AST_GREP_BIN_SHA256: "6a66162e0a2447af4b7524ee04195239eb1911d07f4868f918909e7d4f453eea"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Attest exact PR head and implementation-gate scope
+        shell: bash
+        env:
+          K3_R4_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          K3_R4_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          K3_R4_PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$K3_R4_PR_HEAD_SHA"
+
+          git status --porcelain=v1 -z --untracked-files=all --ignored=matching > "$RUNNER_TEMP/k3-r4-status-before"
+          git diff --binary HEAD -- > "$RUNNER_TEMP/k3-r4-diff-before"
+          test ! -s "$RUNNER_TEMP/k3-r4-status-before"
+          test ! -s "$RUNNER_TEMP/k3-r4-diff-before"
+
+          # One-time certification for the canonically authorized K3-R4 implementation PR.
+          # After this branch is merged, future PRs still run the reusable adapter regression
+          # but are not incorrectly pinned to the historical implementation baseline/scope.
+          if [[ "$K3_R4_PR_HEAD_REF" = "$K3_R4_IMPLEMENTATION_BRANCH" ]]; then
+            test "$K3_R4_PR_BASE_SHA" = "$K3_R4_IMPLEMENTATION_BASELINE_SHA"
+            git fetch --no-tags --depth=1 origin "$K3_R4_IMPLEMENTATION_BASELINE_SHA"
+            test "$(git rev-parse FETCH_HEAD)" = "$K3_R4_IMPLEMENTATION_BASELINE_SHA"
+            mapfile -t changed < <(git diff --name-only "$K3_R4_IMPLEMENTATION_BASELINE_SHA" HEAD | LC_ALL=C sort)
+            test "${#changed[@]}" -eq 9
+            for path in "${changed[@]}"; do
+              case "$path" in
+                .github/workflows/k3-r4-adapter.yml|\
+                packages/kodac-runtime/src/execution/gateway.ts|\
+                packages/kodac-runtime/src/index.ts|\
+                packages/kodac-runtime/src/repository-intelligence/ast-grep-cli.ts|\
+                packages/kodac-runtime/src/repository-intelligence/ast-grep-empty-config.yml|\
+                packages/kodac-runtime/src/repository-intelligence/contracts.ts|\
+                packages/kodac-runtime/src/trust/policy.ts|\
+                packages/kodac-runtime/test/gateway.test.ts|\
+                packages/kodac-runtime/test/k3-r4-ast-grep-adapter.test.ts)
+                  ;;
+                *)
+                  printf 'Unauthorized K3-R4 implementation path: %s\n' "$path" >&2
+                  exit 1
+                  ;;
+              esac
+            done
+          fi
+
+      - name: Download and verify exact disposable ast-grep binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/kodac-k3-r4-ast-grep"
+          mkdir -p "$root/extracted"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 4 --retry-all-errors --retry-delay 2 \
+            "$AST_GREP_URL" -o "$root/ast-grep.zip"
+          printf '%s  %s\n' "$AST_GREP_SHA256" "$root/ast-grep.zip" | sha256sum -c -
+          unzip -q "$root/ast-grep.zip" -d "$root/extracted"
+
+          mapfile -t matches < <(find "$root/extracted" -type f -name 'ast-grep' -print | LC_ALL=C sort)
+          if [[ "${#matches[@]}" -ne 1 ]]; then
+            printf 'Expected exactly one ast-grep executable, found %s\n' "${#matches[@]}" >&2
+            exit 1
+          fi
+          ast_bin="${matches[0]}"
+          chmod +x "$ast_bin"
+          printf '%s  %s\n' "$AST_GREP_BIN_SHA256" "$ast_bin" | sha256sum -c -
+          config="$GITHUB_WORKSPACE/packages/kodac-runtime/src/repository-intelligence/ast-grep-empty-config.yml"
+          printf '%s  %s\n' "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356" "$config" | sha256sum -c -
+          test "$($ast_bin --config "$config" --version)" = "ast-grep $AST_GREP_VERSION"
+          printf 'K3_R4_AST_GREP_BIN=%s\n' "$ast_bin" >> "$GITHUB_ENV"
+
+      - name: Run full runtime tests with exact K3-R4 integration identity
+        working-directory: packages/kodac-runtime
+        run: npm test
+
+      - name: Attest checkout unchanged after external structural reads
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git status --porcelain=v1 -z --untracked-files=all --ignored=matching > "$RUNNER_TEMP/k3-r4-status-after"
+          git diff --binary HEAD -- > "$RUNNER_TEMP/k3-r4-diff-after"
+          cmp "$RUNNER_TEMP/k3-r4-status-before" "$RUNNER_TEMP/k3-r4-status-after"
+          cmp "$RUNNER_TEMP/k3-r4-diff-before" "$RUNNER_TEMP/k3-r4-diff-after"
+          test ! -s "$RUNNER_TEMP/k3-r4-status-after"
+          test ! -s "$RUNNER_TEMP/k3-r4-diff-after"
