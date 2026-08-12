@@ -265,13 +265,14 @@ test("K3-R5 fails closed for stale, partial, truncated, unsupported, or malforme
   assert.throws(() => buildContextBundle({ request: request(), snapshot: snapshot({ completeness: { state: "truncated", reasons: ["fixture"], omittedAtLeast: 1 } }) }), /requires a complete/)
   assert.throws(() => buildContextBundle({ request: request(), snapshot: snapshot({ completeness: { state: "complete", reasons: ["contradiction"], omittedAtLeast: 1 } }) }), /malformed complete snapshot metadata/)
 
-  const unsupported = snapshot() as unknown as RepositorySnapshot & { version: string }
-  unsupported.version = "k3-r2-snapshot-v999"
-  assert.throws(() => buildContextBundle({ request: request(), snapshot: unsupported as RepositorySnapshot }), /Unsupported repository snapshot version/)
+  const unsupported = { ...snapshot(), version: "k3-r2-snapshot-v999" } as unknown as RepositorySnapshot
+  assert.throws(() => buildContextBundle({ request: request(), snapshot: unsupported }), /Unsupported repository snapshot version/)
 
-  const wrongScheme = snapshot() as unknown as RepositorySnapshot & { repositoryIdentity: { scheme: string; scope: string; value: string } }
-  wrongScheme.repositoryIdentity = { scheme: "wrong", scope: "workspace-local", value: REPOSITORY_ID }
-  assert.throws(() => buildContextBundle({ request: request(), snapshot: wrongScheme as RepositorySnapshot }), /canonical K3-R2 repository identity scheme/)
+  const wrongScheme = {
+    ...snapshot(),
+    repositoryIdentity: { scheme: "wrong", scope: "workspace-local", value: REPOSITORY_ID },
+  } as unknown as RepositorySnapshot
+  assert.throws(() => buildContextBundle({ request: request(), snapshot: wrongScheme }), /canonical K3-R2 repository identity scheme/)
 })
 
 test("K3-R5 rejects mixed or stale R4 structural results", () => {
@@ -301,13 +302,11 @@ test("K3-R5 rejects contradictory R4 completeness metadata", () => {
 })
 
 test("K3-R5 rejects malformed or unbounded requests", () => {
-  const badVersion = request() as unknown as ContextBundleRequest & { version: string }
-  badVersion.version = "k3-r5-context-request-v999"
-  assert.throws(() => buildContextBundle({ request: badVersion as ContextBundleRequest, snapshot: snapshot() }), /Unsupported K3-R5 context request/)
+  const badVersion = { ...request(), version: "k3-r5-context-request-v999" } as unknown as ContextBundleRequest
+  assert.throws(() => buildContextBundle({ request: badVersion, snapshot: snapshot() }), /Unsupported K3-R5 context request/)
 
-  const badKind = request() as unknown as ContextBundleRequest & { kind: string }
-  badKind.kind = "execute_context"
-  assert.throws(() => buildContextBundle({ request: badKind as ContextBundleRequest, snapshot: snapshot() }), /Unsupported K3-R5 context request/)
+  const badKind = { ...request(), kind: "execute_context" } as unknown as ContextBundleRequest
+  assert.throws(() => buildContextBundle({ request: badKind, snapshot: snapshot() }), /Unsupported K3-R5 context request/)
 
   assert.throws(() => buildContextBundle({ request: request({ objective: "x".repeat(4_097) }), snapshot: snapshot() }), /objective exceeds/)
   assert.throws(() => buildContextBundle({ request: request({ targetPaths: Array.from({ length: 65 }, (_, index) => `src/${index}.ts`) }), snapshot: snapshot() }), /at most 64/)
