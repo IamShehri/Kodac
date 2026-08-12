@@ -348,7 +348,11 @@ function main(): void {
   }
 
   const fixtureRelative = relative(workspaceRoot, fixtureRoot)
-  if (fixtureRelative === ".." || fixtureRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
+  if (
+    fixtureRelative === ".." ||
+    fixtureRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
+    isAbsolute(fixtureRelative)
+  ) {
     throw new Error("Fixture root must remain inside the checked-out workspace")
   }
 
@@ -477,10 +481,15 @@ function main(): void {
     throw new Error("Benchmark evidence provenance is incomplete")
   }
 
+  const manifestAfterBytes = readFileSync(manifestPath)
+  const manifestBlobUnchanged = gitBlobSha1(manifestAfterBytes) === manifestBlob
+  const manifestBytesUnchanged = manifestAfterBytes.equals(manifestBytes)
   const fixtureAfter = verifyFixture(manifest, fixtureRoot)
-  const fixtureUnchanged = fixtureBefore.digest === fixtureAfter.digest
+  const fixtureFilesUnchanged = fixtureBefore.digest === fixtureAfter.digest
+  const fixtureUnchanged =
+    fixtureFilesUnchanged && manifestBlobUnchanged && manifestBytesUnchanged
   if (!fixtureUnchanged) {
-    throw new Error("Fixture identity changed during benchmark execution")
+    throw new Error("Fixture or manifest identity changed during benchmark execution")
   }
 
   const astPass =
@@ -510,6 +519,8 @@ function main(): void {
       schemaVersion: manifest.schema_version,
       manifestGitBlob: manifestBlob,
       manifestGitBlobVerified: true,
+      manifestGitBlobUnchanged: manifestBlobUnchanged,
+      manifestBytesUnchanged,
       contentIdentity: fixtureBefore.digest,
       verifiedFileCount: fixtureBefore.verifiedFileCount,
     },
@@ -580,6 +591,8 @@ function main(): void {
       canonicalBaseIdentityGuard: true,
       exactHeadCheckoutGuard: true,
       fixtureManifestGitBlobGuard: true,
+      fixtureManifestPostRunBlobGuard: manifestBlobUnchanged,
+      fixtureManifestPostRunBytesGuard: manifestBytesUnchanged,
       snapshotFreshnessGuard: fixtureUnchanged,
       evidenceSourceProvenanceCompleteness: provenanceComplete,
       unauthorizedWorkspaceMutationsObservedByHarness: 0,
