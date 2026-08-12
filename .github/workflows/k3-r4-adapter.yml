@@ -81,13 +81,13 @@ jobs:
           ast_bin="${matches[0]}"
           chmod +x "$ast_bin"
           printf '%s  %s\n' "$AST_GREP_BIN_SHA256" "$ast_bin" | sha256sum -c -
-          test "$($ast_bin --version)" = "ast-grep $AST_GREP_VERSION"
+          config="$GITHUB_WORKSPACE/packages/kodac-runtime/src/repository-intelligence/ast-grep-empty-config.yml"
+          printf '%s  %s\n' "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356" "$config" | sha256sum -c -
+          test "$($ast_bin --config "$config" --version)" = "ast-grep $AST_GREP_VERSION"
           printf 'K3_R4_AST_GREP_BIN=%s\n' "$ast_bin" >> "$GITHUB_ENV"
 
       - name: Run full runtime tests with exact K3-R4 integration identity
         working-directory: packages/kodac-runtime
-        env:
-          K3_R4_AST_GREP_BIN: ${{ env.K3_R4_AST_GREP_BIN }}
         run: npm test
 
       - name: Attest checkout unchanged after external structural reads
