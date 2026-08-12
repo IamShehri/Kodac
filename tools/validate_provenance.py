@@ -65,8 +65,15 @@ def validate_global_policy(upstreams: dict) -> bool:
 
 
 def validate_rights_admission_model(upstreams_doc: dict, module_decisions: dict) -> None:
+    if not isinstance(upstreams_doc, dict):
+        fail("provenance/upstreams.yaml: top-level mapping is required")
+    if not isinstance(module_decisions, dict):
+        fail("provenance/module-decisions.yaml: top-level mapping is required")
+
     policy = upstreams_doc.get("policy")
-    if not isinstance(policy, dict) or policy.get("code_import_authorized") is not False:
+    if not isinstance(policy, dict):
+        fail("provenance/upstreams.yaml: missing policy mapping")
+    if policy.get("code_import_authorized") is not False:
         fail("provenance/upstreams.yaml: policy.code_import_authorized must remain false")
 
     source_rights = upstreams_doc.get("source_rights")

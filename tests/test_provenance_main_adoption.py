@@ -66,6 +66,50 @@ def test_canonical_rights_admission_model_passes() -> None:
     vp.validate_rights_admission_model(upstreams_doc, module_decisions)
 
 
+@pytest.mark.parametrize("module_decisions", [None, [], "not-a-mapping"])
+def test_rights_model_rejects_non_mapping_module_decisions(module_decisions: object) -> None:
+    upstreams_doc, _ = _canonical_rights_documents()
+    with pytest.raises(
+        ValueError,
+        match=r"provenance/module-decisions\.yaml: top-level mapping is required",
+    ):
+        vp.validate_rights_admission_model(upstreams_doc, module_decisions)
+
+
+@pytest.mark.parametrize("upstreams_doc", [None, [], "not-a-mapping"])
+def test_rights_model_rejects_non_mapping_upstreams_document(upstreams_doc: object) -> None:
+    _, module_decisions = _canonical_rights_documents()
+    with pytest.raises(
+        ValueError,
+        match=r"provenance/upstreams\.yaml: top-level mapping is required",
+    ):
+        vp.validate_rights_admission_model(upstreams_doc, module_decisions)
+
+
+@pytest.mark.parametrize(
+    ("include_policy", "policy_value"),
+    [
+        (False, None),
+        (True, None),
+        (True, []),
+    ],
+)
+def test_rights_model_rejects_missing_or_non_mapping_policy(
+    include_policy: bool,
+    policy_value: object,
+) -> None:
+    upstreams_doc, module_decisions = _canonical_rights_documents()
+    if include_policy:
+        upstreams_doc["policy"] = policy_value
+    else:
+        upstreams_doc.pop("policy")
+    with pytest.raises(
+        ValueError,
+        match=r"provenance/upstreams\.yaml: missing policy mapping",
+    ):
+        vp.validate_rights_admission_model(upstreams_doc, module_decisions)
+
+
 def test_module_decisions_rejects_duplicated_source_rights() -> None:
     upstreams_doc, module_decisions = _canonical_rights_documents()
     module_decisions["source_rights"] = copy.deepcopy(upstreams_doc["source_rights"])
@@ -155,7 +199,10 @@ def test_rights_model_rejects_divergent_lifecycle(lifecycle: list[str]) -> None:
 def test_rights_model_rejects_global_import_authorization() -> None:
     upstreams_doc, module_decisions = _canonical_rights_documents()
     upstreams_doc["policy"]["code_import_authorized"] = True
-    with pytest.raises(ValueError, match="code_import_authorized must remain false"):
+    with pytest.raises(
+        ValueError,
+        match=r"provenance/upstreams\.yaml: policy\.code_import_authorized must remain false",
+    ):
         vp.validate_rights_admission_model(upstreams_doc, module_decisions)
 
 
