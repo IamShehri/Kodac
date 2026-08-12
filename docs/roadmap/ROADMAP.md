@@ -121,7 +121,7 @@ K7 does not itself authorize distribution or public release.
 
 1. `Defined`, `authorized`, `implemented`, `canonical`, `closed`, and `released` are distinct states.
 2. A roadmap entry never grants source-intake or implementation authority by implication.
-3. K3-R3 is authorized only for the bounded external-adapter benchmark gate recorded in its dedicated authorization document; K3-R4 and K4 through K7 remain unauthorized until separately founder-reviewed and authorized.
+3. K3-R3 is authorized only for the bounded external-adapter benchmark gate recorded in its dedicated authorization document; K3-R4+ and K4 through K7 remain unauthorized until separately founder-reviewed and authorized.
 4. Storage engines, donors, models, protocols, and implementation tactics remain replaceable behind accepted Kodac boundaries unless separately ratified.
 5. Superiority claims require reproducible benchmark evidence.
 6. Public product versions and engineering milestones are separate governance tracks.
