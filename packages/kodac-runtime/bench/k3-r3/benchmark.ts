@@ -1,12 +1,15 @@
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
+  closeSync,
   existsSync,
   lstatSync,
+  openSync,
   readFileSync,
   readdirSync,
   readlinkSync,
   realpathSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs"
 import { arch, platform, release } from "node:os"
@@ -112,6 +115,8 @@ interface SourceOccurrence {
   column: number
 }
 
+type InvocationHook = () => void
+
 const TEXT_EXPECTED_KINDS = new Set([
   "architecture-document",
   "untrusted-document",
@@ -173,6 +178,27 @@ function realContainedPath(root: string, input: string, label: string): string {
     throw new Error(`Rejected realpath escape for ${label}: ${input} -> ${realInput}`)
   }
   return realInput
+}
+
+function assertWriteDenied(root: string, label: string): boolean {
+  const probePath = resolve(root, ".kodac-k3-r3-harness-write-probe")
+  if (existsSync(probePath)) {
+    throw new Error(`Unexpected pre-existing write probe for ${label}: ${probePath}`)
+  }
+
+  try {
+    const descriptor = openSync(probePath, "wx")
+    closeSync(descriptor)
+    unlinkSync(probePath)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
+      return true
+    }
+    throw error
+  }
+
+  throw new Error(`${label} is writable by the benchmark execution identity`)
 }
 
 function verifyExecutableDigest(
@@ -399,8 +425,13 @@ function runCommand(
   }
 }
 
-function candidateIdentity(executable: string, cwd: string): string {
+function candidateIdentity(
+  executable: string,
+  cwd: string,
+  onInvoke: InvocationHook = () => undefined,
+): string {
   for (const args of [["--version"], ["version"], ["--help"]]) {
+    onInvoke()
     const result = runCommand(executable, args, cwd)
     if (result.status === 0) {
       const text = `${result.stdout}\n${result.stderr}`.trim()
@@ -451,8 +482,10 @@ function runAstGrepQuery(
   executableSha256: string,
   id: string,
   pattern: string,
+  onInvoke: InvocationHook,
 ): QueryObservation {
   const started = performance.now()
+  onInvoke()
   const result = runCommand(
     astGrepBin,
     ["run", "-p", pattern, "-l", "ts", "--json=compact", "."],
@@ -510,6 +543,21 @@ function main(): void {
   const protocolId = requiredEnv("K3_R3_PROTOCOL_ID")
   const manifestBlob = requiredEnv("K3_R3_FIXTURE_MANIFEST_BLOB")
   const runId = requiredEnv("K3_R3_RUN_ID")
+  const expectedExecutionUid = Number.parseInt(requiredEnv("K3_R3_EXPECTED_EXECUTION_UID"), 10)
+
+  if (!Number.isInteger(expectedExecutionUid) || expectedExecutionUid <= 0) {
+    throw new Error(`Invalid expected execution uid: ${expectedExecutionUid}`)
+  }
+  const actualExecutionUid = process.getuid?.()
+  if (actualExecutionUid === undefined || actualExecutionUid !== expectedExecutionUid || actualExecutionUid === 0) {
+    throw new Error(
+      `Benchmark must run as the expected non-root identity: expected uid ${expectedExecutionUid}, got ${actualExecutionUid ?? "unavailable"}`,
+    )
+  }
+  const unprivilegedExecutionGuard = true
+
+  const workspaceWriteDeniedGuard = assertWriteDenied(workspaceRoot, "checked-out workspace")
+  const fixtureWriteDeniedGuard = assertWriteDenied(fixtureRoot, "benchmark fixture")
 
   const astGrepBin = requiredEnv("AST_GREP_BIN")
   const astGrepVersion = requiredEnv("AST_GREP_VERSION")
@@ -545,10 +593,7 @@ function main(): void {
     throw new Error(`Benchmark result path parent must remain outside the workspace: ${resultParent}`)
   }
   if (existsSync(resultPath)) {
-    const resultRealPath = realpathSync(resultPath)
-    if (pathIsContained(workspaceRoot, resultRealPath)) {
-      throw new Error(`Benchmark result path must remain outside the workspace: ${resultRealPath}`)
-    }
+    throw new Error(`Benchmark result path must not pre-exist: ${resultPath}`)
   }
 
   const astGrepExecutable = verifyExecutableDigest(astGrepBin, astGrepExpectedBinSha, "ast-grep")
@@ -618,8 +663,13 @@ function main(): void {
     throw new Error("Canonical virtual symlink target path string was not rejected")
   }
 
+  let astGrepSubprocessCount = 0
+  const recordAstGrepInvocation = (): void => {
+    astGrepSubprocessCount += 1
+  }
+
   const candidateIdentityOutput = {
-    astGrep: candidateIdentity(astGrepExecutable.realPath, fixtureRoot),
+    astGrep: candidateIdentity(astGrepExecutable.realPath, fixtureRoot, recordAstGrepInvocation),
     treeSitter: candidateIdentity(treeSitterExecutable.realPath, fixtureRoot),
     scip: candidateIdentity(scipExecutable.realPath, fixtureRoot),
     lsp: `protocol-spec-${lspSpecVersion}-no-server-executed`,
@@ -653,6 +703,7 @@ function main(): void {
         astGrepExecutable.sha256,
         query.id,
         query.pattern,
+        recordAstGrepInvocation,
       ),
     )
 
@@ -750,7 +801,22 @@ function main(): void {
     deterministic &&
     provenanceComplete &&
     fixtureUnchanged &&
-    workspaceUnchanged
+    workspaceUnchanged &&
+    unprivilegedExecutionGuard &&
+    workspaceWriteDeniedGuard &&
+    fixtureWriteDeniedGuard
+
+  const finalResultParent = realpathSync(dirname(resultPath))
+  const resultOutputFinalContainmentGuard =
+    finalResultParent === resultParent && !pathIsContained(workspaceRoot, finalResultParent)
+  if (!resultOutputFinalContainmentGuard) {
+    throw new Error(
+      `Benchmark result parent changed or escaped containment: initial ${resultParent}, final ${finalResultParent}`,
+    )
+  }
+  if (existsSync(resultPath)) {
+    throw new Error(`Benchmark result path appeared before exclusive write: ${resultPath}`)
+  }
 
   const stableEvidence = {
     schemaVersion: "k3-r3-benchmark-evidence-v1",
@@ -763,6 +829,13 @@ function main(): void {
       checkedOutHead,
       canonicalBaseVerified: true,
       exactHeadCheckoutVerified: true,
+    },
+    executionIsolation: {
+      expectedUid: expectedExecutionUid,
+      actualUid: actualExecutionUid,
+      unprivilegedExecution: unprivilegedExecutionGuard,
+      workspaceWriteDenied: workspaceWriteDeniedGuard,
+      fixtureWriteDenied: fixtureWriteDeniedGuard,
     },
     fixture: {
       id: manifest.fixture_id,
@@ -858,6 +931,11 @@ function main(): void {
       candidateExecutableDigestGuard: true,
       candidateExecutableDistinctnessGuard: true,
       candidateVersionIdentityGuard: true,
+      unprivilegedExecutionGuard,
+      workspaceWriteDeniedGuard,
+      fixtureWriteDeniedGuard,
+      resultOutputFinalContainmentGuard,
+      resultExclusiveCreateGuard: true,
       realpathWorkspaceContainmentGuard: true,
       perEntryRealpathContainmentGuard: true,
       symlinkTargetContainmentGuard: true,
@@ -897,7 +975,7 @@ function main(): void {
     candidateIdentityOutput,
     queryDurationsMs: Object.fromEntries(firstSuite.map((item) => [item.id, item.durationMs])),
     repeatedQueryDurationsMs: Object.fromEntries(secondSuite.map((item) => [item.id, item.durationMs])),
-    astGrepSubprocessCount: firstSuite.length + secondSuite.length,
+    astGrepSubprocessCount,
     resourceLimitations: [
       "peak memory not measured in this slice",
       "cross-platform candidate execution not measured in this slice",
@@ -917,7 +995,10 @@ function main(): void {
     overallStatus: astPass ? "BENCHMARK_EVIDENCE_READY_FOR_REVIEW" : "BENCHMARK_FAILED",
   }
 
-  writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8")
+  writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+  })
   if (!astPass) {
     throw new Error("ast-grep did not satisfy the claimed structural adapter acceptance checks")
   }
