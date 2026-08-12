@@ -1,0 +1,123 @@
+name: k3-r3-benchmark
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/kodac-runtime/bench/k3-r3/**"
+      - ".github/workflows/k3-r3-benchmark.yml"
+      - "docs/planning/KODAC_K3_R3_EXTERNAL_ADAPTER_BENCHMARK_EVIDENCE_*.md"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: k3-r3-benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      K3_R3_BASELINE_SHA: "9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc"
+      K3_R3_PROTOCOL_ID: "KODAC_K3_BENCHMARK_AND_EVIDENCE_PROTOCOL_2026-08-12"
+      K3_R3_FIXTURE_MANIFEST_BLOB: "6f812003a4b33e62ad1be672a39c7f42509fc500"
+      AST_GREP_VERSION: "0.45.1"
+      AST_GREP_URL: "https://github.com/ast-grep/ast-grep/releases/download/0.45.1/app-x86_64-unknown-linux-gnu.zip"
+      AST_GREP_SHA256: "76fb6555be6734fb5057dba8d2fb756430f374bb9e1af694cf1ce00e13238d63"
+      TREE_SITTER_VERSION: "0.26.12"
+      TREE_SITTER_URL: "https://github.com/tree-sitter/tree-sitter/releases/download/v0.26.12/tree-sitter-cli-linux-x64.zip"
+      TREE_SITTER_SHA256: "c33ace12fa7a94d09c97054da621bf7a6a3159f765b1839a898232de283d641d"
+      TREE_SITTER_TYPESCRIPT_COMMIT: "75b3874edb2dc714fb1fd77a32013d0f8699989f"
+      SCIP_VERSION: "0.9.0"
+      SCIP_URL: "https://github.com/scip-code/scip/releases/download/v0.9.0/scip-linux-amd64.tar.gz"
+      SCIP_SHA256: "fc2e7273e110be9f35924da1066000183791e8bfdb0391355de6eaaa070fec75"
+      LSP_SPEC_VERSION: "3.18"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Attest clean checkout before benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/k3-r3-status-before"
+          git diff --binary HEAD -- > "$RUNNER_TEMP/k3-r3-diff-before"
+          test ! -s "$RUNNER_TEMP/k3-r3-status-before"
+          test ! -s "$RUNNER_TEMP/k3-r3-diff-before"
+
+      - name: Download and verify exact candidate binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          root="$RUNNER_TEMP/kodac-k3-r3-candidates"
+          mkdir -p "$root/ast-grep" "$root/tree-sitter" "$root/scip"
+
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "$AST_GREP_URL" -o "$root/ast-grep.zip"
+          printf '%s  %s\n' "$AST_GREP_SHA256" "$root/ast-grep.zip" | sha256sum -c -
+          unzip -q "$root/ast-grep.zip" -d "$root/ast-grep"
+
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "$TREE_SITTER_URL" -o "$root/tree-sitter.zip"
+          printf '%s  %s\n' "$TREE_SITTER_SHA256" "$root/tree-sitter.zip" | sha256sum -c -
+          unzip -q "$root/tree-sitter.zip" -d "$root/tree-sitter"
+
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "$SCIP_URL" -o "$root/scip.tar.gz"
+          printf '%s  %s\n' "$SCIP_SHA256" "$root/scip.tar.gz" | sha256sum -c -
+          tar -xzf "$root/scip.tar.gz" -C "$root/scip"
+
+          ast_bin="$(find "$root/ast-grep" -type f \( -name 'ast-grep' -o -name 'sg' \) -print -quit)"
+          tree_bin="$(find "$root/tree-sitter" -type f -name 'tree-sitter' -print -quit)"
+          scip_bin="$(find "$root/scip" -type f -name 'scip' -print -quit)"
+
+          test -n "$ast_bin"
+          test -n "$tree_bin"
+          test -n "$scip_bin"
+
+          chmod +x "$ast_bin" "$tree_bin" "$scip_bin"
+
+          {
+            printf 'AST_GREP_BIN=%s\n' "$ast_bin"
+            printf 'TREE_SITTER_BIN=%s\n' "$tree_bin"
+            printf 'SCIP_BIN=%s\n' "$scip_bin"
+          } >> "$GITHUB_ENV"
+
+      - name: Run bounded K3-R3 benchmark
+        shell: bash
+        env:
+          K3_R3_RESULT_PATH: ${{ runner.temp }}/k3-r3-results.json
+          K3_R3_FIXTURE_ROOT: ${{ github.workspace }}/packages/kodac-runtime/test/fixtures/k3-r1
+          K3_R3_WORKSPACE_ROOT: ${{ github.workspace }}
+          K3_R3_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          K3_R3_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          node --experimental-strip-types packages/kodac-runtime/bench/k3-r3/benchmark.ts
+
+      - name: Attest checkout unchanged after benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          git status --porcelain=v1 -z --untracked-files=all > "$RUNNER_TEMP/k3-r3-status-after"
+          git diff --binary HEAD -- > "$RUNNER_TEMP/k3-r3-diff-after"
+          cmp "$RUNNER_TEMP/k3-r3-status-before" "$RUNNER_TEMP/k3-r3-status-after"
+          cmp "$RUNNER_TEMP/k3-r3-diff-before" "$RUNNER_TEMP/k3-r3-diff-after"
+          test ! -s "$RUNNER_TEMP/k3-r3-status-after"
+          test ! -s "$RUNNER_TEMP/k3-r3-diff-after"
+
+      - name: Upload benchmark evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: k3-r3-benchmark-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/k3-r3-results.json
+          if-no-files-found: error
+          retention-days: 30
