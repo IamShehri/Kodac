@@ -57,22 +57,22 @@ Not authorized:
 | --- | --- |
 | Branch | `bench/k3-r3-external-adapter-evidence` |
 | Canonical base | `9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc` |
-| Benchmarked predecessor head | `2c878ccb68f2ccc1754e19f4da17f7414429376c` |
-| Governance run | `31640881081` — `SUCCESS` |
-| K2 runtime run | `31640881063` — `SUCCESS` |
-| Benchmark run | `31640881065` — `SUCCESS` |
-| Benchmark run number | `30` |
-| Artifact id | `9158789317` |
-| Artifact name | `k3-r3-benchmark-evidence-2c878ccb68f2ccc1754e19f4da17f7414429376c` |
-| Artifact ZIP digest | `sha256:f5a6aad3e91ab239ba184a3e37871f3746d4e213e5e204b7384f831a7e2e8708` |
-| Raw `k3-r3-results.json` SHA-256 | `1daa15b57ab745c278e89d9caee305e4bbab6c07be86a84b4cea3da3617c361f` |
-| Canonical result identity | `3a15b0537724053855b33b7f5393d67d3d278168d536a0211ca36634499c1211` |
+| Benchmarked predecessor head | `7fc1dba7f8728f1fa2d242f66388a2143a8e47ae` |
+| Governance run | `31643051000` — `SUCCESS` |
+| K2 runtime run | `31643051021` — `SUCCESS` |
+| Benchmark run | `31643051035` — `SUCCESS` |
+| Benchmark run number | `33` |
+| Artifact id | `9159618914` |
+| Artifact name | `k3-r3-benchmark-evidence-7fc1dba7f8728f1fa2d242f66388a2143a8e47ae` |
+| Artifact ZIP digest | `sha256:82fcb7cd3df0beb4d15b0a0e2182f4d62f94ad540a4948d5cdb01cc0ae4902f0` |
+| Raw `k3-r3-results.json` SHA-256 | `e7fc559fdd694b8afd8c429975fee7aea0d08e03fe4a4f2e6650b5a68ba28a35` |
+| Canonical result identity | `76dd17260ae6a6826740f2fc02203df7f2dec5675674dca327d38d7cd6bff618` |
 | Overall result | `BENCHMARK_EVIDENCE_READY_FOR_REVIEW` |
 
 Artifact identity:
 
 ```text
-benchmarkHead = 2c878ccb68f2ccc1754e19f4da17f7414429376c
+benchmarkHead = 7fc1dba7f8728f1fa2d242f66388a2143a8e47ae
 canonicalBaseline = 9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc
 ```
 
@@ -98,6 +98,8 @@ The existing-file probes are:
 workspace: .github/workflows/k3-r3-benchmark.yml
 fixture:   manifest.json
 ```
+
+The expected execution UID is parsed with exact JavaScript numeric conversion (`Number(...)`) and then required to be a positive integer. Inputs containing trailing or otherwise non-numeric characters therefore fail closed before candidate execution.
 
 Artifact evidence remains:
 
@@ -287,22 +289,28 @@ Accepted Cubic findings have successively hardened:
 - workflow-level new-file write probes;
 - harness-level new-file creation denial plus existing-file `r+` write-open denial;
 - final result-parent revalidation and exclusive result creation;
-- measured ast-grep subprocess counting.
+- measured ast-grep subprocess counting;
+- exact fail-closed numeric parsing of the expected benchmark UID.
 
-The two latest findings raised against:
-
-```text
-0be4b89314a44a1f8ba0cea717cec121d21de55d
-```
-
-were implemented by:
+The latest valid finding was raised against:
 
 ```text
-95225a4f827f6befff51947f758e83128bce72fa
-2c878ccb68f2ccc1754e19f4da17f7414429376c
+e584ee155fd3f34d55ddbcbfad54e4c36efabfaf
 ```
 
-The final predecessor run succeeded with the strengthened existing-file write-denial boundary and produced the artifact identified above.
+It identified that `Number.parseInt(...)` could accept an execution-UID string with trailing non-numeric characters. The functional correction was committed as:
+
+```text
+dead000a5382fce60ce8c7123576665b098dc5f9
+```
+
+A follow-up formatting-only commit restored the pre-existing terminal newline so that the cumulative source diff from the reviewed predecessor contains only the intended one-line parsing change:
+
+```text
+7fc1dba7f8728f1fa2d242f66388a2143a8e47ae
+```
+
+The predecessor run on `7fc1dba7...` passed governance, K2 runtime, and the bounded K3-R3 benchmark with unchanged measured qualification outcomes and produced the artifact identified above.
 
 ## 11. Claim limits
 
@@ -327,7 +335,7 @@ A final exact-current-head certification must verify on one identical PR head:
 2. `k2-runtime = SUCCESS`, including `k2-runtime-gate`;
 3. `k3-r3-benchmark = SUCCESS`;
 4. artifact head/base match that exact PR state;
-5. unprivileged execution, stripped checkout write bits, new-file and existing-file write-denial, executable identity, path/freshness, result-output TOCTOU, and mutation guards pass;
+5. unprivileged execution, strict numeric execution-UID parsing, stripped checkout write bits, new-file and existing-file write-denial, executable identity, path/freshness, result-output TOCTOU, and mutation guards pass;
 6. exact path/line/column metrics remain correct;
 7. the measured ast-grep subprocess count is present and truthful;
 8. fresh Cubic exact-head review has zero valid unresolved findings;
@@ -336,7 +344,7 @@ A final exact-current-head certification must verify on one identical PR head:
 
 Only then may the PR be marked **Ready for Founder Review**.
 
-Merge remains a separate founder decision.
+Merge remains subject to separate explicit founder authorization.
 
 ## Final statement
 
