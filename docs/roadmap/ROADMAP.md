@@ -2,7 +2,7 @@
 
 ## Authority
 
-This document is the current Kodac engineering roadmap authority after K2 canonical closeout.
+This document is the current Kodac engineering roadmap authority after K2 canonical closeout and K3-R2 canonical adoption.
 
 The pre-reconstitution roadmap at canonical base `11227cc8c58e00879e8b40e7ff7948bee396fef7` remains historical evidence and is superseded only as current product/roadmap authority.
 
@@ -14,7 +14,7 @@ Engineering milestones do not themselves authorize public release, package publi
 | --- | --- | --- | --- |
 | **K0/K1** | Architecture, governance, provenance, donor-selection foundation | **CLOSED** | Complete historical milestone |
 | **K2** | Trusted Runtime Spine | **CLOSED** | Complete canonical milestone |
-| **K3** | Evidence-Backed Repository Intelligence & Context Engine | **DEFINED BY THIS PACKAGE ONLY** | **NOT AUTHORIZED** |
+| **K3** | Evidence-Backed Repository Intelligence & Context Engine | **IN PROGRESS — K3-R1 AND K3-R2 CANONICAL** | **K3-R3 NOT AUTHORIZED** |
 | **K4** | Ecosystem Compatibility & Capability Registry | **PROPOSED** | Not authorized |
 | **K5** | Proof Review & Judge | **PROPOSED** | Not authorized |
 | **K6** | Evidence Router & Outcome Learning | **PROPOSED** | Not authorized |
@@ -44,12 +44,15 @@ Outcome:
 - Done Gate with `PROVEN_READY`;
 - protected canonical integration and post-merge runtime proof.
 
-## K3 — Current next engineering milestone
+## K3 — Current engineering milestone
 
 ```text
 K3 — Evidence-Backed Repository Intelligence & Context Engine
-STATUS: DEFINED BY THIS PACKAGE ONLY
-IMPLEMENTATION: NOT AUTHORIZED
+STATUS: IN PROGRESS — K3-R1 AND K3-R2 CANONICAL
+K3-R1: CANONICAL / COMPLETE FOR ITS AUTHORIZED SCOPE
+K3-R2: CANONICAL / COMPLETE FOR ITS AUTHORIZED SCOPE
+K3-R3: NOT AUTHORIZED
+K3: NOT CLOSED
 ```
 
 Purpose:
@@ -58,7 +61,7 @@ Turn a repository and engineering task into a bounded, freshness-aware, evidence
 
 K3 must preserve the existing K2 execution authority. Repository intelligence can inform actions; it cannot authorize side effects.
 
-Planned contract direction includes:
+Canonical and planned contract direction includes:
 
 - Repository Snapshot Identity;
 - evidence-backed Repo Graph;
@@ -67,7 +70,9 @@ Planned contract direction includes:
 - explicit evidence ordering and freshness semantics;
 - benchmark-first evaluation under ADR-0010.
 
-No permanent storage engine or donor implementation is selected by this roadmap.
+K3-R1 and K3-R2 are canonical only for their separately authorized scopes. K3-R3 requires separate founder authorization. K3 is not closed.
+
+No permanent storage engine or donor implementation is selected by this roadmap. No vector or embedding infrastructure is selected. This governance reconciliation does not admit any external donor implementation.
 
 ## K4 — Proposed: Ecosystem Compatibility & Capability Registry
 
@@ -113,9 +118,9 @@ K7 does not itself authorize distribution or public release.
 
 ## Roadmap rules
 
-1. `Defined`, `proposed`, `implemented`, `closed`, and `released` are distinct states.
+1. `Defined`, `authorized`, `implemented`, `canonical`, `closed`, and `released` are distinct states.
 2. A roadmap entry never grants source-intake or implementation authority by implication.
-3. K4 through K7 remain proposed until separately founder-reviewed.
+3. K3-R3 and K4 through K7 remain unauthorized until separately founder-reviewed and authorized.
 4. Storage engines, donors, models, protocols, and implementation tactics remain replaceable behind accepted Kodac boundaries unless separately ratified.
 5. Superiority claims require reproducible benchmark evidence.
 6. Public product versions and engineering milestones are separate governance tracks.
@@ -125,8 +130,8 @@ K7 does not itself authorize distribution or public release.
 ```text
 K0/K1: CLOSED
 K2: CLOSED
-K3: DEFINED; IMPLEMENTATION NOT AUTHORIZED
-K4-K7: PROPOSED ONLY
+K3: IN PROGRESS — K3-R1 AND K3-R2 CANONICAL; K3-R3 NOT AUTHORIZED; K3 NOT CLOSED
+K4-K7: PROPOSED / NOT AUTHORIZED
 PUBLIC RELEASE: NOT AUTHORIZED
 PACKAGE PUBLICATION: NOT AUTHORIZED
 BRAND LAUNCH: NOT AUTHORIZED

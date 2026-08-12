@@ -1,6 +1,6 @@
 schema_version: 1
-as_of: "2026-08-11"
-canonical_base: c425dca6e9d5474aca50d288064fa56eb21a1b9e
+as_of: "2026-08-12"
+canonical_base: 25e1a1b37417d18c14715faadc7c20579b039990
 policy:
   code_import_authorized: false
   require_exact_commit: true
@@ -10,6 +10,25 @@ policy:
   notes:
     - "These entries are discovery baselines, not authorization to import source code."
     - "Mixed-license repositories must be reviewed at path/component level."
+    - "Founder-confirmed source-use rights remove a rights barrier only; they do not grant global import or canonical-adoption authority."
+source_rights:
+  state: founder_asserted_owner_permission
+  asserted_on: "2026-08-12"
+  effect: rights_barrier_removed_only
+  import_authority: none_by_implication
+  requirements:
+    - RIGHTS_CONFIRMED
+    - SOURCE_PINNED
+    - AUDITED
+    - BENCHMARKED
+    - QUALIFIED
+    - ADMITTED
+    - CANONICALLY_ADOPTED
+  notes:
+    - "The founder asserts permission exists from the relevant source owners to use their source code as desired."
+    - "Rights are not a blocker for separately authorized source mining."
+    - "Exact source identity and revision remain required before intake."
+    - "Engineering qualification, scoped import authorization, and canonical adoption remain separate gates."
 
 upstreams:
   - id: opencode
