@@ -195,6 +195,37 @@ function nonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0
 }
 
+function recordWithExactKeys(
+  value: unknown,
+  keys: string[],
+  label: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`)
+  const record = value as Record<string, unknown>
+  const actual = Object.keys(record).sort(compareCodeUnits)
+  const expected = [...keys].sort(compareCodeUnits)
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw new Error(`${label} has an unexpected output schema`)
+  }
+  return record
+}
+
+function exactPosition(value: unknown, label: string): { line: number; column: number } {
+  const position = recordWithExactKeys(value, ["line", "column"], label)
+  if (!nonNegativeInteger(position.line) || !nonNegativeInteger(position.column)) {
+    throw new Error(`${label} has invalid coordinates`)
+  }
+  return { line: position.line, column: position.column }
+}
+
+function exactOffset(value: unknown, label: string): { start: number; end: number } {
+  const offset = recordWithExactKeys(value, ["start", "end"], label)
+  if (!nonNegativeInteger(offset.start) || !nonNegativeInteger(offset.end) || offset.end < offset.start) {
+    throw new Error(`${label} has invalid byte offsets`)
+  }
+  return { start: offset.start, end: offset.end }
+}
+
 export function parseAstGrepCompactOutput(raw: string): RawAstGrepMatch[] {
   let parsed: unknown
   try {
@@ -206,29 +237,32 @@ export function parseAstGrepCompactOutput(raw: string): RawAstGrepMatch[] {
   if (parsed.length > HARD_MAX_RAW_MATCHES) throw new Error(`ast-grep returned more than ${HARD_MAX_RAW_MATCHES} matches`)
 
   return parsed.map((item, index) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`ast-grep match ${index} must be an object`)
-    const record = item as Record<string, unknown>
+    const record = recordWithExactKeys(
+      item,
+      ["text", "range", "file", "lines", "charCount", "language"],
+      `ast-grep match ${index}`,
+    )
     if (typeof record.file !== "string" || !record.file || record.file.includes("\0")) throw new Error(`ast-grep match ${index} has an invalid file`)
     if (typeof record.text !== "string" || Buffer.byteLength(record.text, "utf8") > HARD_MAX_MATCH_TEXT_BYTES) throw new Error(`ast-grep match ${index} has invalid or oversized text`)
-    if (record.replacement !== undefined && record.replacement !== null) throw new Error(`ast-grep match ${index} unexpectedly contains rewrite output`)
-    if (record.replacementOffsets !== undefined && record.replacementOffsets !== null) throw new Error(`ast-grep match ${index} unexpectedly contains rewrite offsets`)
-    if (!record.range || typeof record.range !== "object" || Array.isArray(record.range)) throw new Error(`ast-grep match ${index} has an invalid range`)
-    const range = record.range as Record<string, unknown>
-    const start = range.start as Record<string, unknown> | undefined
-    const end = range.end as Record<string, unknown> | undefined
-    if (!start || !end || !nonNegativeInteger(start.line) || !nonNegativeInteger(start.column) || !nonNegativeInteger(end.line) || !nonNegativeInteger(end.column)) {
-      throw new Error(`ast-grep match ${index} has invalid range positions`)
+    if (typeof record.lines !== "string" || Buffer.byteLength(record.lines, "utf8") > HARD_MAX_MATCH_TEXT_BYTES) throw new Error(`ast-grep match ${index} has invalid or oversized lines`)
+    if (record.language !== "TypeScript") throw new Error(`ast-grep match ${index} has unexpected language identity`)
+
+    const charCount = recordWithExactKeys(record.charCount, ["leading", "trailing"], `ast-grep match ${index} charCount`)
+    if (!nonNegativeInteger(charCount.leading) || !nonNegativeInteger(charCount.trailing)) {
+      throw new Error(`ast-grep match ${index} has invalid charCount`)
     }
+
+    const range = recordWithExactKeys(record.range, ["byteOffset", "start", "end"], `ast-grep match ${index} range`)
+    exactOffset(range.byteOffset, `ast-grep match ${index} byteOffset`)
+    const start = exactPosition(range.start, `ast-grep match ${index} start`)
+    const end = exactPosition(range.end, `ast-grep match ${index} end`)
     if (end.line < start.line || (end.line === start.line && end.column < start.column)) {
       throw new Error(`ast-grep match ${index} has a reversed range`)
     }
     return {
       file: record.file,
       text: record.text,
-      range: {
-        start: { line: start.line, column: start.column },
-        end: { line: end.line, column: end.column },
-      },
+      range: { start, end },
     }
   })
 }
@@ -392,7 +426,6 @@ export class AstGrepCliRepositoryAdapter {
     const selectedSet = new Set(selection.paths)
 
     const queryArgs = [
-      "--config", configPath,
       "run",
       "-p", symbol,
       "-l", "ts",
@@ -404,6 +437,7 @@ export class AstGrepCliRepositoryAdapter {
       "--no-ignore", "global",
       "--no-ignore", "parent",
       "--no-ignore", "vcs",
+      "--config", configPath,
       "--",
       ...selection.paths,
     ]
