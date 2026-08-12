@@ -579,7 +579,7 @@ function main(): void {
   const protocolId = requiredEnv("K3_R3_PROTOCOL_ID")
   const manifestBlob = requiredEnv("K3_R3_FIXTURE_MANIFEST_BLOB")
   const runId = requiredEnv("K3_R3_RUN_ID")
-  const expectedExecutionUid = Number.parseInt(requiredEnv("K3_R3_EXPECTED_EXECUTION_UID"), 10)
+  const expectedExecutionUid = Number(requiredEnv("K3_R3_EXPECTED_EXECUTION_UID"))
 
   if (!Number.isInteger(expectedExecutionUid) || expectedExecutionUid <= 0) {
     throw new Error(`Invalid expected execution uid: ${expectedExecutionUid}`)
