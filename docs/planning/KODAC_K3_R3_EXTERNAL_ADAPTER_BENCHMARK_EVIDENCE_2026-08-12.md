@@ -57,30 +57,49 @@ Not authorized:
 | --- | --- |
 | Branch | `bench/k3-r3-external-adapter-evidence` |
 | Canonical base | `9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc` |
-| Benchmarked predecessor head | `c5c9276f1c54ad5af09516242a85f0d42e9f8f92` |
-| Governance run | `31638957253` — `SUCCESS` |
-| K2 runtime run | `31638957233` — `SUCCESS` |
-| Benchmark run | `31638957215` — `SUCCESS` |
-| Benchmark run number | `27` |
-| Artifact id | `9158070696` |
-| Artifact name | `k3-r3-benchmark-evidence-c5c9276f1c54ad5af09516242a85f0d42e9f8f92` |
-| Artifact ZIP digest | `sha256:9c90d1b68fde8c549ec3c33c8b19fc2b95538ec3b161a1ee4a145dc1fcbb3696` |
-| Raw `k3-r3-results.json` SHA-256 | `aec639fdbb4ec4c78a8ee9454596f3ab880e321295b041d1a255ec4a224b6c62` |
-| Canonical result identity | `0c90c1a5479d59a2d562a73e6d9ce51e957592bde5fbff4f02dd8dc6ee9025a0` |
+| Benchmarked predecessor head | `2c878ccb68f2ccc1754e19f4da17f7414429376c` |
+| Governance run | `31640881081` — `SUCCESS` |
+| K2 runtime run | `31640881063` — `SUCCESS` |
+| Benchmark run | `31640881065` — `SUCCESS` |
+| Benchmark run number | `30` |
+| Artifact id | `9158789317` |
+| Artifact name | `k3-r3-benchmark-evidence-2c878ccb68f2ccc1754e19f4da17f7414429376c` |
+| Artifact ZIP digest | `sha256:f5a6aad3e91ab239ba184a3e37871f3746d4e213e5e204b7384f831a7e2e8708` |
+| Raw `k3-r3-results.json` SHA-256 | `1daa15b57ab745c278e89d9caee305e4bbab6c07be86a84b4cea3da3617c361f` |
+| Canonical result identity | `3a15b0537724053855b33b7f5393d67d3d278168d536a0211ca36634499c1211` |
 | Overall result | `BENCHMARK_EVIDENCE_READY_FOR_REVIEW` |
 
 Artifact identity:
 
 ```text
-benchmarkHead = c5c9276f1c54ad5af09516242a85f0d42e9f8f92
+benchmarkHead = 2c878ccb68f2ccc1754e19f4da17f7414429376c
 canonicalBaseline = 9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc
 ```
 
-## 4. Execution isolation and mutation evidence
+## 4. Execution isolation and write-denial evidence
 
-The predecessor benchmark runs the harness and candidate subprocesses as a dedicated non-root `kodacbench` identity that does not own the checkout or canonical fixture. The workflow makes the checkout readable/traversable to that identity but does not grant write permission, and both the workflow and harness require write probes against the workspace and fixture to fail before candidate execution.
+The predecessor benchmark runs the harness and candidate subprocesses as a dedicated non-root `kodacbench` identity that does not own any checkout path.
 
-Artifact evidence:
+Before candidate execution the workflow:
+
+- makes the checkout readable/traversable to the benchmark identity;
+- explicitly strips group/other write bits from every regular checkout directory and file;
+- fails if any checkout path is owned by the benchmark UID;
+- requires new-file `touch` probes against both workspace and fixture to fail.
+
+The harness then independently requires both forms of write denial for each protected root:
+
+1. exclusive creation of a new probe file must fail; and
+2. a known existing file must fail to open with `r+` write access.
+
+The existing-file probes are:
+
+```text
+workspace: .github/workflows/k3-r3-benchmark.yml
+fixture:   manifest.json
+```
+
+Artifact evidence remains:
 
 ```text
 expectedUid = 999
@@ -106,7 +125,7 @@ workspace unchanged = true
 unauthorizedWorkspaceMutationsObservedByHarness = 0
 ```
 
-The non-owner execution boundary closes the earlier before/after-snapshot blind spot where a candidate could theoretically mutate and restore fixture/workspace bytes during execution. The candidate identity is not permitted to perform that write in the first place.
+The non-owner execution boundary plus explicit mode stripping and both creation/write-open probes close the earlier blind spot where a candidate might otherwise mutate an already-existing writable file and restore it before the post-run snapshot.
 
 The outer workflow independently attests tracked, untracked, and ignored checkout state before and after execution.
 
@@ -197,7 +216,7 @@ src/math.ts:5:14          meaning
 
 Both canonical ambiguous `Widget` candidates were preserved. Repeated normalized output was deterministic and provenance complete.
 
-The subprocess observation is now measured rather than derived:
+The subprocess observation is measured rather than derived:
 
 ```text
 astGrepSubprocessCount = 7
@@ -263,23 +282,27 @@ Accepted Cubic findings have successively hardened:
 - exact `path:line:column` structural metrics;
 - distinct candidate executable realpath/digest enforcement;
 - measured candidate-version binding;
-- unprivileged non-owner candidate execution with fail-closed workspace/fixture write probes;
+- unprivileged non-owner candidate execution;
+- explicit removal of group/other write bits from checkout files/directories;
+- workflow-level new-file write probes;
+- harness-level new-file creation denial plus existing-file `r+` write-open denial;
 - final result-parent revalidation and exclusive result creation;
 - measured ast-grep subprocess counting.
 
-The three latest findings raised against:
+The two latest findings raised against:
 
 ```text
-e847a47914210b20ea6b07c8cc8b39bf9b1d2209
+0be4b89314a44a1f8ba0cea717cec121d21de55d
 ```
 
-were implemented through the isolation/output/count hardening sequence ending at:
+were implemented by:
 
 ```text
-c5c9276f1c54ad5af09516242a85f0d42e9f8f92
+95225a4f827f6befff51947f758e83128bce72fa
+2c878ccb68f2ccc1754e19f4da17f7414429376c
 ```
 
-Intermediate attempts that failed before candidate execution because GitHub Releases returned HTTP `503`, or because the first sandbox permission configuration prevented read traversal, were not treated as benchmark evidence. The final predecessor run succeeded with the hardened execution boundary and produced the artifact identified above.
+The final predecessor run succeeded with the strengthened existing-file write-denial boundary and produced the artifact identified above.
 
 ## 11. Claim limits
 
@@ -304,7 +327,7 @@ A final exact-current-head certification must verify on one identical PR head:
 2. `k2-runtime = SUCCESS`, including `k2-runtime-gate`;
 3. `k3-r3-benchmark = SUCCESS`;
 4. artifact head/base match that exact PR state;
-5. unprivileged/write-denied, executable identity, path/freshness, result-output TOCTOU, and mutation guards pass;
+5. unprivileged execution, stripped checkout write bits, new-file and existing-file write-denial, executable identity, path/freshness, result-output TOCTOU, and mutation guards pass;
 6. exact path/line/column metrics remain correct;
 7. the measured ast-grep subprocess count is present and truthful;
 8. fresh Cubic exact-head review has zero valid unresolved findings;
