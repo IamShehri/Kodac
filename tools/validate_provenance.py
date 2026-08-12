@@ -14,6 +14,25 @@ IMPORT_SCHEMA_PATH = ROOT / "schema" / "provenance-import-record.schema.json"
 AUTH_SCHEMA_PATH = ROOT / "schema" / "provenance-import-authorization.schema.json"
 MAIN_ADOPTION_SCHEMA_PATH = ROOT / "schema" / "provenance-main-adoption.schema.json"
 
+EXPECTED_SOURCE_RIGHTS = {
+    "state": "founder_asserted_owner_permission",
+    "asserted_on": "2026-08-12",
+    "rights_axis": "founder_confirmed_not_a_general_blocker",
+    "admission_axis": "fail_closed_component_scoped_separately_authorized",
+    "import_authority": "none_by_implication",
+}
+EXPECTED_ADMISSION_LIFECYCLE = [
+    "RIGHTS_CONFIRMED",
+    "SOURCE_PINNED",
+    "AUDITED",
+    "BENCHMARKED",
+    "QUALIFIED",
+    "ADMITTED",
+    "CANONICALLY_ADOPTED",
+]
+SOURCE_RIGHTS_REF = "provenance/upstreams.yaml#source_rights"
+ADMISSION_LIFECYCLE_REF = "provenance/upstreams.yaml#admission_lifecycle"
+
 
 def load_yaml(path: Path):
     return yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -43,6 +62,56 @@ def validate_global_policy(upstreams: dict) -> bool:
         if policy[key] is not True:
             fail(f"provenance policy must set {key}=true")
     return bool(policy["code_import_authorized"])
+
+
+def validate_rights_admission_model(upstreams_doc: dict, module_decisions: dict) -> None:
+    policy = upstreams_doc.get("policy")
+    if not isinstance(policy, dict) or policy.get("code_import_authorized") is not False:
+        fail("provenance/upstreams.yaml: policy.code_import_authorized must remain false")
+
+    source_rights = upstreams_doc.get("source_rights")
+    if not isinstance(source_rights, dict):
+        fail("provenance/upstreams.yaml: source_rights mapping is required")
+
+    missing = set(EXPECTED_SOURCE_RIGHTS) - set(source_rights)
+    if missing:
+        fail(
+            "provenance/upstreams.yaml: source_rights missing required fields: "
+            + ", ".join(sorted(missing))
+        )
+    unexpected = set(source_rights) - set(EXPECTED_SOURCE_RIGHTS) - {"notes"}
+    if unexpected:
+        fail(
+            "provenance/upstreams.yaml: source_rights contains unexpected fields: "
+            + ", ".join(sorted(unexpected))
+        )
+    for key, expected in EXPECTED_SOURCE_RIGHTS.items():
+        if source_rights.get(key) != expected:
+            fail(f"provenance/upstreams.yaml: source_rights.{key} must equal {expected!r}")
+
+    if upstreams_doc.get("admission_lifecycle") != EXPECTED_ADMISSION_LIFECYCLE:
+        fail(
+            "provenance/upstreams.yaml: admission_lifecycle must exactly match the canonical ordered lifecycle"
+        )
+
+    if module_decisions.get("code_import_authorized") is not False:
+        fail("provenance/module-decisions.yaml: code_import_authorized must remain false")
+    if "source_rights" in module_decisions:
+        fail(
+            "provenance/module-decisions.yaml: source_rights must reference the canonical upstreams model, not duplicate it"
+        )
+    if "admission_lifecycle" in module_decisions:
+        fail(
+            "provenance/module-decisions.yaml: admission_lifecycle must reference the canonical upstreams model, not duplicate it"
+        )
+    if module_decisions.get("source_rights_ref") != SOURCE_RIGHTS_REF:
+        fail(
+            "provenance/module-decisions.yaml: source_rights_ref must point to provenance/upstreams.yaml#source_rights"
+        )
+    if module_decisions.get("admission_lifecycle_ref") != ADMISSION_LIFECYCLE_REF:
+        fail(
+            "provenance/module-decisions.yaml: admission_lifecycle_ref must point to provenance/upstreams.yaml#admission_lifecycle"
+        )
 
 
 def upstream_index(upstreams: dict) -> dict[str, dict]:
@@ -230,6 +299,8 @@ def validate_import_records(
 def main() -> int:
     try:
         upstreams_doc = load_yaml(PROVENANCE / "upstreams.yaml")
+        module_decisions = load_yaml(PROVENANCE / "module-decisions.yaml")
+        validate_rights_admission_model(upstreams_doc, module_decisions)
         global_code_import_authorized = validate_global_policy(upstreams_doc)
         upstreams = upstream_index(upstreams_doc)
         authorizations = load_scoped_authorizations()

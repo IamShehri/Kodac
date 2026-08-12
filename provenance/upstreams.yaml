@@ -14,21 +14,22 @@ policy:
 source_rights:
   state: founder_asserted_owner_permission
   asserted_on: "2026-08-12"
-  effect: rights_barrier_removed_only
+  rights_axis: founder_confirmed_not_a_general_blocker
+  admission_axis: fail_closed_component_scoped_separately_authorized
   import_authority: none_by_implication
-  requirements:
-    - RIGHTS_CONFIRMED
-    - SOURCE_PINNED
-    - AUDITED
-    - BENCHMARKED
-    - QUALIFIED
-    - ADMITTED
-    - CANONICALLY_ADOPTED
   notes:
     - "The founder asserts permission exists from the relevant source owners to use their source code as desired."
     - "Rights are not a blocker for separately authorized source mining."
     - "Exact source identity and revision remain required before intake."
     - "Engineering qualification, scoped import authorization, and canonical adoption remain separate gates."
+admission_lifecycle:
+  - RIGHTS_CONFIRMED
+  - SOURCE_PINNED
+  - AUDITED
+  - BENCHMARKED
+  - QUALIFIED
+  - ADMITTED
+  - CANONICALLY_ADOPTED
 
 upstreams:
   - id: opencode

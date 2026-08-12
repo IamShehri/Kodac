@@ -3,20 +3,8 @@ recorded_at: "2026-08-12"
 status: architecture_candidate
 code_import_authorized: false
 canonical_base: 25e1a1b37417d18c14715faadc7c20579b039990
-source_rights:
-  state: founder_asserted_owner_permission
-  asserted_on: "2026-08-12"
-  rights_axis: founder_confirmed_not_a_general_blocker
-  admission_axis: fail_closed_component_scoped_separately_authorized
-  import_authority: none_by_implication
-admission_lifecycle:
-  - RIGHTS_CONFIRMED
-  - SOURCE_PINNED
-  - AUDITED
-  - BENCHMARKED
-  - QUALIFIED
-  - ADMITTED
-  - CANONICALLY_ADOPTED
+source_rights_ref: provenance/upstreams.yaml#source_rights
+admission_lifecycle_ref: provenance/upstreams.yaml#admission_lifecycle
 admission_notes:
   - "Rights confirmation is separate from engineering disposition, import authorization, and canonical adoption."
   - "Existing module classifications do not imply ADMITTED or CANONICALLY_ADOPTED state."
