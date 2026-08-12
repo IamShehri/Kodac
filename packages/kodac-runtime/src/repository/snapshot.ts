@@ -36,6 +36,10 @@ function portablePath(value: string): string {
   return value.replace(/\\/g, "/")
 }
 
+function isFullGitObjectId(value: string): boolean {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value)
+}
+
 function normalizedWorkspaceIdentityPath(value: string): string {
   let normalized = portablePath(value).replace(/\/+$/, "")
   if (/^[A-Z]:\//.test(normalized)) normalized = `${normalized[0].toLowerCase()}${normalized.slice(1)}`
@@ -136,14 +140,33 @@ function architectureCandidate(path: string): boolean {
   return /^adr-.*\.md$/.test(base) || normalized.startsWith("specs/") || normalized.startsWith("spec/") || normalized.includes("/architecture/") || normalized.startsWith("docs/architecture/")
 }
 
-function completenessFor(entries: RepositoryInventoryEntry[], overLimit: boolean, maxDepth: number): SnapshotCompleteness {
+async function hasDepthOmission(
+  fs: WorkspaceFileSystem,
+  entries: RepositoryInventoryEntry[],
+  maxDepth: number,
+): Promise<boolean> {
+  const boundaryDirectories = entries
+    .filter((entry) => entry.type === "directory" && entry.path.split("/").length >= maxDepth + 1)
+    .sort((a, b) => compareCanonicalStrings(a.path, b.path))
+  for (const entry of boundaryDirectories) {
+    const children = await fs.list(entry.path, { recursive: false, maxEntries: 1, maxDepth: 1 })
+    if (children.length > 0) return true
+  }
+  return false
+}
+
+function completenessFor(
+  entries: RepositoryInventoryEntry[],
+  overLimit: boolean,
+  depthOmitted: boolean,
+): SnapshotCompleteness {
   const reasons: string[] = []
   let omittedAtLeast = 0
   if (overLimit) {
     reasons.push("max-entries")
     omittedAtLeast = 1
   }
-  if (entries.some((entry) => entry.type === "directory" && entry.path.split("/").length >= maxDepth + 1)) {
+  if (depthOmitted) {
     reasons.push("max-depth")
     omittedAtLeast = Math.max(omittedAtLeast, 1)
   }
@@ -166,7 +189,7 @@ export async function captureRepositorySnapshot(
 
   const preHead = await git.head()
   const preStatus = await git.status()
-  if (!/^[0-9a-f]{40,64}$/i.test(preHead.value)) throw new Error("K3-R2 requires a full Git HEAD object id")
+  if (!isFullGitObjectId(preHead.value)) throw new Error("K3-R2 requires a full Git HEAD object id")
 
   const listed = await fs.list(".", { recursive: true, maxEntries: maxEntries + 1, maxDepth })
   const normalizedListed = listed.map((entry) => ({ ...entry, path: portablePath(entry.path) }))
@@ -187,7 +210,7 @@ export async function captureRepositorySnapshot(
     for (let index = 0; index < paths.length; index++) {
       const item = observed.value[index]
       if (portablePath(item.path) !== paths[index]) throw new Error("git.hash-object result order does not match requested path order")
-      if (!/^[0-9a-f]+$/i.test(item.gitObjectId)) throw new Error("git.hash-object returned an invalid object id")
+      if (!isFullGitObjectId(item.gitObjectId)) throw new Error("git.hash-object returned an invalid object id")
       objectIds.set(paths[index], { gitObjectId: item.gitObjectId.toLowerCase(), provenanceRef: observed.provenanceRef })
     }
   }
@@ -196,7 +219,8 @@ export async function captureRepositorySnapshot(
     const object = objectIds.get(entry.path)
     return object ? { ...entry, gitObjectId: object.gitObjectId, contentSourceRef: object.provenanceRef } : entry
   })
-  const completeness = completenessFor(inventory, overLimit, maxDepth)
+  const depthOmitted = await hasDepthOmission(fs, inventory, maxDepth)
+  const completeness = completenessFor(inventory, overLimit, depthOmitted)
   const workingTree = parseGitStatusPorcelainV1Z(preStatus.value)
 
   const contentCanonical = JSON.stringify({

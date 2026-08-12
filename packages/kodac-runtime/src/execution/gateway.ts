@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
-import { dirname } from "node:path"
+import { isAbsolute, relative, resolve, sep } from "node:path"
 import type { WorkspaceFileSystem } from "../edit/filesystem.ts"
 import { applyHunks, parsePatch, type AffectedPaths } from "../edit/patch.ts"
 import { createReceipt, type ExecutionReceipt } from "../evidence/receipt.ts"
@@ -52,6 +52,25 @@ function uniquePaths(paths: string[]): string[] {
 
 function portablePath(path: string): string {
   return path.replace(/\\/g, "/")
+}
+
+function isFullGitObjectId(value: string): boolean {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value)
+}
+
+function canonicalWorkspaceRelativePath(root: string, path: string): string {
+  const absoluteRoot = resolve(root)
+  const absoluteTarget = resolve(absoluteRoot, path)
+  const rel = relative(absoluteRoot, absoluteTarget)
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`Workspace path must resolve to a regular relative file: ${path}`)
+  }
+  return portablePath(rel)
+}
+
+function canonicalParent(path: string): string {
+  const separator = path.lastIndexOf("/")
+  return separator < 0 ? "." : path.slice(0, separator)
 }
 
 function blockedReceipt(intent: ExecutionIntent, policy: PolicyResult, startedAt: string): ExecutionReceipt {
@@ -113,7 +132,7 @@ function runProcess(
 
 function parseGitHeadOutput(stdout: string): string {
   const head = stdout.trim()
-  if (!/^[0-9a-f]{40,64}$/i.test(head)) throw new Error("git rev-parse HEAD did not return a full object id")
+  if (!isFullGitObjectId(head)) throw new Error("git rev-parse HEAD did not return a full object id")
   return head.toLowerCase()
 }
 
@@ -121,7 +140,7 @@ function parseGitHashObjectOutput(stdout: string, expectedCount: number): string
   const objectIds = stdout.split(/\r?\n/).filter(Boolean)
   if (objectIds.length !== expectedCount) throw new Error("git hash-object result count does not match requested path count")
   return objectIds.map((gitObjectId) => {
-    if (!/^[0-9a-f]+$/i.test(gitObjectId)) throw new Error("git hash-object returned an invalid object id")
+    if (!isFullGitObjectId(gitObjectId)) throw new Error("git hash-object returned an invalid object id")
     return gitObjectId.toLowerCase()
   })
 }
@@ -262,29 +281,48 @@ export class ExecutionGateway {
     options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number } = {},
   ): Promise<{ objects: { path: string; gitObjectId: string }[]; receipt: ExecutionReceipt }> {
     if (!Array.isArray(paths) || paths.length === 0 || paths.length > 128) throw new Error("git.hash-object paths must contain 1..128 entries")
+
+    const canonicalPaths: string[] = []
     for (const path of paths) {
       await this.fs.validatePath(path)
-      const portable = portablePath(path)
-      const parent = portablePath(dirname(path))
-      const entries = await this.fs.list(parent === "." ? "." : parent, { recursive: false, maxEntries: 20_000, maxDepth: 1 })
-      const entry = entries.find((candidate) => candidate.path === portable)
-      if (!entry || entry.type !== "file") throw new Error(`git.hash-object path is not a regular workspace file: ${path}`)
+      canonicalPaths.push(canonicalWorkspaceRelativePath(this.fs.root, path))
     }
+
+    const pathsByParent = new Map<string, string[]>()
+    for (const path of canonicalPaths) {
+      const parent = canonicalParent(path)
+      const siblings = pathsByParent.get(parent)
+      if (siblings) siblings.push(path)
+      else pathsByParent.set(parent, [path])
+    }
+
+    for (const [parent, parentPaths] of pathsByParent) {
+      const entries = await this.fs.list(parent, { recursive: false, maxEntries: 20_000, maxDepth: 1 })
+      const regularFiles = new Set(
+        entries
+          .filter((entry) => entry.type === "file")
+          .map((entry) => portablePath(entry.path)),
+      )
+      for (const path of parentPaths) {
+        if (!regularFiles.has(path)) throw new Error(`git.hash-object path is not a regular workspace file: ${path}`)
+      }
+    }
+
     const result = await this.runReadOnlyCommand(
       "git.hash-object",
       "git",
-      ["hash-object", "--no-filters", "--", ...paths],
-      paths,
+      ["hash-object", "--no-filters", "--", ...canonicalPaths],
+      canonicalPaths,
       observer,
       { ...options, maxOutputBytes: options.maxOutputBytes ?? 64 * 1024, timeoutMs: options.timeoutMs ?? 10_000 },
       "git hash-object",
       (stdout) => {
-        parseGitHashObjectOutput(stdout, paths.length)
+        parseGitHashObjectOutput(stdout, canonicalPaths.length)
       },
     )
-    const objectIds = parseGitHashObjectOutput(result.stdout, paths.length)
-    const objects = paths.map((path, index) => ({
-      path: portablePath(path),
+    const objectIds = parseGitHashObjectOutput(result.stdout, canonicalPaths.length)
+    const objects = canonicalPaths.map((path, index) => ({
+      path,
       gitObjectId: objectIds[index],
     }))
     return { objects, receipt: result.receipt }

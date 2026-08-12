@@ -2,7 +2,6 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
-import { createRequire, syncBuiltinESMExports } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import test from "node:test"
@@ -20,8 +19,6 @@ import {
 import { repositoryIntelligenceReadPolicy } from "../src/trust/policy.ts"
 
 const goldManifestPath = fileURLToPath(new URL("./fixtures/k3-r1/manifest.json", import.meta.url))
-const require = createRequire(import.meta.url)
-const childProcessModule = require("node:child_process") as { execFile: (...args: unknown[]) => unknown }
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true })
@@ -91,24 +88,79 @@ function receiptRecorder(statuses: string[]) {
   }
 }
 
-async function withGitProcessOutput<T>(stdout: string, stderr: string, run: () => Promise<T>): Promise<T> {
-  const originalExecFile = childProcessModule.execFile
-  childProcessModule.execFile = (...args: unknown[]) => {
-    if (args[0] !== "git") throw new Error(`K3-R2 test fixture intercepted unexpected executable: ${String(args[0])}`)
-    const callback = args.at(-1)
-    if (typeof callback !== "function") throw new Error("K3-R2 test fixture expected an execFile callback")
-    queueMicrotask(() => {
-      ;(callback as (error: Error | null, stdout: string, stderr: string) => void)(null, stdout, stderr)
-    })
-    return undefined
+interface IsolatedGitCase {
+  capability: "head" | "hash"
+  stdout: string
+  paths?: string[]
+}
+
+interface IsolatedGitResult {
+  ok: boolean
+  statuses: string[]
+  head?: string
+  objects?: { path: string; gitObjectId: string }[]
+  error?: string
+}
+
+function runIsolatedGitCases(cases: IsolatedGitCase[]): IsolatedGitResult[] {
+  const gatewayUrl = new URL("../src/execution/gateway.ts", import.meta.url).href
+  const policyUrl = new URL("../src/trust/policy.ts", import.meta.url).href
+  const script = `
+import { createRequire, syncBuiltinESMExports } from "node:module"
+const cases = ${JSON.stringify(cases)}
+const require = createRequire(import.meta.url)
+const childProcessModule = require("node:child_process")
+const outputs = cases.map((fixture) => fixture.stdout)
+childProcessModule.execFile = (...args) => {
+  if (args[0] !== "git") throw new Error("isolated K3-R2 fixture intercepted unexpected executable")
+  const callback = args.at(-1)
+  if (typeof callback !== "function") throw new Error("isolated K3-R2 fixture expected execFile callback")
+  const stdout = outputs.shift() ?? ""
+  queueMicrotask(() => callback(null, stdout, ""))
+  return {}
+}
+syncBuiltinESMExports()
+const { ExecutionGateway } = await import(${JSON.stringify(gatewayUrl)})
+const { repositoryIntelligenceReadPolicy } = await import(${JSON.stringify(policyUrl)})
+const results = []
+for (const fixture of cases) {
+  const statuses = []
+  const paths = fixture.paths ?? ["a.txt"]
+  const entries = paths.map((path) => ({ path: path.replace(/^(?:\\.\\/)+/, ""), type: "file" }))
+  const fs = {
+    root: process.cwd(),
+    async exists() { return true },
+    async validatePath() {},
+    async readText() { return "" },
+    async readTextBounded() { return "" },
+    async list() { return entries },
+    async searchText() { return [] },
+    async writeText() { throw new Error("isolated fixture is read-only") },
+    async remove() { throw new Error("isolated fixture is read-only") },
+    async move() { throw new Error("isolated fixture is read-only") },
   }
-  syncBuiltinESMExports()
+  const gateway = new ExecutionGateway(fs, repositoryIntelligenceReadPolicy())
+  const observer = { onReceipt(receipt) { statuses.push(receipt.result.status) } }
   try {
-    return await run()
-  } finally {
-    childProcessModule.execFile = originalExecFile
-    syncBuiltinESMExports()
+    if (fixture.capability === "head") {
+      const result = await gateway.gitHead(observer)
+      results.push({ ok: true, statuses, head: result.head })
+    } else {
+      const result = await gateway.gitHashObjects(paths, observer)
+      results.push({ ok: true, statuses, objects: result.objects })
+    }
+  } catch (error) {
+    results.push({ ok: false, statuses, error: error instanceof Error ? error.message : String(error) })
   }
+}
+console.log(JSON.stringify(results))
+`
+  const output = execFileSync(
+    process.execPath,
+    ["--experimental-strip-types", "--input-type=module", "--eval", script],
+    { encoding: "utf8", windowsHide: true },
+  )
+  return JSON.parse(output.trim()) as IsolatedGitResult[]
 }
 
 async function createFilesInOrder(root: string, names: string[]): Promise<void> {
@@ -270,6 +322,42 @@ test("K3-R2 inventory over the entry limit reports explicit truncation", async (
   assert.ok(snapshot.completeness.omittedAtLeast >= 1)
 })
 
+test("K3-R2 empty directory at max-depth boundary does not claim an omitted descendant", async () => {
+  const root = await mkdtemp(join(tmpdir(), "kodac-k3-r2-depth-empty-"))
+  try {
+    await mkdir(join(root, "level", "boundary"), { recursive: true })
+    const snapshot = await captureRepositorySnapshot(
+      new NodeWorkspaceFileSystem(root),
+      fakeSource(["a".repeat(40)], [""]),
+      { maxDepth: 1 },
+    )
+    assert.equal(snapshot.completeness.state, "complete")
+    assert.equal(snapshot.completeness.omittedAtLeast, 0)
+    assert.ok(!snapshot.completeness.reasons.includes("max-depth"))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("K3-R2 non-empty directory beyond max-depth reports a true omitted descendant lower bound", async () => {
+  const root = await mkdtemp(join(tmpdir(), "kodac-k3-r2-depth-omitted-"))
+  try {
+    await mkdir(join(root, "level", "boundary"), { recursive: true })
+    await writeFile(join(root, "level", "boundary", "child.txt"), "child\n", "utf8")
+    const snapshot = await captureRepositorySnapshot(
+      new NodeWorkspaceFileSystem(root),
+      fakeSource(["a".repeat(40)], [""]),
+      { maxDepth: 1 },
+    )
+    assert.equal(snapshot.completeness.state, "truncated")
+    assert.ok(snapshot.completeness.reasons.includes("max-depth"))
+    assert.ok(snapshot.completeness.omittedAtLeast >= 1)
+    assert.ok(!snapshot.inventory.some((entry) => entry.path === "level/boundary/child.txt"))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test("K3-R2 pre/post Git mismatch marks freshness stale without retrying", async () => {
   const snapshot = await captureRepositorySnapshot(
     fakeFs("/fixture", []),
@@ -318,6 +406,32 @@ test("K3-R2 git.hash-object rejects workspace path escape", async () => {
   }
 })
 
+test("K3-R2 git.hash-object canonicalizes safe equivalent workspace-relative paths", async () => {
+  const root = await initRepository({ "a.txt": "a\n" })
+  try {
+    const gateway = new ExecutionGateway(new NodeWorkspaceFileSystem(root), repositoryIntelligenceReadPolicy())
+    const direct = await gateway.gitHashObjects(["a.txt"])
+    const dotted = await gateway.gitHashObjects(["./a.txt"])
+    const normalized = await gateway.gitHashObjects(["src/../a.txt"])
+    assert.deepEqual(direct.objects.map((item) => item.path), ["a.txt"])
+    assert.deepEqual(dotted.objects.map((item) => item.path), ["a.txt"])
+    assert.deepEqual(normalized.objects.map((item) => item.path), ["a.txt"])
+    assert.equal(direct.objects[0]?.gitObjectId, dotted.objects[0]?.gitObjectId)
+    assert.equal(direct.objects[0]?.gitObjectId, normalized.objects[0]?.gitObjectId)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("K3-R2 git.hash-object normalization does not bypass workspace validation", async () => {
+  const fs = fakeFs("/fixture", [{ path: "link/a.txt", type: "file" }])
+  fs.validatePath = async (path: string) => {
+    if (path === "link/a.txt") throw new Error("Path escapes workspace through symlink")
+  }
+  const gateway = new ExecutionGateway(fs, repositoryIntelligenceReadPolicy())
+  await assert.rejects(() => gateway.gitHashObjects(["link/a.txt"]), /escapes workspace/)
+})
+
 test("K3-R2 generic ExecutionGateway.runCommand cannot spoof reserved git or repo capabilities", async () => {
   const root = await initRepository()
   try {
@@ -329,59 +443,72 @@ test("K3-R2 generic ExecutionGateway.runCommand cannot spoof reserved git or rep
   }
 })
 
-test("K3-R2 malformed git.head output persists failure only", async () => {
-  const gateway = new ExecutionGateway(fakeFs("/fixture", []), repositoryIntelligenceReadPolicy())
-  assert.equal(Object.prototype.hasOwnProperty.call(gateway, "processRunner"), false)
-  const statuses: string[] = []
-  await withGitProcessOutput("not-a-git-object\n", "", async () => {
-    await assert.rejects(
-      () => gateway.gitHead(receiptRecorder(statuses)),
-      /did not return a full object id/,
-    )
-  })
-  assert.deepEqual(statuses, ["failure"])
-})
-
-test("K3-R2 malformed or mismatched git.hash-object output persists failure only", async () => {
-  for (const stdout of ["", "not-an-object\n"]) {
-    const gateway = new ExecutionGateway(
-      fakeFs("/fixture", [{ path: "a.txt", type: "file" }]),
-      repositoryIntelligenceReadPolicy(),
-    )
-    const statuses: string[] = []
-    await withGitProcessOutput(stdout, "", async () => {
-      await assert.rejects(
-        () => gateway.gitHashObjects(["a.txt"], receiptRecorder(statuses)),
-        /git hash-object/,
-      )
-    })
-    assert.deepEqual(statuses, ["failure"])
+test("K3-R2 malformed git.head output persists failure only", () => {
+  const invalidObjectIds = [
+    "a".repeat(39),
+    "a".repeat(41),
+    "a".repeat(63),
+    "a".repeat(65),
+    "g".repeat(40),
+    "not-a-git-object",
+  ]
+  const results = runIsolatedGitCases(invalidObjectIds.map((value) => ({ capability: "head", stdout: `${value}\n` })))
+  for (const result of results) {
+    assert.equal(result.ok, false)
+    assert.deepEqual(result.statuses, ["failure"])
+    assert.match(result.error ?? "", /full object id/)
   }
 })
 
-test("K3-R2 valid git.head and git.hash-object persist success receipts", async () => {
-  const headGateway = new ExecutionGateway(fakeFs("/fixture", []), repositoryIntelligenceReadPolicy())
-  const headObjectId = "a".repeat(40)
-  const headStatuses: string[] = []
-  await withGitProcessOutput(`${headObjectId}\n`, "", async () => {
-    const headResult = await headGateway.gitHead(receiptRecorder(headStatuses))
-    assert.equal(headResult.head, headObjectId)
-    assert.equal(headResult.receipt.result.status, "success")
-  })
-  assert.deepEqual(headStatuses, ["success"])
+test("K3-R2 malformed or mismatched git.hash-object output persists failure only", () => {
+  const invalidOutputs = [
+    "",
+    "not-an-object\n",
+    `${"a".repeat(39)}\n`,
+    `${"a".repeat(41)}\n`,
+    `${"a".repeat(63)}\n`,
+    `${"a".repeat(65)}\n`,
+    `${"g".repeat(40)}\n`,
+  ]
+  const results = runIsolatedGitCases(invalidOutputs.map((stdout) => ({ capability: "hash", stdout, paths: ["a.txt"] })))
+  for (const result of results) {
+    assert.equal(result.ok, false)
+    assert.deepEqual(result.statuses, ["failure"])
+    assert.match(result.error ?? "", /git hash-object/)
+  }
+})
 
-  const hashGateway = new ExecutionGateway(
-    fakeFs("/fixture", [{ path: "a.txt", type: "file" }]),
-    repositoryIntelligenceReadPolicy(),
-  )
-  const fileObjectId = "b".repeat(40)
-  const hashStatuses: string[] = []
-  await withGitProcessOutput(`${fileObjectId}\n`, "", async () => {
-    const hashResult = await hashGateway.gitHashObjects(["a.txt"], receiptRecorder(hashStatuses))
-    assert.deepEqual(hashResult.objects, [{ path: "a.txt", gitObjectId: fileObjectId }])
-    assert.equal(hashResult.receipt.result.status, "success")
-  })
-  assert.deepEqual(hashStatuses, ["success"])
+test("K3-R2 valid 40- and 64-character git object ids persist success receipts", () => {
+  const head40 = "a".repeat(40)
+  const head64 = "a".repeat(64)
+  const hash40 = "b".repeat(40)
+  const hash64 = "b".repeat(64)
+  const results = runIsolatedGitCases([
+    { capability: "head", stdout: `${head40}\n` },
+    { capability: "head", stdout: `${head64}\n` },
+    { capability: "hash", stdout: `${hash40}\n`, paths: ["a.txt"] },
+    { capability: "hash", stdout: `${hash64}\n`, paths: ["a.txt"] },
+  ])
+  assert.deepEqual(results.map((result) => result.ok), [true, true, true, true])
+  assert.deepEqual(results.map((result) => result.statuses), [["success"], ["success"], ["success"], ["success"]])
+  assert.equal(results[0]?.head, head40)
+  assert.equal(results[1]?.head, head64)
+  assert.equal(results[2]?.objects?.[0]?.gitObjectId, hash40)
+  assert.equal(results[3]?.objects?.[0]?.gitObjectId, hash64)
+})
+
+test("K3-R2 snapshot defense-in-depth accepts only full 40- or 64-character object ids", async () => {
+  const fs = fakeFs("/fixture", [{ path: "a.txt", type: "file" }])
+  for (const objectId of ["b".repeat(40), "b".repeat(64)]) {
+    const snapshot = await captureRepositorySnapshot(fs, fakeSource(["a".repeat(40)], [""], objectId))
+    assert.equal(snapshot.inventory[0]?.gitObjectId, objectId)
+  }
+  for (const objectId of ["b".repeat(39), "b".repeat(41), "b".repeat(63), "b".repeat(65), "g".repeat(40)]) {
+    await assert.rejects(
+      () => captureRepositorySnapshot(fs, fakeSource(["a".repeat(40)], [""], objectId)),
+      /invalid object id/,
+    )
+  }
 })
 
 test("K3-R2 dedicated git.hash-object preserves path order and object identities", async () => {
@@ -390,7 +517,36 @@ test("K3-R2 dedicated git.hash-object preserves path order and object identities
     const gateway = new ExecutionGateway(new NodeWorkspaceFileSystem(root), repositoryIntelligenceReadPolicy())
     const result = await gateway.gitHashObjects(["b.txt", "a.txt"])
     assert.deepEqual(result.objects.map((item) => item.path), ["b.txt", "a.txt"])
-    assert.ok(result.objects.every((item) => /^[0-9a-f]+$/.test(item.gitObjectId)))
+    assert.ok(result.objects.every((item) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(item.gitObjectId)))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("K3-R2 git.hash-object validates each unique parent directory at most once per batch", async () => {
+  const root = await initRepository({ "a.txt": "a\n", "b.txt": "b\n" })
+  try {
+    const base = new NodeWorkspaceFileSystem(root)
+    let listCalls = 0
+    const fs: WorkspaceFileSystem = {
+      root: base.root,
+      exists: (path) => base.exists(path),
+      validatePath: (path) => base.validatePath(path),
+      readText: (path) => base.readText(path),
+      readTextBounded: (path, maxBytes) => base.readTextBounded(path, maxBytes),
+      async list(path, options) {
+        listCalls++
+        return base.list(path, options)
+      },
+      searchText: (query, path, options) => base.searchText(query, path, options),
+      writeText: (path, content) => base.writeText(path, content),
+      remove: (path) => base.remove(path),
+      move: (from, to) => base.move(from, to),
+    }
+    const gateway = new ExecutionGateway(fs, repositoryIntelligenceReadPolicy())
+    const result = await gateway.gitHashObjects(["a.txt", "b.txt"])
+    assert.deepEqual(result.objects.map((item) => item.path), ["a.txt", "b.txt"])
+    assert.equal(listCalls, 1)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
