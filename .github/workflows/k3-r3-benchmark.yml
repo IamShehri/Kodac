@@ -94,10 +94,17 @@ jobs:
 
           chmod +x "$ast_bin" "$tree_bin" "$scip_bin"
 
+          ast_bin_sha="$(sha256sum "$ast_bin" | awk '{print $1}')"
+          tree_bin_sha="$(sha256sum "$tree_bin" | awk '{print $1}')"
+          scip_bin_sha="$(sha256sum "$scip_bin" | awk '{print $1}')"
+
           {
             printf 'AST_GREP_BIN=%s\n' "$ast_bin"
+            printf 'AST_GREP_BIN_SHA256=%s\n' "$ast_bin_sha"
             printf 'TREE_SITTER_BIN=%s\n' "$tree_bin"
+            printf 'TREE_SITTER_BIN_SHA256=%s\n' "$tree_bin_sha"
             printf 'SCIP_BIN=%s\n' "$scip_bin"
+            printf 'SCIP_BIN_SHA256=%s\n' "$scip_bin_sha"
           } >> "$GITHUB_ENV"
 
       - name: Run bounded K3-R3 benchmark
