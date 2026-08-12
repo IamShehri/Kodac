@@ -152,6 +152,12 @@ function inScope(path: string, scope: string): boolean {
 }
 
 export function selectK3R4TypeScriptCandidates(snapshot: RepositorySnapshot, scope: string): CandidateSelection {
+  if (scope !== ".") {
+    const scopeEntry = snapshot.inventory.find((entry) => entry.path === scope)
+    if (!scopeEntry) throw new Error(`K3-R4 scope is not present in the bound snapshot: ${scope}`)
+    if (scopeEntry.type === "symlink") throw new Error(`K3-R4 scope must not be a symlink: ${scope}`)
+  }
+
   const eligible = snapshot.inventory
     .filter((entry) => entry.type === "file" && entry.path.endsWith(".ts") && inScope(entry.path, scope))
     .map((entry) => entry.path)
@@ -450,7 +456,7 @@ export class AstGrepCliRepositoryAdapter {
     const postSnapshot = await captureRepositorySnapshot(this.fs, createGatewayGitSnapshotSource(this.gateway, this.observer))
     assertSameSnapshot(request.snapshot, postSnapshot, "after structural query execution")
 
-    const reasons = [...selection.reasons]
+    const reasons: AstGrepStructuralQueryResult["completeness"]["reasons"] = [...selection.reasons]
     let omittedAtLeast = selection.omitted
     let matches = normalized
     if (matches.length > maxResults) {
