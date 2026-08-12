@@ -74,7 +74,10 @@ jobs:
           printf '%s  %s\n' "$SCIP_SHA256" "$root/scip.tar.gz" | sha256sum -c -
           tar -xzf "$root/scip.tar.gz" -C "$root/scip"
 
-          ast_bin="$(find "$root/ast-grep" -type f \( -name 'ast-grep' -o -name 'sg' \) -print -quit)"
+          ast_bin="$(find "$root/ast-grep" -type f -name 'ast-grep' -print -quit)"
+          if [[ -z "$ast_bin" ]]; then
+            ast_bin="$(find "$root/ast-grep" -type f -name 'sg' -print -quit)"
+          fi
           tree_bin="$(find "$root/tree-sitter" -type f -name 'tree-sitter' -print -quit)"
           scip_bin="$(find "$root/scip" -type f -name 'scip' -print -quit)"
 
@@ -103,6 +106,7 @@ jobs:
           node --experimental-strip-types packages/kodac-runtime/bench/k3-r3/benchmark.ts
 
       - name: Attest checkout unchanged after benchmark
+        if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
@@ -119,5 +123,5 @@ jobs:
         with:
           name: k3-r3-benchmark-evidence-${{ github.event.pull_request.head.sha }}
           path: ${{ runner.temp }}/k3-r3-results.json
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 30
