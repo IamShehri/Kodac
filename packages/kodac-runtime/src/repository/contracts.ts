@@ -1,5 +1,9 @@
 export const K3_R2_SNAPSHOT_CONTRACT_VERSION = "k3-r2-snapshot-v1" as const
 
+export function isFullGitObjectId(value: string): boolean {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value)
+}
+
 export interface RepositoryIdentity {
   scheme: "workspace-root-sha256-v1"
   scope: "workspace-local"

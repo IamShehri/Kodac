@@ -4,6 +4,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path"
 import type { WorkspaceFileSystem } from "../edit/filesystem.ts"
 import { applyHunks, parsePatch, type AffectedPaths } from "../edit/patch.ts"
 import { createReceipt, type ExecutionReceipt } from "../evidence/receipt.ts"
+import { isFullGitObjectId } from "../repository/contracts.ts"
 import type { ExecutionIntent, PolicyEngine, PolicyResult } from "../trust/policy.ts"
 
 export interface ExecutionObserver {
@@ -51,11 +52,7 @@ function uniquePaths(paths: string[]): string[] {
 }
 
 function portablePath(path: string): string {
-  return path.replace(/\\/g, "/")
-}
-
-function isFullGitObjectId(value: string): boolean {
-  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value)
+  return path.split(sep).join("/")
 }
 
 function canonicalWorkspaceRelativePath(root: string, path: string): string {
@@ -65,7 +62,7 @@ function canonicalWorkspaceRelativePath(root: string, path: string): string {
   if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new Error(`Workspace path must resolve to a regular relative file: ${path}`)
   }
-  return portablePath(rel)
+  return rel.split(sep).join("/")
 }
 
 function canonicalParent(path: string): string {

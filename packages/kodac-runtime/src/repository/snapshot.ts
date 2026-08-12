@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto"
-import type { WorkspaceFileSystem } from "../edit/filesystem.ts"
+import { sep } from "node:path"
+import { WorkspaceBoundaryError, type WorkspaceFileSystem } from "../edit/filesystem.ts"
 import type { ExecutionGateway, ExecutionObserver } from "../execution/gateway.ts"
 import {
+  isFullGitObjectId,
   K3_R2_SNAPSHOT_CONTRACT_VERSION,
   type GitWorkingTreeChange,
   type RepositoryEvidence,
@@ -33,11 +35,7 @@ function boundedInteger(name: string, value: number | undefined, fallback: numbe
 }
 
 function portablePath(value: string): string {
-  return value.replace(/\\/g, "/")
-}
-
-function isFullGitObjectId(value: string): boolean {
-  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value)
+  return value.split(sep).join("/")
 }
 
 function normalizedWorkspaceIdentityPath(value: string): string {
@@ -140,19 +138,38 @@ function architectureCandidate(path: string): boolean {
   return /^adr-.*\.md$/.test(base) || normalized.startsWith("specs/") || normalized.startsWith("spec/") || normalized.includes("/architecture/") || normalized.startsWith("docs/architecture/")
 }
 
-async function hasDepthOmission(
+interface DepthOmissionProbe {
+  omitted: boolean
+  unstable: boolean
+}
+
+function isTransientDepthProbeError(error: unknown, path: string): boolean {
+  if (error instanceof WorkspaceBoundaryError) return false
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  if (code === "ENOENT" || code === "ENOTDIR") return true
+  return error instanceof Error && error.message === `Workspace path is not a directory: ${path}`
+}
+
+async function probeDepthOmission(
   fs: WorkspaceFileSystem,
   entries: RepositoryInventoryEntry[],
   maxDepth: number,
-): Promise<boolean> {
+): Promise<DepthOmissionProbe> {
   const boundaryDirectories = entries
     .filter((entry) => entry.type === "directory" && entry.path.split("/").length >= maxDepth + 1)
     .sort((a, b) => compareCanonicalStrings(a.path, b.path))
+  let omitted = false
+  let unstable = false
   for (const entry of boundaryDirectories) {
-    const children = await fs.list(entry.path, { recursive: false, maxEntries: 1, maxDepth: 1 })
-    if (children.length > 0) return true
+    try {
+      const children = await fs.list(entry.path, { recursive: false, maxEntries: 1, maxDepth: 1 })
+      if (children.length > 0) omitted = true
+    } catch (error) {
+      if (!isTransientDepthProbeError(error, entry.path)) throw error
+      unstable = true
+    }
   }
-  return false
+  return { omitted, unstable }
 }
 
 function completenessFor(
@@ -219,8 +236,8 @@ export async function captureRepositorySnapshot(
     const object = objectIds.get(entry.path)
     return object ? { ...entry, gitObjectId: object.gitObjectId, contentSourceRef: object.provenanceRef } : entry
   })
-  const depthOmitted = await hasDepthOmission(fs, inventory, maxDepth)
-  const completeness = completenessFor(inventory, overLimit, depthOmitted)
+  const depthProbe = await probeDepthOmission(fs, inventory, maxDepth)
+  const completeness = completenessFor(inventory, overLimit, depthProbe.omitted)
   const workingTree = parseGitStatusPorcelainV1Z(preStatus.value)
 
   const contentCanonical = JSON.stringify({
@@ -234,7 +251,7 @@ export async function captureRepositorySnapshot(
 
   const postHead = await git.head()
   const postStatus = await git.status()
-  const freshness = preHead.value === postHead.value && preStatus.value === postStatus.value ? "current" as const : "stale" as const
+  const freshness = !depthProbe.unstable && preHead.value === postHead.value && preStatus.value === postStatus.value ? "current" as const : "stale" as const
   const repositoryIdentity = {
     scheme: "workspace-root-sha256-v1" as const,
     scope: "workspace-local" as const,

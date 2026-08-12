@@ -7,7 +7,7 @@ import { dirname, join } from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 
-import { NodeWorkspaceFileSystem, type WorkspaceFileSystem } from "../src/edit/filesystem.ts"
+import { NodeWorkspaceFileSystem, WorkspaceBoundaryError, type WorkspaceFileSystem } from "../src/edit/filesystem.ts"
 import type { ExecutionReceipt } from "../src/evidence/receipt.ts"
 import { ExecutionGateway } from "../src/execution/gateway.ts"
 import {
@@ -599,4 +599,150 @@ test("K3-R2 keeps the canonical K3-R1 manifest repository-content identity uncha
   const canonicalLfText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
   const bytes = Buffer.from(canonicalLfText, "utf8")
   assert.equal(gitBlobSha1(bytes), "6f812003a4b33e62ad1be672a39c7f42509fc500")
+})
+
+test("K3-R2 recoverable ENOENT max-depth probe race marks stale and completes post observation", async () => {
+  let listCalls = 0
+  const fs = fakeFs("/fixture", [])
+  fs.list = async () => {
+    listCalls++
+    if (listCalls === 1) {
+      return [
+        { path: "level", type: "directory" },
+        { path: "level/boundary", type: "directory" },
+      ]
+    }
+    const error = new Error("boundary disappeared") as NodeJS.ErrnoException
+    error.code = "ENOENT"
+    throw error
+  }
+  const base = fakeSource(["a".repeat(40)], [""])
+  let headCalls = 0
+  let statusCalls = 0
+  const source: GitSnapshotSource = {
+    ...base,
+    async head() {
+      headCalls++
+      return base.head()
+    },
+    async status() {
+      statusCalls++
+      return base.status()
+    },
+  }
+  const snapshot = await captureRepositorySnapshot(fs, source, { maxDepth: 1 })
+  assert.equal(snapshot.freshness, "stale")
+  assert.equal(snapshot.completeness.omittedAtLeast, 0)
+  assert.ok(!snapshot.completeness.reasons.includes("max-depth"))
+  assert.equal(headCalls, 2)
+  assert.equal(statusCalls, 2)
+})
+
+test("K3-R2 ENOTDIR and directory-to-file probe races mark stale without inventing omission", async () => {
+  const errors: Error[] = []
+  const enotdir = new Error("boundary changed type") as NodeJS.ErrnoException
+  enotdir.code = "ENOTDIR"
+  errors.push(enotdir)
+  errors.push(new Error("Workspace path is not a directory: level/boundary"))
+
+  for (const raceError of errors) {
+    let listCalls = 0
+    const fs = fakeFs("/fixture", [])
+    fs.list = async () => {
+      listCalls++
+      if (listCalls === 1) {
+        return [
+          { path: "level", type: "directory" },
+          { path: "level/boundary", type: "directory" },
+        ]
+      }
+      throw raceError
+    }
+    const base = fakeSource(["a".repeat(40)], [""])
+    let headCalls = 0
+    let statusCalls = 0
+    const source: GitSnapshotSource = {
+      ...base,
+      async head() {
+        headCalls++
+        return base.head()
+      },
+      async status() {
+        statusCalls++
+        return base.status()
+      },
+    }
+    const snapshot = await captureRepositorySnapshot(fs, source, { maxDepth: 1 })
+    assert.equal(snapshot.freshness, "stale")
+    assert.equal(snapshot.completeness.omittedAtLeast, 0)
+    assert.ok(!snapshot.completeness.reasons.includes("max-depth"))
+    assert.equal(headCalls, 2)
+    assert.equal(statusCalls, 2)
+  }
+})
+
+test("K3-R2 non-transient depth-probe errors remain fail-closed", async () => {
+  const eacces = new Error("permission denied") as NodeJS.ErrnoException
+  eacces.code = "EACCES"
+  const errors: Error[] = [
+    eacces,
+    new WorkspaceBoundaryError("Path escapes workspace: level/boundary"),
+  ]
+
+  for (const probeError of errors) {
+    let listCalls = 0
+    const fs = fakeFs("/fixture", [])
+    fs.list = async () => {
+      listCalls++
+      if (listCalls === 1) {
+        return [
+          { path: "level", type: "directory" },
+          { path: "level/boundary", type: "directory" },
+        ]
+      }
+      throw probeError
+    }
+    const base = fakeSource(["a".repeat(40)], [""])
+    let headCalls = 0
+    let statusCalls = 0
+    const source: GitSnapshotSource = {
+      ...base,
+      async head() {
+        headCalls++
+        return base.head()
+      },
+      async status() {
+        statusCalls++
+        return base.status()
+      },
+    }
+    await assert.rejects(() => captureRepositorySnapshot(fs, source, { maxDepth: 1 }))
+    assert.equal(headCalls, 1)
+    assert.equal(statusCalls, 1)
+  }
+})
+
+test("K3-R2 platform-correct paths preserve POSIX literal backslashes and normalize Windows separators", async () => {
+  const root = process.platform === "win32"
+    ? await initRepository({ "literal/name.txt": "nested\n" })
+    : await initRepository({ "literal\\name.txt": "literal-backslash\n", "literal/name.txt": "nested\n" })
+  try {
+    const gateway = new ExecutionGateway(new NodeWorkspaceFileSystem(root), repositoryIntelligenceReadPolicy())
+    if (process.platform === "win32") {
+      const result = await gateway.gitHashObjects(["literal\\name.txt"])
+      assert.deepEqual(result.objects.map((item) => item.path), ["literal/name.txt"])
+      assert.equal(result.objects[0]?.gitObjectId, git(root, ["hash-object", "--no-filters", "--", "literal/name.txt"]).trim())
+    } else {
+      const result = await gateway.gitHashObjects(["literal\\name.txt", "literal/name.txt"])
+      assert.deepEqual(result.objects.map((item) => item.path), ["literal\\name.txt", "literal/name.txt"])
+      assert.notEqual(result.objects[0]?.gitObjectId, result.objects[1]?.gitObjectId)
+      const snapshot = await realSnapshot(root)
+      assert.ok(snapshot.inventory.some((entry) => entry.path === "literal\\name.txt"))
+      assert.ok(snapshot.inventory.some((entry) => entry.path === "literal/name.txt"))
+      const [statusChange] = parseGitStatusPorcelainV1Z("?? literal\\name.txt\0")
+      assert.equal(statusChange.path, "literal\\name.txt")
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
