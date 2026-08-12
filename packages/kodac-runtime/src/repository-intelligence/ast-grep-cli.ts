@@ -113,10 +113,10 @@ export function assertK3R4AstGrepPlatform(platform = process.platform, architect
 
 export function validateK3R4Symbol(symbol: string): string {
   if (typeof symbol !== "string" || symbol.length === 0 || symbol.length > 128 || symbol.includes("\0")) {
-    throw new Error("K3-R4 symbol must be a non-empty <=128 character TypeScript identifier")
+    throw new Error("K3-R4 symbol must be a non-empty <=128 character identifier")
   }
-  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(symbol)) {
-    throw new Error("K3-R4 symbol must be a plain TypeScript identifier; ast-grep pattern syntax is not exposed")
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(symbol)) {
+    throw new Error("K3-R4 v1 symbol must be an ASCII identifier without '$'; ast-grep metavariable syntax is not exposed")
   }
   return symbol
 }
