@@ -81,13 +81,6 @@ interface ProcessOptions {
   env?: NodeJS.ProcessEnv
 }
 
-type ProcessRunner = (
-  executable: string,
-  args: string[],
-  cwd: string,
-  options: ProcessOptions,
-) => Promise<{ stdout: string; stderr: string }>
-
 function runProcess(
   executable: string,
   args: string[],
@@ -145,7 +138,6 @@ async function digestAffectedState(fs: WorkspaceFileSystem, affected: AffectedPa
 export class ExecutionGateway {
   private readonly fs: WorkspaceFileSystem
   private readonly policy: PolicyEngine
-  private readonly processRunner: ProcessRunner = runProcess
 
   constructor(fs: WorkspaceFileSystem, policy: PolicyEngine) {
     this.fs = fs
@@ -357,7 +349,7 @@ export class ExecutionGateway {
 
     try {
       for (const path of paths) await this.fs.validatePath(path)
-      const { stdout, stderr } = await this.processRunner(executable, args, this.fs.root, {
+      const { stdout, stderr } = await runProcess(executable, args, this.fs.root, {
         signal: options.signal,
         maxOutputBytes,
         timeoutMs,

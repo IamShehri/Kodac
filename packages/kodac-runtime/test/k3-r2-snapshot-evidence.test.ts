@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { createRequire, syncBuiltinESMExports } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import test from "node:test"
@@ -19,6 +20,8 @@ import {
 import { repositoryIntelligenceReadPolicy } from "../src/trust/policy.ts"
 
 const goldManifestPath = fileURLToPath(new URL("./fixtures/k3-r1/manifest.json", import.meta.url))
+const require = createRequire(import.meta.url)
+const childProcessModule = require("node:child_process") as { execFile: (...args: unknown[]) => unknown }
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true })
@@ -88,11 +91,28 @@ function receiptRecorder(statuses: string[]) {
   }
 }
 
-function setGatewayProcessOutput(gateway: ExecutionGateway, stdout: string, stderr = ""): void {
-  const testableGateway = gateway as unknown as {
-    processRunner: () => Promise<{ stdout: string; stderr: string }>
+async function withGitProcessOutput<T>(stdout: string, stderr: string, run: () => Promise<T>): Promise<T> {
+  const originalExecFile = childProcessModule.execFile
+  childProcessModule.execFile = (...args: unknown[]) => {
+    if (args[0] !== "git") throw new Error(`K3-R2 test fixture intercepted unexpected executable: ${String(args[0])}`)
+    const callback = args.at(-1)
+    if (typeof callback !== "function") throw new Error("K3-R2 test fixture expected an execFile callback")
+    queueMicrotask(() => {
+      ;(callback as (error: Error | null, stdout: string, stderr: string) => void)(null, stdout, stderr)
+    })
+    return undefined
   }
-  testableGateway.processRunner = async () => ({ stdout, stderr })
+  syncBuiltinESMExports()
+  try {
+    return await run()
+  } finally {
+    childProcessModule.execFile = originalExecFile
+    syncBuiltinESMExports()
+  }
+}
+
+async function createFilesInOrder(root: string, names: string[]): Promise<void> {
+  for (const name of names) await writeFile(join(root, name), `${name}\n`, "utf8")
 }
 
 test("K3-R2 clean repository produces a current complete deterministic snapshot", async () => {
@@ -196,6 +216,49 @@ test("K3-R2 canonical ordering is locale-independent across mixed-case and non-A
   assert.deepEqual(first.evidence.map((entry) => entry.evidenceId), second.evidence.map((entry) => entry.evidenceId))
 })
 
+test("K3-R2 filesystem ordering is code-unit deterministic before bounded snapshot truncation", async () => {
+  const names = ["zeta.ts", "Álpha.ts", "Beta.ts", "alpha.ts"]
+  const expectedAll = ["Beta.ts", "alpha.ts", "zeta.ts", "Álpha.ts"]
+  const expectedRetained = expectedAll.slice(0, 2)
+  const rootA = await mkdtemp(join(tmpdir(), "kodac-k3-r2-order-a-"))
+  const rootB = await mkdtemp(join(tmpdir(), "kodac-k3-r2-order-b-"))
+  try {
+    await createFilesInOrder(rootA, names)
+    await createFilesInOrder(rootB, [...names].reverse())
+    const fsA = new NodeWorkspaceFileSystem(rootA)
+    const fsB = new NodeWorkspaceFileSystem(rootB)
+    assert.deepEqual(
+      (await fsA.list(".", { recursive: false, maxEntries: 10, maxDepth: 1 })).map((entry) => entry.path),
+      expectedAll,
+    )
+    assert.deepEqual(
+      (await fsB.list(".", { recursive: false, maxEntries: 10, maxDepth: 1 })).map((entry) => entry.path),
+      expectedAll,
+    )
+
+    const first = await captureRepositorySnapshot(
+      fsA,
+      fakeSource(["a".repeat(40)], [""]),
+      { maxEntries: 2, maxDepth: 1 },
+    )
+    const second = await captureRepositorySnapshot(
+      fsB,
+      fakeSource(["a".repeat(40)], [""]),
+      { maxEntries: 2, maxDepth: 1 },
+    )
+    assert.deepEqual(first.inventory.map((entry) => entry.path), expectedRetained)
+    assert.deepEqual(second.inventory.map((entry) => entry.path), expectedRetained)
+    assert.equal(first.contentIdentity.value, second.contentIdentity.value)
+    assert.equal(first.completeness.state, "truncated")
+    assert.equal(second.completeness.state, "truncated")
+    assert.ok(first.completeness.reasons.includes("max-entries"))
+    assert.ok(second.completeness.reasons.includes("max-entries"))
+  } finally {
+    await rm(rootA, { recursive: true, force: true })
+    await rm(rootB, { recursive: true, force: true })
+  }
+})
+
 test("K3-R2 inventory over the entry limit reports explicit truncation", async () => {
   const fs = fakeFs("/fixture", [
     { path: "a.txt", type: "file" },
@@ -268,12 +331,14 @@ test("K3-R2 generic ExecutionGateway.runCommand cannot spoof reserved git or rep
 
 test("K3-R2 malformed git.head output persists failure only", async () => {
   const gateway = new ExecutionGateway(fakeFs("/fixture", []), repositoryIntelligenceReadPolicy())
-  setGatewayProcessOutput(gateway, "not-a-git-object\n")
+  assert.equal(Object.prototype.hasOwnProperty.call(gateway, "processRunner"), false)
   const statuses: string[] = []
-  await assert.rejects(
-    () => gateway.gitHead(receiptRecorder(statuses)),
-    /did not return a full object id/,
-  )
+  await withGitProcessOutput("not-a-git-object\n", "", async () => {
+    await assert.rejects(
+      () => gateway.gitHead(receiptRecorder(statuses)),
+      /did not return a full object id/,
+    )
+  })
   assert.deepEqual(statuses, ["failure"])
 })
 
@@ -283,12 +348,13 @@ test("K3-R2 malformed or mismatched git.hash-object output persists failure only
       fakeFs("/fixture", [{ path: "a.txt", type: "file" }]),
       repositoryIntelligenceReadPolicy(),
     )
-    setGatewayProcessOutput(gateway, stdout)
     const statuses: string[] = []
-    await assert.rejects(
-      () => gateway.gitHashObjects(["a.txt"], receiptRecorder(statuses)),
-      /git hash-object/,
-    )
+    await withGitProcessOutput(stdout, "", async () => {
+      await assert.rejects(
+        () => gateway.gitHashObjects(["a.txt"], receiptRecorder(statuses)),
+        /git hash-object/,
+      )
+    })
     assert.deepEqual(statuses, ["failure"])
   }
 })
@@ -296,11 +362,12 @@ test("K3-R2 malformed or mismatched git.hash-object output persists failure only
 test("K3-R2 valid git.head and git.hash-object persist success receipts", async () => {
   const headGateway = new ExecutionGateway(fakeFs("/fixture", []), repositoryIntelligenceReadPolicy())
   const headObjectId = "a".repeat(40)
-  setGatewayProcessOutput(headGateway, `${headObjectId}\n`)
   const headStatuses: string[] = []
-  const headResult = await headGateway.gitHead(receiptRecorder(headStatuses))
-  assert.equal(headResult.head, headObjectId)
-  assert.equal(headResult.receipt.result.status, "success")
+  await withGitProcessOutput(`${headObjectId}\n`, "", async () => {
+    const headResult = await headGateway.gitHead(receiptRecorder(headStatuses))
+    assert.equal(headResult.head, headObjectId)
+    assert.equal(headResult.receipt.result.status, "success")
+  })
   assert.deepEqual(headStatuses, ["success"])
 
   const hashGateway = new ExecutionGateway(
@@ -308,11 +375,12 @@ test("K3-R2 valid git.head and git.hash-object persist success receipts", async 
     repositoryIntelligenceReadPolicy(),
   )
   const fileObjectId = "b".repeat(40)
-  setGatewayProcessOutput(hashGateway, `${fileObjectId}\n`)
   const hashStatuses: string[] = []
-  const hashResult = await hashGateway.gitHashObjects(["a.txt"], receiptRecorder(hashStatuses))
-  assert.deepEqual(hashResult.objects, [{ path: "a.txt", gitObjectId: fileObjectId }])
-  assert.equal(hashResult.receipt.result.status, "success")
+  await withGitProcessOutput(`${fileObjectId}\n`, "", async () => {
+    const hashResult = await hashGateway.gitHashObjects(["a.txt"], receiptRecorder(hashStatuses))
+    assert.deepEqual(hashResult.objects, [{ path: "a.txt", gitObjectId: fileObjectId }])
+    assert.equal(hashResult.receipt.result.status, "success")
+  })
   assert.deepEqual(hashStatuses, ["success"])
 })
 

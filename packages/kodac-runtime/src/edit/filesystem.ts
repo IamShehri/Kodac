@@ -62,6 +62,10 @@ function positiveInteger(name: string, value: number): void {
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`)
 }
 
+function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
 function portableRelative(root: string, candidate: string): string {
   const rel = relative(root, candidate)
   return rel ? rel.split(sep).join("/") : "."
@@ -148,7 +152,7 @@ export class NodeWorkspaceFileSystem implements WorkspaceFileSystem {
     const entries: WorkspaceEntry[] = []
     const walk = async (directory: string, depth: number): Promise<void> => {
       if (entries.length >= maxEntries) return
-      const children = (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))
+      const children = (await readdir(directory, { withFileTypes: true })).sort((a, b) => compareCodeUnits(a.name, b.name))
       for (const child of children) {
         if (entries.length >= maxEntries) return
         if (DEFAULT_IGNORED_NAMES.has(child.name)) continue
