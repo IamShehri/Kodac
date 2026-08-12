@@ -175,13 +175,13 @@ test("K3-R5 keeps task relevance separate from evidence truth class", () => {
   assert.equal(heuristic.evidenceClass, "heuristic-inference")
 })
 
-test("K3-R5 preserves canonical empty heuristic provenance instead of inventing provenance", () => {
+test("K3-R5 preserves item provenance without laundering unrelated snapshot-source receipts", () => {
   const bundle = buildContextBundle({ request: request(), snapshot: snapshot() })
   const heuristic = bundle.items.find((item) => item.evidenceClass === "heuristic-inference")
   assert.ok(heuristic)
   assert.deepEqual(heuristic.provenanceRefs, [])
   assert.ok(bundle.provenanceRefs.includes("receipt:git-status"))
-  assert.ok(bundle.provenanceRefs.includes("receipt:git-status-post"))
+  assert.equal(bundle.provenanceRefs.includes("receipt:git-status-post"), false)
 })
 
 test("K3-R5 treats prompt-injection-shaped repository text as inert untrusted data", () => {
@@ -225,7 +225,24 @@ test("K3-R5 propagates upstream R4 truncation instead of claiming complete conte
   const bundle = buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [truncated] })
   assert.equal(bundle.completeness.state, "truncated")
   assert.ok(bundle.completeness.reasons.includes("source-input-limit"))
-  assert.ok(bundle.completeness.omittedAtLeast >= 5)
+  assert.equal(bundle.completeness.omittedAtLeast, 5)
+})
+
+test("K3-R5 preserves a conservative lower bound across multiple truncated R4 sources", () => {
+  const first = structuralResult({
+    candidateFiles: { included: 2, omitted: 5_000, identity: "7".repeat(64) },
+    completeness: { state: "truncated", reasons: ["candidate-file-limit"], omittedAtLeast: 5_000 },
+  })
+  const second = structuralResult({
+    resultIdentity: "4".repeat(64),
+    candidateFiles: { included: 2, omitted: 7_000, identity: "8".repeat(64) },
+    completeness: { state: "truncated", reasons: ["candidate-file-limit"], omittedAtLeast: 7_000 },
+    matches: [{ path: "src/widget.ts", line: 8, column: 1, text: "Widget", evidenceClass: "parser-derived" }],
+  })
+  const bundle = buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [first, second] })
+  assert.equal(bundle.completeness.state, "truncated")
+  assert.ok(bundle.completeness.reasons.includes("source-input-limit"))
+  assert.equal(bundle.completeness.omittedAtLeast, 7_000)
 })
 
 test("K3-R5 excludes model hypotheses and exposes the omission", () => {
@@ -242,13 +259,19 @@ test("K3-R5 excludes model hypotheses and exposes the omission", () => {
   assert.ok(bundle.completeness.omittedAtLeast >= 1)
 })
 
-test("K3-R5 fails closed for stale, partial, truncated, and unsupported snapshots", () => {
+test("K3-R5 fails closed for stale, partial, truncated, unsupported, or malformed snapshots", () => {
   assert.throws(() => buildContextBundle({ request: request(), snapshot: snapshot({ freshness: "stale" }) }), /stale repository snapshot/)
   assert.throws(() => buildContextBundle({ request: request(), snapshot: snapshot({ completeness: { state: "partial", reasons: ["fixture"], omittedAtLeast: 1 } }) }), /requires a complete/)
   assert.throws(() => buildContextBundle({ request: request(), snapshot: snapshot({ completeness: { state: "truncated", reasons: ["fixture"], omittedAtLeast: 1 } }) }), /requires a complete/)
+  assert.throws(() => buildContextBundle({ request: request(), snapshot: snapshot({ completeness: { state: "complete", reasons: ["contradiction"], omittedAtLeast: 1 } }) }), /malformed complete snapshot metadata/)
+
   const unsupported = snapshot() as unknown as RepositorySnapshot & { version: string }
   unsupported.version = "k3-r2-snapshot-v999"
   assert.throws(() => buildContextBundle({ request: request(), snapshot: unsupported as RepositorySnapshot }), /Unsupported repository snapshot version/)
+
+  const wrongScheme = snapshot() as unknown as RepositorySnapshot & { repositoryIdentity: { scheme: string; scope: string; value: string } }
+  wrongScheme.repositoryIdentity = { scheme: "wrong", scope: "workspace-local", value: REPOSITORY_ID }
+  assert.throws(() => buildContextBundle({ request: request(), snapshot: wrongScheme as RepositorySnapshot }), /canonical K3-R2 repository identity scheme/)
 })
 
 test("K3-R5 rejects mixed or stale R4 structural results", () => {
@@ -264,6 +287,17 @@ test("K3-R5 rejects mixed or stale R4 structural results", () => {
       pattern,
     )
   }
+})
+
+test("K3-R5 rejects contradictory R4 completeness metadata", () => {
+  const contradictory = structuralResult({
+    candidateFiles: { included: 2, omitted: 1, identity: "7".repeat(64) },
+    completeness: { state: "complete", reasons: [], omittedAtLeast: 0 },
+  })
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: snapshot(), structuralResults: [contradictory] }),
+    /contradictory complete metadata/,
+  )
 })
 
 test("K3-R5 rejects malformed or unbounded requests", () => {
