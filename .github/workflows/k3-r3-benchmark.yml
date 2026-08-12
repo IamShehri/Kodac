@@ -59,17 +59,17 @@ jobs:
           root="$RUNNER_TEMP/kodac-k3-r3-candidates"
           mkdir -p "$root/ast-grep" "$root/tree-sitter" "$root/scip"
 
-          curl --fail --location --proto '=https' --tlsv1.2 \
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 4 --retry-all-errors --retry-delay 2 \
             "$AST_GREP_URL" -o "$root/ast-grep.zip"
           printf '%s  %s\n' "$AST_GREP_SHA256" "$root/ast-grep.zip" | sha256sum -c -
           unzip -q "$root/ast-grep.zip" -d "$root/ast-grep"
 
-          curl --fail --location --proto '=https' --tlsv1.2 \
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 4 --retry-all-errors --retry-delay 2 \
             "$TREE_SITTER_URL" -o "$root/tree-sitter.zip"
           printf '%s  %s\n' "$TREE_SITTER_SHA256" "$root/tree-sitter.zip" | sha256sum -c -
           unzip -q "$root/tree-sitter.zip" -d "$root/tree-sitter"
 
-          curl --fail --location --proto '=https' --tlsv1.2 \
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 4 --retry-all-errors --retry-delay 2 \
             "$SCIP_URL" -o "$root/scip.tar.gz"
           printf '%s  %s\n' "$SCIP_SHA256" "$root/scip.tar.gz" | sha256sum -c -
           tar -xzf "$root/scip.tar.gz" -C "$root/scip"
