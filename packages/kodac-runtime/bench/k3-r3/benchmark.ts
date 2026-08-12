@@ -190,6 +190,20 @@ function verifyExecutableDigest(
   return { realPath, sha256: measuredSha256 }
 }
 
+function verifyDistinctCandidateExecutables(
+  candidates: Array<{ label: string; executable: VerifiedExecutable }>,
+): void {
+  const realPaths = new Set(candidates.map((item) => item.executable.realPath))
+  const digests = new Set(candidates.map((item) => item.executable.sha256))
+  if (realPaths.size !== candidates.length || digests.size !== candidates.length) {
+    throw new Error(
+      `Candidate executable identities must be distinct: ${candidates
+        .map((item) => `${item.label}=${item.executable.realPath}:${item.executable.sha256}`)
+        .join(", ")}`,
+    )
+  }
+}
+
 function normalizeRelativePath(input: string, fixtureRoot: string): string {
   const slashPath = input.replaceAll("\\", "/")
   if (!slashPath || slashPath.startsWith("/") || /^[A-Za-z]:\//.test(slashPath)) {
@@ -544,6 +558,11 @@ function main(): void {
     "Tree-sitter",
   )
   const scipExecutable = verifyExecutableDigest(scipBin, scipExpectedBinSha, "SCIP")
+  verifyDistinctCandidateExecutables([
+    { label: "ast-grep", executable: astGrepExecutable },
+    { label: "Tree-sitter", executable: treeSitterExecutable },
+    { label: "SCIP", executable: scipExecutable },
+  ])
 
   const manifestLogicalPath = resolve(fixtureRoot, "manifest.json")
   const manifestPath = realContainedPath(fixtureRoot, manifestLogicalPath, "fixture manifest")
@@ -604,6 +623,18 @@ function main(): void {
     treeSitter: candidateIdentity(treeSitterExecutable.realPath, fixtureRoot),
     scip: candidateIdentity(scipExecutable.realPath, fixtureRoot),
     lsp: `protocol-spec-${lspSpecVersion}-no-server-executed`,
+  }
+  const expectedCandidateIdentityOutput = {
+    astGrep: `ast-grep ${astGrepVersion}`,
+    treeSitter: `tree-sitter ${treeSitterVersion}`,
+    scip: `scip version v${scipVersion}`,
+  }
+  for (const candidate of ["astGrep", "treeSitter", "scip"] as const) {
+    if (candidateIdentityOutput[candidate] !== expectedCandidateIdentityOutput[candidate]) {
+      throw new Error(
+        `${candidate} version identity mismatch: expected ${expectedCandidateIdentityOutput[candidate]}, got ${candidateIdentityOutput[candidate]}`,
+      )
+    }
   }
 
   const queryConfigs = [
@@ -825,6 +856,8 @@ function main(): void {
       canonicalBaseIdentityGuard: true,
       exactHeadCheckoutGuard: true,
       candidateExecutableDigestGuard: true,
+      candidateExecutableDistinctnessGuard: true,
+      candidateVersionIdentityGuard: true,
       realpathWorkspaceContainmentGuard: true,
       perEntryRealpathContainmentGuard: true,
       symlinkTargetContainmentGuard: true,
