@@ -109,23 +109,113 @@ jobs:
           printf '%s  %s\n' "$SCIP_BIN_SHA256" "$scip_bin" | sha256sum -c -
 
           {
-            printf 'AST_GREP_BIN=%s\n' "$ast_bin"
-            printf 'TREE_SITTER_BIN=%s\n' "$tree_bin"
-            printf 'SCIP_BIN=%s\n' "$scip_bin"
+            printf 'K3_R3_DOWNLOADED_AST_GREP_BIN=%s\n' "$ast_bin"
+            printf 'K3_R3_DOWNLOADED_TREE_SITTER_BIN=%s\n' "$tree_bin"
+            printf 'K3_R3_DOWNLOADED_SCIP_BIN=%s\n' "$scip_bin"
           } >> "$GITHUB_ENV"
 
-      - name: Run bounded K3-R3 benchmark
+      - name: Prepare unprivileged read-only benchmark sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bench_user="kodacbench"
+          sandbox="/tmp/kodac-k3-r3-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          canonical_fixture="$GITHUB_WORKSPACE/packages/kodac-runtime/test/fixtures/k3-r1"
+
+          if id "$bench_user" >/dev/null 2>&1; then
+            printf 'Unexpected pre-existing benchmark user: %s\n' "$bench_user" >&2
+            exit 1
+          fi
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin "$bench_user"
+          bench_uid="$(id -u "$bench_user")"
+          bench_gid="$(id -g "$bench_user")"
+
+          sudo install -d -o root -g root -m 0755 "$sandbox" "$sandbox/bin" "$sandbox/fixture"
+          sudo install -d -o "$bench_uid" -g "$bench_gid" -m 0700 "$sandbox/result" "$sandbox/home"
+
+          sudo cp -a "$canonical_fixture/." "$sandbox/fixture/"
+          sudo chown -R root:root "$sandbox/fixture"
+          sudo find "$sandbox/fixture" -type d -exec chmod 0555 {} +
+          sudo find "$sandbox/fixture" -type f -exec chmod 0444 {} +
+
+          sudo install -o root -g root -m 0555 "$K3_R3_DOWNLOADED_AST_GREP_BIN" "$sandbox/bin/ast-grep"
+          sudo install -o root -g root -m 0555 "$K3_R3_DOWNLOADED_TREE_SITTER_BIN" "$sandbox/bin/tree-sitter"
+          sudo install -o root -g root -m 0555 "$K3_R3_DOWNLOADED_SCIP_BIN" "$sandbox/bin/scip"
+
+          node_bin="$(command -v node)"
+          test -x "$node_bin"
+          sudo -u "$bench_user" "$node_bin" --version >/dev/null
+
+          sudo -u "$bench_user" env HOME="$sandbox/home" PATH="/usr/bin:/bin" \
+            git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          fixture_probe="$sandbox/fixture/.kodac-k3-r3-write-probe"
+          workspace_probe="$GITHUB_WORKSPACE/.kodac-k3-r3-write-probe"
+          if sudo -u "$bench_user" touch "$fixture_probe" 2>/dev/null; then
+            sudo rm -f "$fixture_probe"
+            printf 'Read-only execution fixture probe unexpectedly succeeded\n' >&2
+            exit 1
+          fi
+          if sudo -u "$bench_user" touch "$workspace_probe" 2>/dev/null; then
+            sudo rm -f "$workspace_probe"
+            printf 'Read-only workspace probe unexpectedly succeeded\n' >&2
+            exit 1
+          fi
+
+          {
+            printf 'K3_R3_BENCH_USER=%s\n' "$bench_user"
+            printf 'K3_R3_EXPECTED_EXECUTION_UID=%s\n' "$bench_uid"
+            printf 'K3_R3_SANDBOX_ROOT=%s\n' "$sandbox"
+            printf 'K3_R3_SANDBOX_HOME=%s\n' "$sandbox/home"
+            printf 'K3_R3_CANONICAL_FIXTURE_ROOT=%s\n' "$canonical_fixture"
+            printf 'K3_R3_FIXTURE_ROOT=%s\n' "$sandbox/fixture"
+            printf 'K3_R3_RESULT_PATH=%s\n' "$sandbox/result/k3-r3-results.json"
+            printf 'K3_R3_NODE_BIN=%s\n' "$node_bin"
+            printf 'AST_GREP_BIN=%s\n' "$sandbox/bin/ast-grep"
+            printf 'TREE_SITTER_BIN=%s\n' "$sandbox/bin/tree-sitter"
+            printf 'SCIP_BIN=%s\n' "$sandbox/bin/scip"
+          } >> "$GITHUB_ENV"
+
+      - name: Run bounded K3-R3 benchmark as unprivileged user
         shell: bash
         env:
-          K3_R3_RESULT_PATH: ${{ runner.temp }}/k3-r3-results.json
-          K3_R3_FIXTURE_ROOT: ${{ github.workspace }}/packages/kodac-runtime/test/fixtures/k3-r1
           K3_R3_WORKSPACE_ROOT: ${{ github.workspace }}
           K3_R3_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           K3_R3_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           K3_R3_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          node --experimental-strip-types packages/kodac-runtime/bench/k3-r3/benchmark.ts
+          sudo -u "$K3_R3_BENCH_USER" env \
+            HOME="$K3_R3_SANDBOX_HOME" \
+            PATH="/usr/bin:/bin" \
+            K3_R3_WORKSPACE_ROOT="$K3_R3_WORKSPACE_ROOT" \
+            K3_R3_CANONICAL_FIXTURE_ROOT="$K3_R3_CANONICAL_FIXTURE_ROOT" \
+            K3_R3_FIXTURE_ROOT="$K3_R3_FIXTURE_ROOT" \
+            K3_R3_RESULT_PATH="$K3_R3_RESULT_PATH" \
+            K3_R3_BASELINE_SHA="$K3_R3_BASELINE_SHA" \
+            K3_R3_HEAD_SHA="$K3_R3_HEAD_SHA" \
+            K3_R3_PR_BASE_SHA="$K3_R3_PR_BASE_SHA" \
+            K3_R3_PROTOCOL_ID="$K3_R3_PROTOCOL_ID" \
+            K3_R3_FIXTURE_MANIFEST_BLOB="$K3_R3_FIXTURE_MANIFEST_BLOB" \
+            K3_R3_RUN_ID="$K3_R3_RUN_ID" \
+            K3_R3_EXPECTED_EXECUTION_UID="$K3_R3_EXPECTED_EXECUTION_UID" \
+            AST_GREP_BIN="$AST_GREP_BIN" \
+            AST_GREP_VERSION="$AST_GREP_VERSION" \
+            AST_GREP_SHA256="$AST_GREP_SHA256" \
+            AST_GREP_BIN_SHA256="$AST_GREP_BIN_SHA256" \
+            TREE_SITTER_BIN="$TREE_SITTER_BIN" \
+            TREE_SITTER_VERSION="$TREE_SITTER_VERSION" \
+            TREE_SITTER_SHA256="$TREE_SITTER_SHA256" \
+            TREE_SITTER_BIN_SHA256="$TREE_SITTER_BIN_SHA256" \
+            TREE_SITTER_TYPESCRIPT_COMMIT="$TREE_SITTER_TYPESCRIPT_COMMIT" \
+            SCIP_BIN="$SCIP_BIN" \
+            SCIP_VERSION="$SCIP_VERSION" \
+            SCIP_SHA256="$SCIP_SHA256" \
+            SCIP_BIN_SHA256="$SCIP_BIN_SHA256" \
+            LSP_SPEC_VERSION="$LSP_SPEC_VERSION" \
+            "$K3_R3_NODE_BIN" --experimental-strip-types \
+            "$GITHUB_WORKSPACE/packages/kodac-runtime/bench/k3-r3/benchmark.ts"
 
       - name: Attest checkout unchanged after benchmark
         if: ${{ always() }}
@@ -144,6 +234,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: k3-r3-benchmark-evidence-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/k3-r3-results.json
+          path: /tmp/kodac-k3-r3-${{ github.run_id }}-${{ github.run_attempt }}/result/k3-r3-results.json
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Remove disposable benchmark sandbox
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf "/tmp/kodac-k3-r3-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
