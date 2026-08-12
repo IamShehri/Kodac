@@ -90,7 +90,9 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFileSync, readdirSync } from "node:fs"
           const root = "packages/kodac-runtime/src/context-engine"
-          for (const name of readdirSync(root).filter((entry) => entry.endsWith(".ts")).sort()) {
+          for (const name of readdirSync(root, { recursive: true })
+            .filter((entry) => entry.endsWith(".ts"))
+            .sort()) {
             const source = readFileSync(`${root}/${name}`, "utf8")
             const specifiers = [
               ...source.matchAll(/\bfrom\s+["']([^"']+)["']/g),
@@ -106,7 +108,11 @@ jobs:
 
       - name: Run full runtime tests including K3-R5 Context Engine
         working-directory: packages/kodac-runtime
-        run: npm test
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f test/k3-r5-context-engine.test.ts
+          node --experimental-strip-types --test test/*.test.ts
 
       - name: Attest checkout unchanged after Context Engine tests
         if: ${{ always() }}
