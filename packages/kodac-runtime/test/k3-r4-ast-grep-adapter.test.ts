@@ -69,10 +69,11 @@ test("K3-R4 scope is canonical and workspace-relative", () => {
 })
 
 test("candidate selection is deterministic, TypeScript-only, and explicitly truncated", () => {
-  const inventory = Array.from({ length: 520 }, (_, index) => ({
+  const inventory: Array<{ path: string; type: "file" | "directory" | "symlink" }> = [{ path: "src", type: "directory" }]
+  inventory.push(...Array.from({ length: 520 }, (_, index) => ({
     path: `src/${String(index).padStart(4, "0")}.ts`,
     type: "file" as const,
-  }))
+  })))
   inventory.push({ path: "src/not-typescript.js", type: "file" })
   const selected = selectK3R4TypeScriptCandidates(fixtureSnapshot({ inventory }), "src")
   assert.equal(selected.paths.length, 512)
@@ -84,14 +85,22 @@ test("candidate selection is deterministic, TypeScript-only, and explicitly trun
 })
 
 test("candidate selection makes argument-byte truncation observable", () => {
-  const inventory = Array.from({ length: 500 }, (_, index) => ({
+  const inventory: Array<{ path: string; type: "file" | "directory" | "symlink" }> = [{ path: "src", type: "directory" }]
+  inventory.push(...Array.from({ length: 500 }, (_, index) => ({
     path: `src/${"x".repeat(150)}-${String(index).padStart(4, "0")}.ts`,
     type: "file" as const,
-  }))
+  })))
   const selected = selectK3R4TypeScriptCandidates(fixtureSnapshot({ inventory }), "src")
   assert.ok(selected.paths.length < 500)
   assert.ok(selected.omitted > 0)
   assert.ok(selected.reasons.includes("candidate-argument-byte-limit"))
+})
+
+test("candidate selection fails closed on an unknown or symlink scope", () => {
+  const snapshot = fixtureSnapshot({ inventory: [{ path: "src", type: "directory" }, { path: "src/a.ts", type: "file" }] })
+  assert.throws(() => selectK3R4TypeScriptCandidates(snapshot, "missing"), /not present/)
+  const symlinkSnapshot = fixtureSnapshot({ inventory: [{ path: "linked", type: "symlink" }] })
+  assert.throws(() => selectK3R4TypeScriptCandidates(symlinkSnapshot, "linked"), /must not be a symlink/)
 })
 
 test("ast-grep compact output parser fails closed on malformed, rewrite, and reversed-range output", () => {
