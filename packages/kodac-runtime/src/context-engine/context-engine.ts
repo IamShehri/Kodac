@@ -39,6 +39,7 @@ const HARD_MAX_STRUCTURAL_MATCHES = 4_096
 const HARD_MAX_ITEM_TEXT_BYTES = 64 * 1024
 const HARD_MAX_PROVENANCE_REFS = 256
 const HARD_MAX_PROVENANCE_REF_BYTES = 1_024
+const HARD_MAX_CANDIDATE_FILES = 4_096
 
 interface NormalizedRequest {
   version: typeof K3_R5_CONTEXT_REQUEST_VERSION
@@ -83,6 +84,13 @@ function boundedInteger(name: string, value: number | undefined, fallback: numbe
     throw new Error(`${name} must be a positive integer <= ${maximum}`)
   }
   return resolved
+}
+
+function nonNegativeInteger(name: string, value: unknown, maximum: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > maximum) {
+    throw new Error(`${name} must be an integer between 0 and ${maximum}`)
+  }
+  return value
 }
 
 function utf8Bytes(value: string): number {
@@ -162,14 +170,26 @@ function validateProvenanceRefs(values: unknown, label: string): string[] {
 
 function assertSnapshot(snapshot: RepositorySnapshot): void {
   if (snapshot.version !== K3_R2_SNAPSHOT_CONTRACT_VERSION) throw new Error(`Unsupported repository snapshot version: ${String(snapshot.version)}`)
+  if (snapshot.repositoryIdentity?.scheme !== "workspace-root-sha256-v1" || snapshot.repositoryIdentity.scope !== "workspace-local") {
+    throw new Error("K3-R5 requires the canonical K3-R2 repository identity scheme")
+  }
+  if (snapshot.contentIdentity?.scheme !== "sha256-canonical-repository-content-v1") {
+    throw new Error("K3-R5 requires the canonical K3-R2 content identity scheme")
+  }
+  if (snapshot.snapshotIdentity?.scheme !== "sha256-k3-r2-snapshot-v1") {
+    throw new Error("K3-R5 requires the canonical K3-R2 snapshot identity scheme")
+  }
   if (snapshot.freshness !== "current") throw new Error("K3-R5 refuses a stale repository snapshot")
   if (snapshot.completeness?.state !== "complete") {
     throw new Error(`K3-R5 requires a complete repository snapshot; got ${String(snapshot.completeness?.state)}`)
   }
+  if (!Array.isArray(snapshot.completeness.reasons) || snapshot.completeness.reasons.length !== 0 || snapshot.completeness.omittedAtLeast !== 0) {
+    throw new Error("K3-R5 rejects malformed complete snapshot metadata")
+  }
   if (!isFullGitObjectId(snapshot.gitHead)) throw new Error("K3-R5 requires a full Git HEAD object id")
-  assertDigest("repositoryIdentity", snapshot.repositoryIdentity?.value)
-  assertDigest("contentIdentity", snapshot.contentIdentity?.value)
-  assertDigest("snapshotIdentity", snapshot.snapshotIdentity?.value)
+  assertDigest("repositoryIdentity", snapshot.repositoryIdentity.value)
+  assertDigest("contentIdentity", snapshot.contentIdentity.value)
+  assertDigest("snapshotIdentity", snapshot.snapshotIdentity.value)
   if (!Array.isArray(snapshot.evidence) || snapshot.evidence.length > HARD_MAX_EVIDENCE_INPUTS) {
     throw new Error(`K3-R5 snapshot evidence exceeds ${HARD_MAX_EVIDENCE_INPUTS} items`)
   }
@@ -196,13 +216,7 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
       throw new Error(`snapshot.evidence[${index}] has an unbound source identity`)
     }
     validateProvenanceRefs(evidence.source.provenanceRefs, `snapshot.evidence[${index}].source.provenanceRefs`)
-    if (![
-      "precise-static",
-      "parser-derived",
-      "git-derived",
-      "heuristic-inference",
-      "model-hypothesis",
-    ].includes(evidence.evidenceClass)) {
+    if (!["precise-static", "parser-derived", "git-derived", "heuristic-inference", "model-hypothesis"].includes(evidence.evidenceClass)) {
       throw new Error(`snapshot.evidence[${index}] has an unsupported evidence class`)
     }
     if (!evidence.claim || !["working-tree-change", "architecture-candidate"].includes(evidence.claim.kind)) {
@@ -216,34 +230,66 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
 }
 
 function assertStructuralResult(result: AstGrepStructuralQueryResult, snapshot: RepositorySnapshot, index: number): void {
-  if (result.version !== K3_R4_AST_GREP_QUERY_CONTRACT_VERSION) throw new Error(`structuralResults[${index}] has an unsupported contract version`)
-  if (result.query?.kind !== "find_symbol_candidates") throw new Error(`structuralResults[${index}] has an unsupported query kind`)
-  if (result.freshness !== "current") throw new Error(`structuralResults[${index}] is stale`)
-  if (result.repositoryIdentity !== snapshot.repositoryIdentity.value) throw new Error(`structuralResults[${index}] repository identity mismatch`)
-  if (result.snapshotIdentity !== snapshot.snapshotIdentity.value) throw new Error(`structuralResults[${index}] snapshot identity mismatch`)
-  if (result.contentIdentity !== snapshot.contentIdentity.value) throw new Error(`structuralResults[${index}] content identity mismatch`)
-  if (result.deterministic !== true) throw new Error(`structuralResults[${index}] is not deterministic`)
-  assertDigest(`structuralResults[${index}].resultIdentity`, result.resultIdentity)
-  if (result.source?.adapterId !== K3_R4_AST_GREP_ADAPTER_ID || result.source.semanticStrength !== "structural-only-not-compiler-resolved") {
-    throw new Error(`structuralResults[${index}] has an unsupported structural source identity`)
+  const label = `structuralResults[${index}]`
+  if (result.version !== K3_R4_AST_GREP_QUERY_CONTRACT_VERSION) throw new Error(`${label} has an unsupported contract version`)
+  if (result.query?.kind !== "find_symbol_candidates") throw new Error(`${label} has an unsupported query kind`)
+  if (result.freshness !== "current") throw new Error(`${label} is stale`)
+  if (result.repositoryIdentity !== snapshot.repositoryIdentity.value) throw new Error(`${label} repository identity mismatch`)
+  if (result.snapshotIdentity !== snapshot.snapshotIdentity.value) throw new Error(`${label} snapshot identity mismatch`)
+  if (result.contentIdentity !== snapshot.contentIdentity.value) throw new Error(`${label} content identity mismatch`)
+  if (result.deterministic !== true) throw new Error(`${label} is not deterministic`)
+  assertDigest(`${label}.resultIdentity`, result.resultIdentity)
+
+  if (
+    result.source?.adapterId !== K3_R4_AST_GREP_ADAPTER_ID
+    || result.source.candidate !== "ast-grep"
+    || result.source.upstreamRepository !== "ast-grep/ast-grep"
+    || result.source.upstreamTag !== "0.45.1"
+    || result.source.upstreamCommit !== "dc3d655b9edf3b2bc266d9bc46eb60f18e66b818"
+    || result.source.measuredVersion !== "ast-grep 0.45.1"
+    || result.source.platformQualification !== "linux-x64-k3-r3"
+    || result.source.executableSha256 !== "6a66162e0a2447af4b7524ee04195239eb1911d07f4868f918909e7d4f453eea"
+    || result.source.kodacConfigSha256 !== "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    || result.source.semanticStrength !== "structural-only-not-compiler-resolved"
+  ) {
+    throw new Error(`${label} has an unsupported structural source identity`)
   }
-  validateProvenanceRefs(result.source.provenanceRefs, `structuralResults[${index}].source.provenanceRefs`)
-  validateCanonicalPath(result.query.scope === "." ? "scope-root" : result.query.scope, `structuralResults[${index}].query.scope`)
-  validateSymbolHint(result.query.symbol, `structuralResults[${index}].query.symbol`)
+  validateProvenanceRefs(result.source.provenanceRefs, `${label}.source.provenanceRefs`)
+  if (result.query.scope !== ".") validateCanonicalPath(result.query.scope, `${label}.query.scope`)
+  validateSymbolHint(result.query.symbol, `${label}.query.symbol`)
+
+  if (!result.candidateFiles || typeof result.candidateFiles !== "object") throw new Error(`${label} has invalid candidateFiles metadata`)
+  nonNegativeInteger(`${label}.candidateFiles.included`, result.candidateFiles.included, HARD_MAX_CANDIDATE_FILES)
+  nonNegativeInteger(`${label}.candidateFiles.omitted`, result.candidateFiles.omitted, HARD_MAX_STRUCTURAL_MATCHES)
+  assertDigest(`${label}.candidateFiles.identity`, result.candidateFiles.identity)
+
   if (!result.completeness || !["complete", "truncated"].includes(result.completeness.state)) {
-    throw new Error(`structuralResults[${index}] has invalid completeness metadata`)
+    throw new Error(`${label} has invalid completeness metadata`)
   }
-  if (!Number.isInteger(result.completeness.omittedAtLeast) || result.completeness.omittedAtLeast < 0) {
-    throw new Error(`structuralResults[${index}] has invalid omittedAtLeast metadata`)
+  const omitted = nonNegativeInteger(`${label}.completeness.omittedAtLeast`, result.completeness.omittedAtLeast, HARD_MAX_STRUCTURAL_MATCHES)
+  if (!Array.isArray(result.completeness.reasons) || result.completeness.reasons.some((reason) => ![
+    "candidate-file-limit",
+    "candidate-argument-byte-limit",
+    "max-results",
+  ].includes(reason))) {
+    throw new Error(`${label} has invalid completeness reasons`)
   }
-  if (!Array.isArray(result.matches)) throw new Error(`structuralResults[${index}].matches must be an array`)
-  for (const [matchIndex, match] of result.matches.entries()) {
-    validateCanonicalPath(match.path, `structuralResults[${index}].matches[${matchIndex}].path`)
-    if (match.evidenceClass !== "parser-derived") throw new Error(`structuralResults[${index}].matches[${matchIndex}] must remain parser-derived`)
-    if (!Number.isInteger(match.line) || match.line <= 0 || !Number.isInteger(match.column) || match.column <= 0) {
-      throw new Error(`structuralResults[${index}].matches[${matchIndex}] has invalid coordinates`)
+  if (result.completeness.state === "complete") {
+    if (omitted !== 0 || result.completeness.reasons.length !== 0 || result.candidateFiles.omitted !== 0) {
+      throw new Error(`${label} has contradictory complete metadata`)
     }
-    assertBoundedString(`structuralResults[${index}].matches[${matchIndex}].text`, match.text, HARD_MAX_ITEM_TEXT_BYTES)
+  } else if (omitted === 0 || result.completeness.reasons.length === 0) {
+    throw new Error(`${label} has contradictory truncated metadata`)
+  }
+
+  if (!Array.isArray(result.matches)) throw new Error(`${label}.matches must be an array`)
+  for (const [matchIndex, match] of result.matches.entries()) {
+    validateCanonicalPath(match.path, `${label}.matches[${matchIndex}].path`)
+    if (match.evidenceClass !== "parser-derived") throw new Error(`${label}.matches[${matchIndex}] must remain parser-derived`)
+    if (!Number.isInteger(match.line) || match.line <= 0 || !Number.isInteger(match.column) || match.column <= 0) {
+      throw new Error(`${label}.matches[${matchIndex}] has invalid coordinates`)
+    }
+    assertBoundedString(`${label}.matches[${matchIndex}].text`, match.text, HARD_MAX_ITEM_TEXT_BYTES)
   }
 }
 
@@ -392,13 +438,14 @@ export function buildContextBundle(input: ContextEngineInput): ContextBundle {
   }
 
   const completenessReasons = new Set<ContextCompletenessReason>()
-  let omittedAtLeast = 0
+  let knownOmitted = 0
+  let sourceOmittedAtLeast = 0
   const candidates: CandidateItem[] = []
 
   for (const evidence of input.snapshot.evidence) {
     if (evidence.evidenceClass === "model-hypothesis") {
       completenessReasons.add("unsupported-evidence")
-      omittedAtLeast++
+      knownOmitted++
       continue
     }
     candidates.push(scoreItem(repositoryEvidenceItem(evidence), request))
@@ -407,7 +454,7 @@ export function buildContextBundle(input: ContextEngineInput): ContextBundle {
   for (const result of structuralResults) {
     if (result.completeness.state === "truncated") {
       completenessReasons.add("source-input-limit")
-      omittedAtLeast += Math.max(1, result.completeness.omittedAtLeast)
+      sourceOmittedAtLeast = Math.max(sourceOmittedAtLeast, result.completeness.omittedAtLeast)
     }
     for (const item of structuralItems(result)) candidates.push(scoreItem(item, request))
   }
@@ -424,12 +471,12 @@ export function buildContextBundle(input: ContextEngineInput): ContextBundle {
   for (const candidate of ordered) {
     if (items.length >= request.maxItems) {
       completenessReasons.add("item-budget")
-      omittedAtLeast++
+      knownOmitted++
       continue
     }
     if (usedUtf8Bytes + candidate.contextUtf8Bytes > request.maxUtf8Bytes) {
       completenessReasons.add("byte-budget")
-      omittedAtLeast++
+      knownOmitted++
       continue
     }
     const { claimKind: _claimKind, ...item } = candidate
@@ -441,7 +488,7 @@ export function buildContextBundle(input: ContextEngineInput): ContextBundle {
   const completeness = {
     state: reasons.length > 0 ? "truncated" as const : "complete" as const,
     reasons,
-    omittedAtLeast,
+    omittedAtLeast: knownOmitted + sourceOmittedAtLeast,
   }
   const budget = {
     maxItems: request.maxItems,
