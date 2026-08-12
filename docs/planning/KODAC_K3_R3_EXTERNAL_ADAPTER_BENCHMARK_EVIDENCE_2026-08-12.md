@@ -62,27 +62,27 @@ Not authorized:
 | --- | --- |
 | Branch | `bench/k3-r3-external-adapter-evidence` |
 | Canonical base | `9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc` |
-| Benchmarked predecessor head | `bb28b9890ce7b228763461986145001e44d7550a` |
-| Governance run | `31633956056` — `SUCCESS` |
-| K2 runtime run | `31633956058` — `SUCCESS` |
-| Benchmark run | `31633956052` — rerun attempt — `SUCCESS` |
-| Benchmark run number | `20` |
-| Artifact id | `9156256575` |
-| Artifact name | `k3-r3-benchmark-evidence-bb28b9890ce7b228763461986145001e44d7550a` |
-| Artifact ZIP digest | `sha256:993752543c64199998e847b2561c59d6ee163289503e4311417f7a19919c6e4b` |
-| Raw `k3-r3-results.json` SHA-256 | `32171d28cb5b8ee851f6352f1fec1514a2090c2781a5d355d0581ec5fafba4b1` |
-| Canonical result identity | `28dbd3c69a666857d34073fc750ff5c750b704ea1149abc773ec709c3c7e5879` |
+| Benchmarked predecessor head | `f89cf2f0c0702accd064b8fa9638c9f0cc4a3623` |
+| Governance run | `31635771174` — `SUCCESS` |
+| K2 runtime run | `31635771183` — `SUCCESS` |
+| Benchmark run | `31635771190` — rerun attempt — `SUCCESS` |
+| Benchmark run number | `22` |
+| Artifact id | `9156910349` |
+| Artifact name | `k3-r3-benchmark-evidence-f89cf2f0c0702accd064b8fa9638c9f0cc4a3623` |
+| Artifact ZIP digest | `sha256:0230a6709c67d6e64a2fc8e486ba435381c8d33ea07e612bf945aeb5409bdb2f` |
+| Raw `k3-r3-results.json` SHA-256 | `cef5bbe2cb25b6cfe5610db5a99999fb9fd0fb3c74d00616c1780fa1b7a960e1` |
+| Canonical result identity | `3a3b025261a44cd97bd76201be1d68f043d7d1b70cebaf5bd301c928e51ba066` |
 | Overall result | `BENCHMARK_EVIDENCE_READY_FOR_REVIEW` |
 
 The artifact records:
 
 ```text
-benchmarkHead = bb28b9890ce7b228763461986145001e44d7550a
+benchmarkHead = f89cf2f0c0702accd064b8fa9638c9f0cc4a3623
 canonicalBaseline = 9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc
-checkedOutHead = bb28b9890ce7b228763461986145001e44d7550a
+checkedOutHead = f89cf2f0c0702accd064b8fa9638c9f0cc4a3623
 ```
 
-The first attempt of benchmark run `31633956052` failed before candidate execution because the Tree-sitter GitHub Release endpoint returned repeated HTTP `503` responses. The failed attempt preserved a clean workspace and produced no benchmark result. The bounded failed-job rerun on the identical Git head succeeded; no code change was made to convert that transient network failure into evidence.
+The first attempt of benchmark run `31635771190` failed before candidate execution because the ast-grep GitHub Release endpoint returned repeated HTTP `503` responses. The failed attempt preserved a clean workspace and produced no benchmark result. The bounded failed-job rerun on the identical Git head succeeded; no code change was made to convert that transient network failure into evidence.
 
 ## 4. Fail-closed identity, provenance, path, and freshness evidence
 
@@ -92,6 +92,8 @@ The inspected predecessor artifact records the following guards as true:
 canonicalBaseIdentityGuard = true
 exactHeadCheckoutGuard = true
 candidateExecutableDigestGuard = true
+candidateExecutableDistinctnessGuard = true
+candidateVersionIdentityGuard = true
 realpathWorkspaceContainmentGuard = true
 perEntryRealpathContainmentGuard = true
 symlinkTargetContainmentGuard = true
@@ -135,19 +137,21 @@ The previous literal `pathEscapesObserved: 0` field remains removed because succ
 
 The outer GitHub Actions workflow separately attests tracked, untracked, and ignored checkout state before and after execution.
 
-## 5. Candidate executable identity evidence
+## 5. Candidate executable and version identity evidence
 
 Candidate archives remain pinned by immutable release URL/version plus archive SHA-256. The workflow additionally requires **exactly one** executable match for each candidate and checks that executable against an independently committed expected SHA-256 before the harness runs.
 
+The harness then independently requires the three candidate executables to have distinct real paths **and** distinct executable SHA-256 values, preventing one binary or byte-identical copies from satisfying multiple candidate identities.
+
 Validated executable identities for the inspected predecessor are:
 
-| Candidate | Version | Executable SHA-256 |
-| --- | --- | --- |
-| ast-grep | `0.45.1` | `6a66162e0a2447af4b7524ee04195239eb1911d07f4868f918909e7d4f453eea` |
-| Tree-sitter CLI | `0.26.12` | `bb749301651689aeeec0bdbc7fa390a7f9ee21f249249de8cf0afa760b143e44` |
-| SCIP CLI | `0.9.0` | `c1f2e049b5b33b8de73e90212aeec4ad10d49be858d01f11c86386b5bfc53994` |
+| Candidate | Declared version | Measured identity output | Executable SHA-256 |
+| --- | --- | --- | --- |
+| ast-grep | `0.45.1` | `ast-grep 0.45.1` | `6a66162e0a2447af4b7524ee04195239eb1911d07f4868f918909e7d4f453eea` |
+| Tree-sitter CLI | `0.26.12` | `tree-sitter 0.26.12` | `bb749301651689aeeec0bdbc7fa390a7f9ee21f249249de8cf0afa760b143e44` |
+| SCIP CLI | `0.9.0` | `scip version v0.9.0` | `c1f2e049b5b33b8de73e90212aeec4ad10d49be858d01f11c86386b5bfc53994` |
 
-The executable-digest guard therefore no longer derives the “expected” hash from the same binary being checked.
+The harness fails closed unless those measured identity strings exactly match the declared versions. The executable-digest guard therefore does not derive the “expected” hash from the same binary being checked, and the version claim is not accepted merely because an environment variable says so.
 
 ## 6. ast-grep result
 
@@ -165,7 +169,7 @@ Measured on canonical K3-R1 gold evidence:
 | `add` structural occurrences | 5 | 5 | 5 | 1.0 | 1.0 |
 | `meaning` structural occurrence | 1 | 1 | 1 | 1.0 | 1.0 |
 
-Occurrence comparison is now keyed by exact `path:line:column`, not only `path:line`. Gold columns are deterministically derived from the canonical fixture source at the declared gold line and require exactly one identifier-boundary match on that line.
+Occurrence comparison is keyed by exact `path:line:column`, not only `path:line`. Gold columns are deterministically derived from the canonical fixture source at the declared gold line and require exactly one identifier-boundary match on that line.
 
 The inspected exact occurrences are:
 
@@ -216,7 +220,7 @@ vendor
 SECURITY REVIEW REQUIRED
 ```
 
-CLI archive and executable identity evidence are verified, but TypeScript parser execution remains outside the authorized execution-security envelope.
+CLI archive, executable digest, distinct executable identity, and measured version identity are verified, but TypeScript parser execution remains outside the authorized execution-security envelope.
 
 ### SCIP
 
@@ -224,7 +228,7 @@ CLI archive and executable identity evidence are verified, but TypeScript parser
 INSUFFICIENT EVIDENCE
 ```
 
-The CLI archive and executable identity are verified. The CLI consumes semantic indexes but does not itself create the TypeScript semantic index required for definition/reference evaluation. No concrete TypeScript indexer is authorized.
+The CLI archive, executable digest, distinct executable identity, and measured version identity are verified. The CLI consumes semantic indexes but does not itself create the TypeScript semantic index required for definition/reference evaluation. No concrete TypeScript indexer is authorized.
 
 ### LSP
 
@@ -261,19 +265,33 @@ Accepted Cubic findings were incorporated in successive fail-closed hardening st
 - exactly-one candidate binary selection;
 - independently pinned executable SHA-256 verification;
 - column-aware structural occurrence metrics;
-- accurate relabeling of the virtual symlink target path-string rejection evidence.
+- accurate relabeling of the virtual symlink target path-string rejection evidence;
+- distinct candidate executable realpath/digest enforcement;
+- measured candidate version identity binding.
 
-The six findings addressed by the latest predecessor evidence were raised against:
+The six findings raised against:
 
 ```text
 3808df90e810a9c97b770c6efe573cb10a893aa5
 ```
 
-and implemented by:
+were implemented by:
 
 ```text
 66dbb8a7a20ba7ebe6b73d147fb999038eb3dd2d
 bb28b9890ce7b228763461986145001e44d7550a
+```
+
+The two subsequent findings raised against:
+
+```text
+db74ac5908b4e8092ea386e49e050f70d53d72ed
+```
+
+were implemented by:
+
+```text
+f89cf2f0c0702accd064b8fa9638c9f0cc4a3623
 ```
 
 ## 10. Claim limits
@@ -299,7 +317,7 @@ A final exact-current-head certification must verify, on one identical PR head:
 2. `k2-runtime = SUCCESS`, including `k2-runtime-gate`;
 3. `k3-r3-benchmark = SUCCESS`;
 4. the uploaded artifact records that exact head and canonical base;
-5. executable pins, per-entry realpath containment, symlink containment, full-tree freshness, output-path containment, and measured workspace-mutation guards pass;
+5. executable pins, executable distinctness, measured version identity, per-entry realpath containment, symlink containment, full-tree freshness, output-path containment, and measured workspace-mutation guards pass;
 6. occurrence metrics use exact path/line/column identity;
 7. fresh Cubic exact-head review completes without valid unresolved findings;
 8. all review threads are resolved;
