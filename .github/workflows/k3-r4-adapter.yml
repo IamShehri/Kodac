@@ -55,7 +55,9 @@ jobs:
           test ! -s "$RUNNER_TEMP/k3-r4-status-before"
           test ! -s "$RUNNER_TEMP/k3-r4-diff-before"
 
-          mapfile -t changed < <(git diff --name-only "$K3_R4_BASELINE_SHA"...HEAD | LC_ALL=C sort)
+          git fetch --no-tags --depth=1 origin "$K3_R4_BASELINE_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$K3_R4_BASELINE_SHA"
+          mapfile -t changed < <(git diff --name-only "$K3_R4_BASELINE_SHA" HEAD | LC_ALL=C sort)
           test "${#changed[@]}" -gt 0
           if printf '%s\n' "${changed[@]}" | grep -Eq '(^|/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.(toml|lock))$'; then
             printf 'K3-R4 must not add or modify package/crate manifests or lockfiles\n' >&2
