@@ -338,9 +338,11 @@ A final exact-current-head certification must verify on one identical PR head:
 5. unprivileged execution, strict numeric execution-UID parsing, stripped checkout write bits, new-file and existing-file write-denial, executable identity, path/freshness, result-output TOCTOU, and mutation guards pass;
 6. exact path/line/column metrics remain correct;
 7. the measured ast-grep subprocess count is present and truthful;
-8. fresh Cubic exact-head review has zero valid unresolved findings;
+8. a fresh **independent exact-head review** has zero valid unresolved findings;
 9. all review threads are resolved;
 10. scope remains limited to the authorized three K3-R3 files and canonical main remains compatible with the authorized baseline.
+
+The independent reviewer is selected by the founder and is not required to be any specific commercial or paid review provider. Historical Cubic findings remain part of the review-hardening record, but final certification may be performed by another competent reviewer so long as the review is bound to the exact candidate head and checks the complete authorized three-file diff.
 
 Only then may the PR be marked **Ready for Founder Review**.
 
@@ -358,5 +360,5 @@ K3-R2: REMAINS CANONICAL TRUTH ANCHOR
 SOURCE INTAKE: NOT AUTHORIZED
 NEW KODAC DEPENDENCIES: NOT AUTHORIZED
 K3-R4+: NOT AUTHORIZED
-CURRENT COMMIT: REQUIRES EXTERNAL EXACT-HEAD CERTIFICATION AFTER COMMIT
+CURRENT COMMIT: REQUIRES INDEPENDENT EXACT-HEAD CERTIFICATION AFTER COMMIT
 ```
