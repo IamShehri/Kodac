@@ -195,13 +195,12 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
     throw new Error(`K3-R5 snapshot evidence exceeds ${HARD_MAX_EVIDENCE_INPUTS} items`)
   }
   if (!Array.isArray(snapshot.sources) || snapshot.sources.length > 64) throw new Error("K3-R5 snapshot sources must be a bounded array")
-  const sourceIds = new Set<string>()
+  const sourceRefs = new Map<string, Set<string>>()
   for (const [index, source] of snapshot.sources.entries()) {
     const id = assertBoundedString(`snapshot.sources[${index}].id`, source?.id, 256)
-    if (sourceIds.has(id)) throw new Error(`snapshot source identity replay mismatch: ${id}`)
+    if (sourceRefs.has(id)) throw new Error(`snapshot source identity replay mismatch: ${id}`)
     if (source?.kind !== "builtin") throw new Error(`snapshot.sources[${index}] has an unsupported source kind`)
-    validateProvenanceRefs(source.provenanceRefs, `snapshot.sources[${index}].provenanceRefs`)
-    sourceIds.add(id)
+    sourceRefs.set(id, new Set(validateProvenanceRefs(source.provenanceRefs, `snapshot.sources[${index}].provenanceRefs`)))
   }
   const evidenceIds = new Set<string>()
   for (const [index, evidence] of snapshot.evidence.entries()) {
@@ -213,14 +212,23 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
     }
     validateCanonicalPath(evidence.subjectPath, `snapshot.evidence[${index}].subjectPath`)
     const sourceId = assertBoundedString(`snapshot.evidence[${index}].source.id`, evidence.source?.id, 256)
-    if (evidence.source?.kind !== "builtin" || !sourceIds.has(sourceId)) {
+    const declaredRefs = sourceRefs.get(sourceId)
+    if (evidence.source?.kind !== "builtin" || !declaredRefs) {
       throw new Error(`snapshot.evidence[${index}] has an unbound source identity`)
     }
-    validateProvenanceRefs(evidence.source.provenanceRefs, `snapshot.evidence[${index}].source.provenanceRefs`)
-    if (!["precise-static", "parser-derived", "git-derived", "heuristic-inference", "model-hypothesis"].includes(evidence.evidenceClass)) {
-      throw new Error(`snapshot.evidence[${index}] has an unsupported evidence class`)
+    const evidenceRefs = validateProvenanceRefs(evidence.source.provenanceRefs, `snapshot.evidence[${index}].source.provenanceRefs`)
+    if (evidenceRefs.some((ref) => !declaredRefs.has(ref))) {
+      throw new Error(`snapshot.evidence[${index}] contains provenance not declared by source ${sourceId}`)
     }
-    if (!evidence.claim || !["working-tree-change", "architecture-candidate"].includes(evidence.claim.kind)) {
+    if (evidence.claim?.kind === "working-tree-change") {
+      if (evidence.evidenceClass !== "git-derived" || sourceId !== "builtin.git.status-porcelain-v1-z.v1") {
+        throw new Error(`snapshot.evidence[${index}] violates the canonical working-tree evidence mapping`)
+      }
+    } else if (evidence.claim?.kind === "architecture-candidate") {
+      if (evidence.evidenceClass !== "heuristic-inference" || sourceId !== "builtin.inventory-path-heuristic.v1") {
+        throw new Error(`snapshot.evidence[${index}] violates the canonical architecture evidence mapping`)
+      }
+    } else {
       throw new Error(`snapshot.evidence[${index}] has an unsupported claim kind`)
     }
     assertBoundedString(`snapshot.evidence[${index}].claim.value`, evidence.claim.value, HARD_MAX_ITEM_TEXT_BYTES)
@@ -228,6 +236,39 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
       validateCanonicalPath(evidence.claim.sourcePath, `snapshot.evidence[${index}].claim.sourcePath`)
     }
   }
+}
+
+function canonicalStructuralResultIdentity(result: AstGrepStructuralQueryResult): string {
+  return sha256(canonicalize({
+    version: K3_R4_AST_GREP_QUERY_CONTRACT_VERSION,
+    query: {
+      kind: result.query.kind,
+      symbol: result.query.symbol,
+      scope: result.query.scope,
+    },
+    repositoryIdentity: result.repositoryIdentity,
+    snapshotIdentity: result.snapshotIdentity,
+    contentIdentity: result.contentIdentity,
+    candidateFiles: {
+      included: result.candidateFiles.included,
+      omitted: result.candidateFiles.omitted,
+      identity: result.candidateFiles.identity,
+    },
+    completeness: result.completeness,
+    matches: result.matches,
+    source: {
+      adapterId: result.source.adapterId,
+      candidate: result.source.candidate,
+      upstreamRepository: result.source.upstreamRepository,
+      upstreamTag: result.source.upstreamTag,
+      upstreamCommit: result.source.upstreamCommit,
+      measuredVersion: result.source.measuredVersion,
+      platformQualification: result.source.platformQualification,
+      executableSha256: result.source.executableSha256,
+      kodacConfigSha256: result.source.kodacConfigSha256,
+      semanticStrength: result.source.semanticStrength,
+    },
+  }))
 }
 
 function assertStructuralResult(result: AstGrepStructuralQueryResult, snapshot: RepositorySnapshot, index: number): void {
@@ -296,6 +337,10 @@ function assertStructuralResult(result: AstGrepStructuralQueryResult, snapshot: 
     }
     assertBoundedString(`${label}.matches[${matchIndex}].text`, match.text, HARD_MAX_ITEM_TEXT_BYTES)
   }
+
+  if (canonicalStructuralResultIdentity(result) !== result.resultIdentity) {
+    throw new Error(`${label} result identity does not match its canonical payload`)
+  }
 }
 
 function lexicalTokens(value: string): Set<string> {
@@ -306,7 +351,7 @@ function relatedPath(path: string, target: string): boolean {
   return path.startsWith(`${target}/`) || target.startsWith(`${path}/`)
 }
 
-function scoreItem(item: CandidateItem, request: NormalizedRequest): CandidateItem {
+function scoreItem(item: CandidateItem, request: NormalizedRequest, objectiveTokens: ReadonlySet<string>): CandidateItem {
   let score = 0
   const reasons = new Set<ContextRelevanceReason>()
   for (const target of request.targetPaths) {
@@ -328,7 +373,7 @@ function scoreItem(item: CandidateItem, request: NormalizedRequest): CandidateIt
   }
 
   let overlap = 0
-  for (const token of lexicalTokens(request.objective)) if (itemTokens.has(token)) overlap++
+  for (const token of objectiveTokens) if (itemTokens.has(token)) overlap++
   if (overlap > 0) {
     score += Math.min(overlap, 32) * 20
     reasons.add("objective-overlap")
@@ -415,6 +460,7 @@ function itemIdentityProjection(item: ContextBundleItem): unknown {
     evidenceClass: item.evidenceClass,
     text: item.text,
     contextUtf8Bytes: item.contextUtf8Bytes,
+    provenanceRefs: item.provenanceRefs,
     trust: item.trust,
     relevance: item.relevance,
   }
@@ -446,6 +492,7 @@ export function buildContextBundle(input: ContextEngineInput): ContextBundle {
   let knownOmitted = 0
   let sourceOmittedAtLeast = 0
   const candidates: CandidateItem[] = []
+  const objectiveTokens = lexicalTokens(request.objective)
 
   for (const evidence of input.snapshot.evidence) {
     if (evidence.evidenceClass === "model-hypothesis") {
@@ -453,7 +500,7 @@ export function buildContextBundle(input: ContextEngineInput): ContextBundle {
       knownOmitted++
       continue
     }
-    candidates.push(scoreItem(repositoryEvidenceItem(evidence), request))
+    candidates.push(scoreItem(repositoryEvidenceItem(evidence), request, objectiveTokens))
   }
 
   for (const result of structuralResults) {
@@ -461,7 +508,7 @@ export function buildContextBundle(input: ContextEngineInput): ContextBundle {
       completenessReasons.add("source-input-limit")
       sourceOmittedAtLeast = Math.max(sourceOmittedAtLeast, result.completeness.omittedAtLeast)
     }
-    for (const item of structuralItems(result)) candidates.push(scoreItem(item, request))
+    for (const item of structuralItems(result)) candidates.push(scoreItem(item, request, objectiveTokens))
   }
 
   const deduplicated = new Map<string, CandidateItem>()
