@@ -55,6 +55,12 @@ test("source anchors are deterministic, bounded, and reconstructable", () => {
   assert.throws(() => validateSemanticSourceAnchor({ ...anchor, range: { start: 0, end: 20 } }))
 })
 
+test("serialized records reject explicit undefined optional fields", () => {
+  const anchor = createSemanticSourceAnchor(source({ revisionIdentity: undefined }))
+  assert.equal("revisionIdentity" in anchor, false)
+  assert.throws(() => validateSemanticSourceAnchor({ ...anchor, revisionIdentity: undefined }), /derived fields mismatch/)
+})
+
 test("element identity is intrinsic while record identity binds relationships", () => {
   const bare = element()
   const linked = element({ childElementIdentities: [digest("child")] })
@@ -65,7 +71,9 @@ test("element identity is intrinsic while record identity binds relationships", 
 
 test("child identities canonicalize and duplicate/self relations fail", () => {
   const a = digest("a"), b = digest("b")
-  assert.deepEqual(element({ childElementIdentities: [b, a] }).childElementIdentities, [a, b].sort())
+  const expectedAscending = [b, a]
+  assert.deepEqual(element({ childElementIdentities: [b, a] }).childElementIdentities, expectedAscending)
+  assert.deepEqual(element({ childElementIdentities: [a, b] }).childElementIdentities, expectedAscending)
   assert.throws(() => element({ childElementIdentities: [a, a] }))
   const bare = element()
   assert.throws(() => element({ parentElementIdentity: bare.elementIdentity }))
@@ -114,7 +122,8 @@ test("reference target status never invents resolution", () => {
 test("resolved reference targets canonicalize deterministically", () => {
   const first = reference({ targetStatus: "MULTI_TARGET", targetDeclarationIdentities: [TARGET_B, TARGET_A], resolutionBasis: "language-server-derived" })
   const second = reference({ targetStatus: "MULTI_TARGET", targetDeclarationIdentities: [TARGET_A, TARGET_B], resolutionBasis: "language-server-derived" })
-  assert.deepEqual(first.targetDeclarationIdentities, [TARGET_A, TARGET_B].sort())
+  assert.deepEqual(first.targetDeclarationIdentities, [TARGET_A, TARGET_B])
+  assert.deepEqual(second.targetDeclarationIdentities, [TARGET_A, TARGET_B])
   assert.equal(first.referenceIdentity, second.referenceIdentity)
   assert.deepEqual(validateSemanticReference(copy(first)), first)
   assert.throws(() => validateSemanticReference({ ...first, targetStatus: "SINGLE_TARGET" }))
