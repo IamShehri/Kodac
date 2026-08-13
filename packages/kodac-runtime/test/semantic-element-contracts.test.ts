@@ -64,7 +64,7 @@ test("element identity is intrinsic while record identity binds relationships", 
 
 test("child identities canonicalize and duplicate/self relations fail", () => {
   const a = digest("a"), b = digest("b")
-  assert.deepEqual(element({ childElementIdentities: [b, a] }).childElementIdentities, [a, b])
+  assert.deepEqual(element({ childElementIdentities: [b, a] }).childElementIdentities, [a, b].sort())
   assert.throws(() => element({ childElementIdentities: [a, a] }))
   const bare = element()
   assert.throws(() => element({ parentElementIdentity: bare.elementIdentity }))
@@ -113,7 +113,7 @@ test("reference target status never invents resolution", () => {
 test("resolved reference targets canonicalize deterministically", () => {
   const first = reference({ targetStatus: "MULTI_TARGET", targetDeclarationIdentities: [TARGET_B, TARGET_A], resolutionBasis: "language-server-derived" })
   const second = reference({ targetStatus: "MULTI_TARGET", targetDeclarationIdentities: [TARGET_A, TARGET_B], resolutionBasis: "language-server-derived" })
-  assert.deepEqual(first.targetDeclarationIdentities, [TARGET_A, TARGET_B])
+  assert.deepEqual(first.targetDeclarationIdentities, [TARGET_A, TARGET_B].sort())
   assert.equal(first.referenceIdentity, second.referenceIdentity)
   assert.deepEqual(validateSemanticReference(copy(first)), first)
   assert.throws(() => validateSemanticReference({ ...first, targetStatus: "SINGLE_TARGET" }))
