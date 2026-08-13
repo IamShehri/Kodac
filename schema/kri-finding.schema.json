@@ -5,31 +5,17 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "version",
-    "findingIdentity",
-    "stateIdentity",
-    "claimKey",
-    "review",
-    "path",
-    "summary",
-    "contractClaim",
-    "category",
-    "severity",
-    "confidenceBps",
-    "evidenceRefs",
-    "freshness",
-    "state"
+    "version", "findingIdentity", "claimKey", "review", "evaluatedHead", "path", "summary",
+    "contractClaim", "category", "severity", "confidenceBps", "evidenceRefs", "freshness", "state"
   ],
   "properties": {
     "version": { "const": "kri-r2-finding-v1" },
     "findingIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "stateIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "claimKey": { "type": "string", "minLength": 1, "maxLength": 128 },
     "review": { "$ref": "#/$defs/reviewIdentity" },
+    "evaluatedHead": { "$ref": "#/$defs/gitCommit" },
     "path": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 1024,
+      "type": "string", "minLength": 1, "maxLength": 1024,
       "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)[^\\u0000]+$"
     },
     "range": { "$ref": "#/$defs/range" },
@@ -39,43 +25,28 @@
     "severity": { "enum": ["blocker", "critical", "high", "medium", "low", "info"] },
     "confidenceBps": { "type": "integer", "minimum": 0, "maximum": 10000 },
     "evidenceRefs": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 32,
-      "uniqueItems": true,
+      "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
       "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
     },
     "freshness": { "enum": ["CURRENT", "STALE"] },
-    "state": { "enum": ["NEW", "CONFIRMED", "REJECTED", "DUPLICATE", "STALE", "FIXED", "REVERIFIED"] }
+    "state": { "enum": ["NEW", "STALE"] }
   },
   "$defs": {
     "gitCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "reviewIdentity": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "reviewRunId",
-        "reviewerId",
-        "reviewerVersion",
-        "policyIdentity",
-        "canonicalBase",
-        "reviewedHead",
-        "currentHead"
-      ],
+      "type": "object", "additionalProperties": false,
+      "required": ["reviewRunId", "reviewerId", "reviewerVersion", "policyIdentity", "canonicalBase", "reviewedHead"],
       "properties": {
         "reviewRunId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "reviewerId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "reviewerVersion": { "type": "string", "minLength": 1, "maxLength": 128 },
         "policyIdentity": { "type": "string", "minLength": 1, "maxLength": 128 },
         "canonicalBase": { "$ref": "#/$defs/gitCommit" },
-        "reviewedHead": { "$ref": "#/$defs/gitCommit" },
-        "currentHead": { "$ref": "#/$defs/gitCommit" }
+        "reviewedHead": { "$ref": "#/$defs/gitCommit" }
       }
     },
     "range": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["startLine", "endLine"],
+      "type": "object", "additionalProperties": false, "required": ["startLine", "endLine"],
       "properties": {
         "startLine": { "type": "integer", "minimum": 1, "maximum": 10000000 },
         "endLine": { "type": "integer", "minimum": 1, "maximum": 10000000 }
@@ -85,11 +56,11 @@
   "allOf": [
     {
       "if": { "properties": { "freshness": { "const": "CURRENT" } }, "required": ["freshness"] },
-      "then": { "not": { "properties": { "state": { "const": "STALE" } }, "required": ["state"] } }
+      "then": { "properties": { "state": { "const": "NEW" } } }
     },
     {
       "if": { "properties": { "freshness": { "const": "STALE" } }, "required": ["freshness"] },
-      "then": { "properties": { "state": { "enum": ["STALE", "REJECTED", "DUPLICATE"] } } }
+      "then": { "properties": { "state": { "const": "STALE" } } }
     }
   ]
 }

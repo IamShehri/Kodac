@@ -4,6 +4,7 @@ export const KRI_R2_ADJUDICATION_VERSION = "kri-r2-adjudication-v1" as const
 export type FindingSeverity = "blocker" | "critical" | "high" | "medium" | "low" | "info"
 export type FindingFreshness = "CURRENT" | "STALE"
 export type FindingState = "NEW" | "CONFIRMED" | "REJECTED" | "DUPLICATE" | "STALE" | "FIXED" | "REVERIFIED"
+export type InitialFindingState = "NEW" | "STALE"
 export type AdjudicationAction = "CONFIRM" | "REJECT" | "MARK_DUPLICATE" | "MARK_FIXED" | "REVERIFY"
 
 export interface ReviewIdentity {
@@ -13,7 +14,6 @@ export interface ReviewIdentity {
   policyIdentity: string
   canonicalBase: string
   reviewedHead: string
-  currentHead: string
 }
 
 export interface AffectedRange {
@@ -37,9 +37,9 @@ export interface ReviewClaim {
 export interface FindingRecord {
   version: typeof KRI_R2_FINDING_VERSION
   findingIdentity: string
-  stateIdentity: string
   claimKey: string
   review: ReviewIdentity
+  evaluatedHead: string
   path: string
   range?: AffectedRange
   summary: string
@@ -49,12 +49,11 @@ export interface FindingRecord {
   confidenceBps: number
   evidenceRefs: string[]
   freshness: FindingFreshness
-  state: FindingState
+  state: InitialFindingState
 }
 
 export interface AdjudicationDecision {
   action: AdjudicationAction
-  adjudicatorId: string
   evidenceRefs: string[]
   duplicateOf?: string
   correctionRef?: string
@@ -65,8 +64,7 @@ export interface AdjudicationRecord {
   version: typeof KRI_R2_ADJUDICATION_VERSION
   adjudicationIdentity: string
   findingIdentity: string
-  previousStateIdentity: string
-  resultingStateIdentity: string
+  previousAdjudicationIdentity: string | null
   action: AdjudicationAction
   previousState: FindingState
   resultingState: FindingState
@@ -80,4 +78,9 @@ export interface AdjudicationRecord {
 export interface AdjudicationResult {
   finding: FindingRecord
   adjudication: AdjudicationRecord
+  state: FindingState
+}
+
+export interface ReviewerIntelligenceRuntimeOptions {
+  adjudicatorId: string
 }
