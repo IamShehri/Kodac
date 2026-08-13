@@ -45,7 +45,10 @@
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
     },
-    "freshness": { "enum": ["CURRENT", "STALE"] },
+    "freshness": {
+      "enum": ["CURRENT", "STALE"],
+      "description": "Runtime derives CURRENT iff evaluatedHead equals review.reviewedHead; otherwise STALE. JSON Schema 2020-12 cannot compare sibling string fields directly."
+    },
     "state": { "enum": ["NEW", "STALE"] }
   },
   "$defs": {
