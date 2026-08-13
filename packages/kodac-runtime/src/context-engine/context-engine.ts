@@ -41,6 +41,8 @@ const HARD_MAX_PROVENANCE_REFS = 256
 const HARD_MAX_PROVENANCE_REF_BYTES = 1_024
 const HARD_MAX_CANDIDATE_FILES = 4_096
 const HARD_MAX_OMISSION_COUNT = Number.MAX_SAFE_INTEGER - 10_000
+const HARD_MAX_WORKING_TREE_CHANGES = 4_096
+const HARD_MAX_INVENTORY_ENTRIES = 20_000
 
 interface NormalizedRequest {
   version: typeof K3_R5_CONTEXT_REQUEST_VERSION
@@ -55,6 +57,14 @@ interface NormalizedRequest {
 
 interface CandidateItem extends ContextBundleItem {
   claimKind?: RepositoryEvidence["claim"]["kind"]
+}
+
+interface CanonicalWorkingTreeChange {
+  path: string
+  state: RepositorySnapshot["workingTree"][number]["state"]
+  indexStatus: string
+  worktreeStatus: string
+  sourcePath: string | null
 }
 
 function sha256(value: string): string {
@@ -169,6 +179,43 @@ function validateProvenanceRefs(values: unknown, label: string): string[] {
   return uniqueSorted(values.map((value, index) => assertBoundedString(`${label}[${index}]`, value, HARD_MAX_PROVENANCE_REF_BYTES)))
 }
 
+function architectureCandidate(path: string): boolean {
+  const normalized = path.toLowerCase()
+  const base = normalized.split("/").at(-1) ?? normalized
+  return /^adr-.*\.md$/.test(base)
+    || normalized.startsWith("specs/")
+    || normalized.startsWith("spec/")
+    || normalized.includes("/architecture/")
+    || normalized.startsWith("docs/architecture/")
+}
+
+function canonicalWorkingTreeChange(
+  change: RepositorySnapshot["workingTree"][number],
+  label: string,
+): CanonicalWorkingTreeChange {
+  if (!change || typeof change !== "object") throw new Error(`${label} must be an object`)
+  const path = validateCanonicalPath(change.path, `${label}.path`)
+  if (!["modified", "added", "deleted", "untracked", "renamed"].includes(change.state)) {
+    throw new Error(`${label}.state is unsupported`)
+  }
+  if (typeof change.indexStatus !== "string" || change.indexStatus.length !== 1 || change.indexStatus.includes("\0")) {
+    throw new Error(`${label}.indexStatus must be one NUL-free character`)
+  }
+  if (typeof change.worktreeStatus !== "string" || change.worktreeStatus.length !== 1 || change.worktreeStatus.includes("\0")) {
+    throw new Error(`${label}.worktreeStatus must be one NUL-free character`)
+  }
+  const sourcePath = change.sourcePath === undefined
+    ? null
+    : validateCanonicalPath(change.sourcePath, `${label}.sourcePath`)
+  return {
+    path,
+    state: change.state,
+    indexStatus: change.indexStatus,
+    worktreeStatus: change.worktreeStatus,
+    sourcePath,
+  }
+}
+
 function assertSnapshot(snapshot: RepositorySnapshot): void {
   if (snapshot.version !== K3_R2_SNAPSHOT_CONTRACT_VERSION) throw new Error(`Unsupported repository snapshot version: ${String(snapshot.version)}`)
   if (snapshot.repositoryIdentity?.scheme !== "workspace-root-sha256-v1" || snapshot.repositoryIdentity.scope !== "workspace-local") {
@@ -187,10 +234,30 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
   if (!Array.isArray(snapshot.completeness.reasons) || snapshot.completeness.reasons.length !== 0 || snapshot.completeness.omittedAtLeast !== 0) {
     throw new Error("K3-R5 rejects malformed complete snapshot metadata")
   }
-  if (!isFullGitObjectId(snapshot.gitHead)) throw new Error("K3-R5 requires a full Git HEAD object id")
+  if (!isFullGitObjectId(snapshot.gitHead) || snapshot.gitHead !== snapshot.gitHead.toLowerCase()) {
+    throw new Error("K3-R5 requires a canonical lowercase full Git HEAD object id")
+  }
   assertDigest("repositoryIdentity", snapshot.repositoryIdentity.value)
   assertDigest("contentIdentity", snapshot.contentIdentity.value)
   assertDigest("snapshotIdentity", snapshot.snapshotIdentity.value)
+
+  if (!Array.isArray(snapshot.workingTree) || snapshot.workingTree.length > HARD_MAX_WORKING_TREE_CHANGES) {
+    throw new Error(`K3-R5 working tree exceeds ${HARD_MAX_WORKING_TREE_CHANGES} changes`)
+  }
+  const workingTree = snapshot.workingTree.map((change, index) => canonicalWorkingTreeChange(change, `snapshot.workingTree[${index}]`))
+
+  if (!Array.isArray(snapshot.inventory) || snapshot.inventory.length > HARD_MAX_INVENTORY_ENTRIES) {
+    throw new Error(`K3-R5 inventory exceeds ${HARD_MAX_INVENTORY_ENTRIES} entries`)
+  }
+  const inventoryPaths = new Set<string>()
+  for (const [index, entry] of snapshot.inventory.entries()) {
+    if (!entry || typeof entry !== "object") throw new Error(`snapshot.inventory[${index}] must be an object`)
+    const path = validateCanonicalPath(entry.path, `snapshot.inventory[${index}].path`)
+    if (inventoryPaths.has(path)) throw new Error(`snapshot inventory path replay mismatch: ${path}`)
+    if (!["file", "directory", "symlink"].includes(entry.type)) throw new Error(`snapshot.inventory[${index}] has an unsupported type`)
+    inventoryPaths.add(path)
+  }
+
   if (!Array.isArray(snapshot.evidence) || snapshot.evidence.length > HARD_MAX_EVIDENCE_INPUTS) {
     throw new Error(`K3-R5 snapshot evidence exceeds ${HARD_MAX_EVIDENCE_INPUTS} items`)
   }
@@ -202,38 +269,64 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
     if (source?.kind !== "builtin") throw new Error(`snapshot.sources[${index}] has an unsupported source kind`)
     sourceRefs.set(id, new Set(validateProvenanceRefs(source.provenanceRefs, `snapshot.sources[${index}].provenanceRefs`)))
   }
+
   const evidenceIds = new Set<string>()
   for (const [index, evidence] of snapshot.evidence.entries()) {
-    assertDigest(`snapshot.evidence[${index}].evidenceId`, evidence?.evidenceId)
+    const label = `snapshot.evidence[${index}]`
+    assertDigest(`${label}.evidenceId`, evidence?.evidenceId)
     if (evidenceIds.has(evidence.evidenceId)) throw new Error(`snapshot evidence identity replay mismatch: ${evidence.evidenceId}`)
     evidenceIds.add(evidence.evidenceId)
     if (evidence.contentIdentity !== snapshot.contentIdentity.value) {
-      throw new Error(`snapshot.evidence[${index}] belongs to a different content identity`)
+      throw new Error(`${label} belongs to a different content identity`)
     }
-    validateCanonicalPath(evidence.subjectPath, `snapshot.evidence[${index}].subjectPath`)
-    const sourceId = assertBoundedString(`snapshot.evidence[${index}].source.id`, evidence.source?.id, 256)
+    const subjectPath = validateCanonicalPath(evidence.subjectPath, `${label}.subjectPath`)
+    const sourceId = assertBoundedString(`${label}.source.id`, evidence.source?.id, 256)
     const declaredRefs = sourceRefs.get(sourceId)
     if (evidence.source?.kind !== "builtin" || !declaredRefs) {
-      throw new Error(`snapshot.evidence[${index}] has an unbound source identity`)
+      throw new Error(`${label} has an unbound source identity`)
     }
-    const evidenceRefs = validateProvenanceRefs(evidence.source.provenanceRefs, `snapshot.evidence[${index}].source.provenanceRefs`)
+    const evidenceRefs = validateProvenanceRefs(evidence.source.provenanceRefs, `${label}.source.provenanceRefs`)
     if (evidenceRefs.some((ref) => !declaredRefs.has(ref))) {
-      throw new Error(`snapshot.evidence[${index}] contains provenance not declared by source ${sourceId}`)
+      throw new Error(`${label} contains provenance not declared by source ${sourceId}`)
     }
+
+    const claimValue = assertBoundedString(`${label}.claim.value`, evidence.claim?.value, HARD_MAX_ITEM_TEXT_BYTES)
+    const claimSourcePath = evidence.claim?.sourcePath === undefined
+      ? undefined
+      : validateCanonicalPath(evidence.claim.sourcePath, `${label}.claim.sourcePath`)
+    let expectedEvidenceId: string
+
     if (evidence.claim?.kind === "working-tree-change") {
       if (evidence.evidenceClass !== "git-derived" || sourceId !== "builtin.git.status-porcelain-v1-z.v1") {
-        throw new Error(`snapshot.evidence[${index}] violates the canonical working-tree evidence mapping`)
+        throw new Error(`${label} violates the canonical working-tree evidence mapping`)
       }
+      const matchingChanges = workingTree.filter((change) =>
+        change.path === subjectPath
+        && change.state === claimValue
+        && (change.sourcePath ?? undefined) === claimSourcePath,
+      )
+      if (matchingChanges.length !== 1) {
+        throw new Error(`${label} is not bound to exactly one canonical working-tree change`)
+      }
+      const canonical = JSON.stringify(matchingChanges[0])
+      expectedEvidenceId = sha256(`${snapshot.contentIdentity.value}\0git-derived\0${canonical}`)
     } else if (evidence.claim?.kind === "architecture-candidate") {
       if (evidence.evidenceClass !== "heuristic-inference" || sourceId !== "builtin.inventory-path-heuristic.v1") {
-        throw new Error(`snapshot.evidence[${index}] violates the canonical architecture evidence mapping`)
+        throw new Error(`${label} violates the canonical architecture evidence mapping`)
       }
+      if (claimValue !== "candidate" || claimSourcePath !== undefined) {
+        throw new Error(`${label} has noncanonical architecture-candidate claim metadata`)
+      }
+      if (!inventoryPaths.has(subjectPath) || !architectureCandidate(subjectPath)) {
+        throw new Error(`${label} is not bound to a canonical architecture inventory candidate`)
+      }
+      expectedEvidenceId = sha256(`${snapshot.contentIdentity.value}\0heuristic-inference\0architecture-candidate\0${subjectPath}`)
     } else {
-      throw new Error(`snapshot.evidence[${index}] has an unsupported claim kind`)
+      throw new Error(`${label} has an unsupported claim kind`)
     }
-    assertBoundedString(`snapshot.evidence[${index}].claim.value`, evidence.claim.value, HARD_MAX_ITEM_TEXT_BYTES)
-    if (evidence.claim.sourcePath !== undefined) {
-      validateCanonicalPath(evidence.claim.sourcePath, `snapshot.evidence[${index}].claim.sourcePath`)
+
+    if (expectedEvidenceId !== evidence.evidenceId) {
+      throw new Error(`${label} evidence identity does not match its canonical K3-R2 payload`)
     }
   }
 }
