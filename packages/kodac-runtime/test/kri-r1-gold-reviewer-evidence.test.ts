@@ -22,7 +22,7 @@ const EXPECTED_SOURCE_CLAIMS = new Map<string, Readonly<Record<string, string | 
     provider: "cubic-dev-ai[bot]",
     commentNodeId: "PRRC_kwDOTVTeS87gouZ8",
     canonicalBase: "9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc",
-    reviewedHead: "f1d79e7467c6ab06b3867d86be249f7695c431b2",
+    reviewedHead: "33e8646f428eb2f0f476c09591980a46c172aa1f",
     commentAnchorCommit: "33e8646f428eb2f0f476c09591980a46c172aa1f",
     finalPrHead: "8050ff13dc983d1baa2e4553d78dc3741f48a256",
     path: ".github/workflows/k3-r3-benchmark.yml",
@@ -52,12 +52,12 @@ const EXPECTED_SOURCE_CLAIMS = new Map<string, Readonly<Record<string, string | 
   }],
 ] as const)
 const EXPECTED_CASE_IDENTITIES = [
-  "48d322cd1daaa7cd3d0ba6ac29fa7ebf4d3de932a2adf4cb7ae0733f97785526",
+  "5b8a1da789f1820405422e2a0249dc7806ffb8fb2ffbd58f82389211a68dc880",
   "52d65a2d4301cad2245db3192b0a0ba6452a1afb991015a6755fe88f862f1c07",
   "878952fa27906be0ba64324ace719d90694af3d01fdcc13c15a236a5f2a4ecef",
   "cca5aeb2c11f5bb1ead69817ebc4c91b97761e9366f8b7bf4055e21f791d32fe",
 ].sort(compareStrings)
-const EXPECTED_CORPUS_IDENTITY = "5b7f551b2641bd020d354078ce5dda62940e6ea439c929e6f627bea4fc5333bf"
+const EXPECTED_CORPUS_IDENTITY = "e3f87d5e008918043da4f10617aa479d0d5e4b9fcde42143bc691763f503c4d4"
 const ALLOWED_DISPOSITIONS = new Set(["VALID_ACCEPTED", "INVALID_REJECTED"])
 const REQUIRED_CATEGORIES = new Set([
   "exact-head-freshness",
@@ -281,6 +281,18 @@ test("KRI-R1 rejects mutation of admitted exact-head evidence even with recomput
   first.caseIdentity = expectedCaseIdentity(first)
   mutated.corpusIdentity = expectedCorpusIdentity(mutated)
   assert.throws(() => validateCorpus(mutated), /reviewedHead does not match/)
+})
+
+test("KRI-R1 distinguishes the PR13 requested review head from the actual review anchor", () => {
+  const cases = corpus.cases as Record<string, unknown>[]
+  const pr13 = cases.find((item) => item.caseKey === "pr13-cubic-checkout-head-provenance-mismatch")
+  assert.ok(pr13, "PR13 gold case must exist")
+  const source = pr13.source as Record<string, unknown>
+  const evidenceRefs = pr13.evidenceRefs as string[]
+  assert.equal(source.reviewedHead, "33e8646f428eb2f0f476c09591980a46c172aa1f")
+  assert.equal(source.commentAnchorCommit, "33e8646f428eb2f0f476c09591980a46c172aa1f")
+  assert.ok(evidenceRefs.includes("pr:13:review-request-head:f1d79e7467c6ab06b3867d86be249f7695c431b2"))
+  assert.notEqual(source.reviewedHead, "f1d79e7467c6ab06b3867d86be249f7695c431b2")
 })
 
 test("KRI-R1 rejects authorization-base substitution even when corpus identity is recomputed", () => {

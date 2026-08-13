@@ -8,7 +8,7 @@ Implementation base: a6649626fd0c91f8326311ce532ca3ed16dba068
 Authorization: docs/planning/KODAC_KRI_R1_GOLD_REVIEWER_EVIDENCE_CORPUS_AUTHORIZATION_2026-08-13.md
 Implementation class: TEST / FIXTURE / EVIDENCE ONLY
 Corpus version: kri-r1-gold-corpus-v1
-Corpus identity: 5b7f551b2641bd020d354078ce5dda62940e6ea439c929e6f627bea4fc5333bf
+Corpus identity: e3f87d5e008918043da4f10617aa479d0d5e4b9fcde42143bc691763f503c4d4
 ```
 
 ## Decision
@@ -58,13 +58,17 @@ Historical claim identity:
 review comment: 3768772220
 review: 4919330029
 explicit review-request head: f1d79e7467c6ab06b3867d86be249f7695c431b2
+actual Cubic reviewed/original-comment commit: 33e8646f428eb2f0f476c09591980a46c172aa1f
 comment anchor commit: 33e8646f428eb2f0f476c09591980a46c172aa1f
+current GitHub review-comment commit after PR evolution: 8050ff13dc983d1baa2e4553d78dc3741f48a256
 canonical PR base: 9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc
 correction commit: d7c62c21636f882e393085540213cfcfb4e24450
 final PR head: 8050ff13dc983d1baa2e4553d78dc3741f48a256
 ```
 
 Adjudication: a `pull_request` checkout could execute a synthetic merge commit while benchmark evidence named the PR head SHA. Kodac accepted the provenance mismatch and pinned checkout to the exact PR head.
+
+Revision provenance note: the top-level request asked Cubic to review `f1d79e7467c6ab06b3867d86be249f7695c431b2`, but GitHub's immutable review-comment metadata records `original_commit_id=33e8646f428eb2f0f476c09591980a46c172aa1f` for comment `3768772220`. The corpus therefore treats `33e8646f428eb2f0f476c09591980a46c172aa1f` as the actual reviewed/anchor revision for this finding and preserves `f1d79e7467c6ab06b3867d86be249f7695c431b2` only as review-request evidence.
 
 ### PR #17 — accepted recursive import-gate finding
 
@@ -117,7 +121,7 @@ The corpus binds immutable GitHub comment/review identities, revision identities
 ## Deterministic identities
 
 ```text
-corpusIdentity = 5b7f551b2641bd020d354078ce5dda62940e6ea439c929e6f627bea4fc5333bf
+corpusIdentity = e3f87d5e008918043da4f10617aa479d0d5e4b9fcde42143bc691763f503c4d4
 ```
 
 Case identities:
@@ -127,7 +131,7 @@ pr10-cubic-depth-empty-boundary-omission
   cca5aeb2c11f5bb1ead69817ebc4c91b97761e9366f8b7bf4055e21f791d32fe
 
 pr13-cubic-checkout-head-provenance-mismatch
-  48d322cd1daaa7cd3d0ba6ac29fa7ebf4d3de932a2adf4cb7ae0733f97785526
+  5b8a1da789f1820405422e2a0249dc7806ffb8fb2ffbd58f82389211a68dc880
 
 pr17-coderabbit-recursive-import-allowlist-bypass
   878952fa27906be0ba64324ace719d90694af3d01fdcc13c15a236a5f2a4ecef
@@ -159,6 +163,7 @@ synthetic relabeling: NO
 
 - source PR confinement to #10/#13/#15/#17;
 - exact admitted claim tuples (comment/review/provider/base/reviewed-head/final-head/path/line) are pinned and mutation-rejected;
+- PR #13 explicitly distinguishes requested review head `f1d79e7467c6ab06b3867d86be249f7695c431b2` from GitHub `original_commit_id` reviewed head `33e8646f428eb2f0f476c09591980a46c172aa1f`;
 - the corpus authorization base is pinned to canonical KRI-R1 authorization merge `a6649626fd0c91f8326311ce532ca3ed16dba068`;
 - exactly the two authorized fixture gold labels;
 - deterministic case and corpus identity recomputation;
