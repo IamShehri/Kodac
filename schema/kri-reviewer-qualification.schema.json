@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kodac.dev/schema/kri-reviewer-qualification.schema.json",
+  "title": "Kodac KRI-R4 Reviewer Qualification Report",
+  "description": "Strict structural schema for KRI-R4 historical-claim-disposition qualification evidence. Runtime recomputation enforces cross-field identities, counts, metrics, reasons, and decision semantics.",
+  "$comment": "Hashes are integrity fingerprints, not authentication or authority. JSON Schema cannot express complete observation-to-benchmark set equality, metric recomputation, percentile recomputation, or report-identity recomputation; validateQualificationReport enforces those invariants.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "capabilityScope",
+    "candidate",
+    "candidateIdentity",
+    "sourceCorpusIdentity",
+    "benchmarkSetIdentity",
+    "benchmarkCases",
+    "qualificationPolicy",
+    "qualificationPolicyIdentity",
+    "observations",
+    "metrics",
+    "decision",
+    "reasons",
+    "reportIdentity"
+  ],
+  "properties": {
+    "version": {
+      "const": "kri-r4-reviewer-qualification-v1"
+    },
+    "capabilityScope": {
+      "const": "historical-claim-disposition-v1"
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapterId",
+        "adapterVersion",
+        "reviewerId",
+        "reviewerVersion",
+        "reviewPolicyIdentity"
+      ],
+      "properties": {
+        "adapterId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "adapterVersion": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "reviewerId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "reviewerVersion": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "modelId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "reviewPolicyIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "candidateIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sourceCorpusIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "benchmarkSetIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "benchmarkCases": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["caseIdentity", "goldDisposition"],
+        "properties": {
+          "caseIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "goldDisposition": { "enum": ["VALID_ACCEPTED", "INVALID_REJECTED"] }
+        }
+      }
+    },
+    "qualificationPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "minTotalCases",
+        "minAcceptedCases",
+        "minRejectedCases",
+        "minExactDispositionAccuracyBps",
+        "minAcceptedPrecisionBps",
+        "minAcceptedRecallBps",
+        "minRejectedRecallBps",
+        "minDecisionCoverageBps",
+        "maxExecutionFailureBps"
+      ],
+      "properties": {
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "minTotalCases": { "type": "integer", "minimum": 20, "maximum": 10000 },
+        "minAcceptedCases": { "type": "integer", "minimum": 5, "maximum": 10000 },
+        "minRejectedCases": { "type": "integer", "minimum": 5, "maximum": 10000 },
+        "minExactDispositionAccuracyBps": { "type": "integer", "minimum": 9000, "maximum": 10000 },
+        "minAcceptedPrecisionBps": { "type": "integer", "minimum": 9000, "maximum": 10000 },
+        "minAcceptedRecallBps": { "type": "integer", "minimum": 8000, "maximum": 10000 },
+        "minRejectedRecallBps": { "type": "integer", "minimum": 9000, "maximum": 10000 },
+        "minDecisionCoverageBps": { "type": "integer", "minimum": 9500, "maximum": 10000 },
+        "maxExecutionFailureBps": { "type": "integer", "minimum": 0, "maximum": 500 }
+      }
+    },
+    "qualificationPolicyIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["caseIdentity", "outcome"],
+        "properties": {
+          "caseIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "outcome": { "enum": ["VALID_ACCEPTED", "INVALID_REJECTED", "ABSTAIN", "PROVIDER_FAILED", "TIMED_OUT", "INVALID_OUTPUT"] },
+          "latencyMs": { "type": "integer", "minimum": 0, "maximum": 86400000 },
+          "inputTokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "outputTokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "reportedCostMicrounits": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "counts",
+        "exactDispositionAccuracyBps",
+        "acceptedPrecisionBps",
+        "acceptedRecallBps",
+        "rejectedRecallBps",
+        "decisionCoverageBps",
+        "executionFailureBps",
+        "latency",
+        "suppliedUsage"
+      ],
+      "properties": {
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "totalCases", "goldAccepted", "goldRejected", "correctlyAccepted", "correctlyRejected",
+            "falseAccepted", "falseRejected", "abstained", "providerFailed", "timedOut", "invalidOutput"
+          ],
+          "properties": {
+            "totalCases": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "goldAccepted": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "goldRejected": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "correctlyAccepted": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "correctlyRejected": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "falseAccepted": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "falseRejected": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "abstained": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "providerFailed": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "timedOut": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "invalidOutput": { "type": "integer", "minimum": 0, "maximum": 10000 }
+          }
+        },
+        "exactDispositionAccuracyBps": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "acceptedPrecisionBps": { "anyOf": [{ "type": "integer", "minimum": 0, "maximum": 10000 }, { "type": "null" }] },
+        "acceptedRecallBps": { "anyOf": [{ "type": "integer", "minimum": 0, "maximum": 10000 }, { "type": "null" }] },
+        "rejectedRecallBps": { "anyOf": [{ "type": "integer", "minimum": 0, "maximum": 10000 }, { "type": "null" }] },
+        "decisionCoverageBps": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "executionFailureBps": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "latency": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["observedCount", "p50Ms", "p95Ms"],
+          "properties": {
+            "observedCount": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "p50Ms": { "anyOf": [{ "type": "integer", "minimum": 0, "maximum": 86400000 }, { "type": "null" }] },
+            "p95Ms": { "anyOf": [{ "type": "integer", "minimum": 0, "maximum": 86400000 }, { "type": "null" }] }
+          }
+        },
+        "suppliedUsage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observationsWithInputTokens", "totalInputTokens", "observationsWithOutputTokens", "totalOutputTokens",
+            "observationsWithReportedCost", "totalReportedCostMicrounits"
+          ],
+          "properties": {
+            "observationsWithInputTokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "totalInputTokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "observationsWithOutputTokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "totalOutputTokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "observationsWithReportedCost": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "totalReportedCostMicrounits": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          }
+        }
+      }
+    },
+    "decision": { "enum": ["QUALIFIED", "NOT_QUALIFIED", "INSUFFICIENT_EVIDENCE"] },
+    "reasons": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+    },
+    "reportIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}
