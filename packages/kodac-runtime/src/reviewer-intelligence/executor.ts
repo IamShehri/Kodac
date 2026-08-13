@@ -25,7 +25,7 @@ const SHA1 = /^[0-9a-f]{40}$/
 const SHA256 = /^[0-9a-f]{64}$/
 const SEVERITIES = new Set(["blocker", "critical", "high", "medium", "low", "info"])
 const SOURCE_KINDS = new Set(["repository-evidence", "ast-grep-structural-match"])
-const EVIDENCE_CLASSES = new Set(["precise-static", "parser-derived", "git-derived", "heuristic-inference", "model-hypothesis"])
+const EVIDENCE_CLASSES = new Set(["precise-static", "parser-derived", "git-derived", "heuristic-inference"])
 const RELEVANCE_REASONS = new Set(["exact-target-path", "related-target-path", "exact-symbol-hint", "objective-overlap", "working-tree-change", "architecture-candidate", "stable-fallback"])
 const COMPLETENESS_REASONS = new Set(["item-budget", "byte-budget", "source-input-limit", "unsupported-evidence"])
 const RUN_STATUSES = new Set<ReviewerRunStatus>(["COMPLETED", "STALE", "PROVIDER_FAILED", "TIMED_OUT", "INVALID_PROVIDER_OUTPUT"])
@@ -40,6 +40,7 @@ const MAX_PATH_BYTES = 1024
 const MAX_REFS = 32
 const MAX_REF_BYTES = 1024
 const MAX_LINE = 10_000_000
+const MAX_POLICY_BYTES = 128
 
 type Obj = Record<string, unknown>
 type NormalizedRequest = {
@@ -153,13 +154,14 @@ function contextBundle(input: unknown, maxItems: number, maxBytes: number): Cont
     usedItems: integer(budgetRaw.usedItems, "budget.usedItems", 0, HARD_MAX_CONTEXT_ITEMS),
     usedUtf8Bytes: integer(budgetRaw.usedUtf8Bytes, "budget.usedUtf8Bytes", 0, HARD_MAX_CONTEXT_BYTES),
   }
-  if (budget.usedItems > budget.maxItems || budget.usedUtf8Bytes > budget.maxUtf8Bytes || budget.usedItems > maxItems || budget.usedUtf8Bytes > maxBytes) throw new Error("contextBundle exceeds execution bounds")
+  if (budget.usedItems > budget.maxItems || budget.usedUtf8Bytes > budget.maxUtf8Bytes || budget.maxItems > maxItems || budget.maxUtf8Bytes > maxBytes || budget.usedItems > maxItems || budget.usedUtf8Bytes > maxBytes) throw new Error("contextBundle exceeds execution bounds")
   const compRaw = object(r.completeness, "contextBundle.completeness")
   keys(compRaw, ["state", "reasons", "omittedAtLeast"], [], "contextBundle.completeness")
   const reasons = sortedStrings(compRaw.reasons, "contextBundle.completeness.reasons", 8, 64, true)
   requireSorted(compRaw.reasons, reasons, "contextBundle.completeness.reasons")
-  if ((compRaw.state !== "complete" && compRaw.state !== "truncated") || reasons.some((reason) => !COMPLETENESS_REASONS.has(reason)) || ((compRaw.state === "complete") !== (reasons.length === 0))) throw new Error("contextBundle completeness mismatch")
-  const completeness = { state: compRaw.state as ContextBundle["completeness"]["state"], reasons: reasons as ContextBundle["completeness"]["reasons"], omittedAtLeast: integer(compRaw.omittedAtLeast, "completeness.omittedAtLeast", 0, Number.MAX_SAFE_INTEGER) }
+  const omittedAtLeast = integer(compRaw.omittedAtLeast, "completeness.omittedAtLeast", 0, Number.MAX_SAFE_INTEGER)
+  if ((compRaw.state !== "complete" && compRaw.state !== "truncated") || reasons.some((reason) => !COMPLETENESS_REASONS.has(reason)) || ((compRaw.state === "complete") !== (reasons.length === 0)) || (compRaw.state === "complete" && omittedAtLeast !== 0) || (compRaw.state === "truncated" && omittedAtLeast === 0)) throw new Error("contextBundle completeness mismatch")
+  const completeness = { state: compRaw.state as ContextBundle["completeness"]["state"], reasons: reasons as ContextBundle["completeness"]["reasons"], omittedAtLeast }
   if (!Array.isArray(r.items) || r.items.length > maxItems) throw new Error("contextBundle item count exceeds execution bounds")
   const items = r.items.map(contextItem)
   if (new Set(items.map((item) => item.itemId)).size !== items.length || items.length !== budget.usedItems || items.reduce((n, item) => n + item.contextUtf8Bytes, 0) !== budget.usedUtf8Bytes) throw new Error("contextBundle item accounting mismatch")
@@ -197,7 +199,7 @@ function request(input: unknown, maxItems: number, maxBytes: number): Normalized
   const bundle = contextBundle(r.contextBundle, maxItems, maxBytes)
   const taskId = text(r.taskId, "taskId", 128)
   if (taskId !== bundle.taskId) throw new Error("taskId must match contextBundle.taskId")
-  return { taskId, policyIdentity: text(r.policyIdentity, "policyIdentity", 256), canonicalBase: sha1(r.canonicalBase, "canonicalBase"), reviewedHead: sha1(r.reviewedHead, "reviewedHead"), instructions: text(r.instructions, "instructions", 8 * 1024), contextBundle: bundle }
+  return { taskId, policyIdentity: text(r.policyIdentity, "policyIdentity", MAX_POLICY_BYTES), canonicalBase: sha1(r.canonicalBase, "canonicalBase"), reviewedHead: sha1(r.reviewedHead, "reviewedHead"), instructions: text(r.instructions, "instructions", 8 * 1024), contextBundle: bundle }
 }
 
 function providerClaim(input: unknown, index: number, items: Map<string, ContextBundleItem>): NormalizedClaim {
@@ -250,7 +252,10 @@ function validateRun(input: unknown): ReviewRunRecord {
   if (failureCode !== expectedFailure) throw new Error("review run failure code mismatch")
   const findingIdentities = sortedStrings(r.findingIdentities, "review run.findingIdentities", HARD_MAX_CLAIMS, 64, true); requireSorted(r.findingIdentities, findingIdentities, "review run.findingIdentities"); findingIdentities.forEach((id) => sha256(id, "finding identity"))
   const acceptedClaimCount = integer(r.acceptedClaimCount, "acceptedClaimCount", 0, HARD_MAX_CLAIMS); if (acceptedClaimCount !== findingIdentities.length || (failureCode && acceptedClaimCount !== 0)) throw new Error("review run finding accounting mismatch")
-  const base: Omit<ReviewRunRecord, "reviewRunIdentity"> = { version: KRI_R3_REVIEW_RUN_VERSION, reviewRunId: sha256(r.reviewRunId, "reviewRunId"), status, providerId: text(r.providerId, "providerId", 128), providerVersion: text(r.providerVersion, "providerVersion", 128), policyIdentity: text(r.policyIdentity, "policyIdentity", 256), canonicalBase: sha1(r.canonicalBase, "canonicalBase"), reviewedHead: sha1(r.reviewedHead, "reviewedHead"), evaluatedHead: sha1(r.evaluatedHead, "evaluatedHead"), contextBundleIdentity: sha256(r.contextBundleIdentity, "contextBundleIdentity"), taskId: text(r.taskId, "taskId", 128), instructionsIdentity: sha256(r.instructionsIdentity, "instructionsIdentity"), acceptedClaimCount, findingIdentities, failureCode }
+  const reviewedHead = sha1(r.reviewedHead, "reviewedHead")
+  const evaluatedHead = sha1(r.evaluatedHead, "evaluatedHead")
+  if ((status === "COMPLETED" && evaluatedHead !== reviewedHead) || (status === "STALE" && evaluatedHead === reviewedHead)) throw new Error("review run status/head freshness mismatch")
+  const base: Omit<ReviewRunRecord, "reviewRunIdentity"> = { version: KRI_R3_REVIEW_RUN_VERSION, reviewRunId: sha256(r.reviewRunId, "reviewRunId"), status, providerId: text(r.providerId, "providerId", 128), providerVersion: text(r.providerVersion, "providerVersion", 128), policyIdentity: text(r.policyIdentity, "policyIdentity", MAX_POLICY_BYTES), canonicalBase: sha1(r.canonicalBase, "canonicalBase"), reviewedHead, evaluatedHead, contextBundleIdentity: sha256(r.contextBundleIdentity, "contextBundleIdentity"), taskId: text(r.taskId, "taskId", 128), instructionsIdentity: sha256(r.instructionsIdentity, "instructionsIdentity"), acceptedClaimCount, findingIdentities, failureCode }
   const expected = digest(base); if (sha256(r.reviewRunIdentity, "reviewRunIdentity") !== expected) throw new Error("review run identity mismatch")
   return freeze({ ...base, reviewRunIdentity: expected })
 }
