@@ -9,8 +9,8 @@ const HEAD = "b".repeat(40)
 const NEXT = "c".repeat(40)
 const OTHER_FINDING = "d".repeat(64)
 
-function runtime(): ReviewerIntelligenceRuntime {
-  return new ReviewerIntelligenceRuntime({ adjudicatorId: "kodac:human-adjudicator" })
+function runtime(adjudicatorId = "kodac:human-adjudicator"): ReviewerIntelligenceRuntime {
+  return new ReviewerIntelligenceRuntime({ adjudicatorId })
 }
 
 function claim(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -49,12 +49,13 @@ test("creates deterministic immutable NEW finding using caller-supplied evaluate
   assert.equal(first.evaluatedHead, HEAD)
   assert.equal(first.freshness, "CURRENT")
   assert.equal(first.state, "NEW")
+  assert.equal(firstRuntime.currentState(first, HEAD), "NEW")
   assert.deepEqual(first.evidenceRefs, ["evidence:a", "evidence:z"])
   assert.ok(Object.isFrozen(first))
   assert.ok(Object.isFrozen(first.review))
 })
 
-test("provider claim cannot inject current-head or lifecycle/adjudicator authority", () => {
+test("provider claim cannot inject current-head, lifecycle, or adjudicator authority", () => {
   const firstRuntime = runtime()
   assert.throws(() => firstRuntime.createFinding(claim({ state: "CONFIRMED" }), HEAD), /unknown property: state/)
   assert.throws(
@@ -95,6 +96,7 @@ test("historical finding identity detects semantic substitution but survives lat
   assert.equal(stale.evaluatedHead, NEXT)
   assert.equal(stale.freshness, "STALE")
   assert.equal(stale.state, "STALE")
+  assert.equal(firstRuntime.currentState(stale, NEXT), "STALE")
 })
 
 test("externally reconstructed finding is structurally valid but cannot exercise adjudication authority", () => {
@@ -114,22 +116,31 @@ test("old-head finding is STALE, not REJECTED, and cannot be adjudicated", () =>
 })
 
 test("CONFIRM and REJECT are explicit runtime adjudications using configured Kodac adjudicator identity", () => {
-  const firstRuntime = runtime()
-  const finding = firstRuntime.createFinding(claim(), HEAD)
-  const confirmed = firstRuntime.applyAdjudication(finding, decision("CONFIRM"), HEAD)
-  const secondRuntime = runtime()
-  const secondFinding = secondRuntime.createFinding(claim(), HEAD)
-  const confirmedAgain = secondRuntime.applyAdjudication(secondFinding, decision("CONFIRM"), HEAD)
+  const confirmRuntime = runtime()
+  const confirmFinding = confirmRuntime.createFinding(claim(), HEAD)
+  const confirmed = confirmRuntime.applyAdjudication(confirmFinding, decision("CONFIRM"), HEAD)
   assert.equal(confirmed.state, "CONFIRMED")
+  assert.equal(confirmRuntime.currentState(confirmFinding, HEAD), "CONFIRMED")
   assert.equal(confirmed.adjudication.previousState, "NEW")
   assert.equal(confirmed.adjudication.resultingState, "CONFIRMED")
   assert.equal(confirmed.adjudication.adjudicatorId, "kodac:human-adjudicator")
   assert.equal(confirmed.adjudication.previousAdjudicationIdentity, null)
   assert.match(confirmed.adjudication.adjudicationIdentity, /^[0-9a-f]{64}$/)
-  assert.equal(confirmed.adjudication.adjudicationIdentity, confirmedAgain.adjudication.adjudicationIdentity)
 
-  const rejected = firstRuntime.applyAdjudication(finding, decision("REJECT", { evidenceRefs: ["contract:evidence"] }), HEAD)
+  const rejectRuntime = runtime()
+  const rejectFinding = rejectRuntime.createFinding(claim(), HEAD)
+  const rejected = rejectRuntime.applyAdjudication(rejectFinding, decision("REJECT", { evidenceRefs: ["contract:evidence"] }), HEAD)
   assert.equal(rejected.state, "REJECTED")
+  assert.equal(rejectRuntime.currentState(rejectFinding, HEAD), "REJECTED")
+})
+
+test("runtime-owned state prevents adjudication forks from the same finding", () => {
+  const firstRuntime = runtime()
+  const finding = firstRuntime.createFinding(claim(), HEAD)
+  firstRuntime.applyAdjudication(finding, decision("CONFIRM"), HEAD)
+  assert.throws(() => firstRuntime.applyAdjudication(finding, decision("REJECT"), HEAD), /invalid finding transition/)
+  assert.throws(() => firstRuntime.applyAdjudication(finding, decision("MARK_DUPLICATE", { duplicateOf: OTHER_FINDING }), HEAD), /invalid finding transition/)
+  assert.equal(firstRuntime.currentState(finding, HEAD), "CONFIRMED")
 })
 
 test("MARK_DUPLICATE requires another finding identity and rejects self-reference", () => {
@@ -139,56 +150,61 @@ test("MARK_DUPLICATE requires another finding identity and rejects self-referenc
   const duplicate = firstRuntime.applyAdjudication(finding, decision("MARK_DUPLICATE", { duplicateOf: OTHER_FINDING }), HEAD)
   assert.equal(duplicate.state, "DUPLICATE")
   assert.equal(duplicate.adjudication.duplicateOf, OTHER_FINDING)
-  assert.throws(() => firstRuntime.applyAdjudication(finding, decision("MARK_DUPLICATE", { duplicateOf: finding.findingIdentity }), HEAD), /duplicate of itself/)
+
+  const selfRuntime = runtime()
+  const selfFinding = selfRuntime.createFinding(claim(), HEAD)
+  assert.throws(() => selfRuntime.applyAdjudication(selfFinding, decision("MARK_DUPLICATE", { duplicateOf: selfFinding.findingIdentity }), HEAD), /duplicate of itself/)
 })
 
-test("FIXED requires prior issued CONFIRMED adjudication plus correction evidence", () => {
+test("FIXED requires runtime-owned CONFIRMED state plus correction evidence", () => {
   const firstRuntime = runtime()
   const finding = firstRuntime.createFinding(claim(), HEAD)
   assert.throws(() => firstRuntime.applyAdjudication(finding, decision("MARK_FIXED", { correctionRef: "commit:fix" }), HEAD), /invalid finding transition/)
   const confirmed = firstRuntime.applyAdjudication(finding, decision("CONFIRM"), HEAD)
-  assert.throws(() => firstRuntime.applyAdjudication(finding, decision("MARK_FIXED"), HEAD, [confirmed.adjudication]), /requires correctionRef/)
-  const fixed = firstRuntime.applyAdjudication(finding, decision("MARK_FIXED", { correctionRef: "commit:fix" }), HEAD, [confirmed.adjudication])
+  assert.throws(() => firstRuntime.applyAdjudication(finding, decision("MARK_FIXED"), HEAD), /requires correctionRef/)
+  const fixed = firstRuntime.applyAdjudication(finding, decision("MARK_FIXED", { correctionRef: "commit:fix" }), HEAD)
   assert.equal(fixed.state, "FIXED")
   assert.equal(fixed.adjudication.previousAdjudicationIdentity, confirmed.adjudication.adjudicationIdentity)
+  assert.equal(firstRuntime.currentState(finding, HEAD), "FIXED")
 })
 
-test("REVERIFIED requires issued FIXED chain and reverification evidence", () => {
+test("REVERIFIED requires runtime-owned FIXED state and reverification evidence", () => {
   const firstRuntime = runtime()
   const finding = firstRuntime.createFinding(claim(), HEAD)
   const confirmed = firstRuntime.applyAdjudication(finding, decision("CONFIRM"), HEAD)
-  const fixed = firstRuntime.applyAdjudication(finding, decision("MARK_FIXED", { correctionRef: "commit:fix" }), HEAD, [confirmed.adjudication])
-  assert.throws(() => firstRuntime.applyAdjudication(finding, decision("REVERIFY"), HEAD, [confirmed.adjudication, fixed.adjudication]), /requires reverificationRef/)
-  const reverified = firstRuntime.applyAdjudication(
-    finding,
-    decision("REVERIFY", { reverificationRef: "check:exact-head" }),
-    HEAD,
-    [confirmed.adjudication, fixed.adjudication],
-  )
+  const fixed = firstRuntime.applyAdjudication(finding, decision("MARK_FIXED", { correctionRef: "commit:fix" }), HEAD)
+  assert.throws(() => firstRuntime.applyAdjudication(finding, decision("REVERIFY"), HEAD), /requires reverificationRef/)
+  const reverified = firstRuntime.applyAdjudication(finding, decision("REVERIFY", { reverificationRef: "check:exact-head" }), HEAD)
   assert.equal(reverified.state, "REVERIFIED")
+  assert.equal(reverified.adjudication.previousAdjudicationIdentity, fixed.adjudication.adjudicationIdentity)
+  assert.notEqual(fixed.adjudication.adjudicationIdentity, confirmed.adjudication.adjudicationIdentity)
+  assert.equal(firstRuntime.currentState(finding, HEAD), "REVERIFIED")
 })
 
-test("history chain rejects reordered, foreign-runtime, and reconstructed adjudications", () => {
+test("structurally valid external adjudication cannot alter runtime-owned lifecycle state", () => {
   const firstRuntime = runtime()
   const finding = firstRuntime.createFinding(claim(), HEAD)
-  const confirmed = firstRuntime.applyAdjudication(finding, decision("CONFIRM"), HEAD)
-  const fixed = firstRuntime.applyAdjudication(finding, decision("MARK_FIXED", { correctionRef: "commit:fix" }), HEAD, [confirmed.adjudication])
-  assert.throws(() => firstRuntime.currentState(finding, [fixed.adjudication, confirmed.adjudication], HEAD), /previous state mismatch|chain identity mismatch/)
-
-  const reconstructed = firstRuntime.validateAdjudicationRecord(JSON.parse(JSON.stringify(confirmed.adjudication)))
-  assert.throws(() => firstRuntime.currentState(finding, [reconstructed], HEAD), /not an in-process adjudication issued/)
 
   const otherRuntime = runtime()
   const otherFinding = otherRuntime.createFinding(claim(), HEAD)
-  const otherConfirmed = otherRuntime.applyAdjudication(otherFinding, decision("CONFIRM"), HEAD)
-  assert.throws(() => firstRuntime.currentState(finding, [otherConfirmed.adjudication], HEAD), /not an in-process adjudication issued/)
+  const externalConfirmed = otherRuntime.applyAdjudication(otherFinding, decision("CONFIRM"), HEAD)
+  const structurallyValid = firstRuntime.validateAdjudicationRecord(JSON.parse(JSON.stringify(externalConfirmed.adjudication)))
+  assert.equal(structurallyValid.resultingState, "CONFIRMED")
+  assert.equal(firstRuntime.currentState(finding, HEAD), "NEW")
 })
 
-test("invalid lifecycle transitions fail closed", () => {
+test("foreign-runtime findings cannot exercise another runtime instance's authority", () => {
+  const firstRuntime = runtime()
+  const otherRuntime = runtime()
+  const otherFinding = otherRuntime.createFinding(claim(), HEAD)
+  assert.throws(() => firstRuntime.applyAdjudication(otherFinding, decision("CONFIRM"), HEAD), /not an in-process record issued/)
+})
+
+test("invalid lifecycle transitions fail closed after runtime state advances", () => {
   const firstRuntime = runtime()
   const finding = firstRuntime.createFinding(claim(), HEAD)
-  const rejected = firstRuntime.applyAdjudication(finding, decision("REJECT"), HEAD)
-  assert.throws(() => firstRuntime.applyAdjudication(finding, decision("CONFIRM"), HEAD, [rejected.adjudication]), /invalid finding transition/)
+  firstRuntime.applyAdjudication(finding, decision("REJECT"), HEAD)
+  assert.throws(() => firstRuntime.applyAdjudication(finding, decision("CONFIRM"), HEAD), /invalid finding transition/)
 })
 
 test("adjudication identity detects structural mutation but is explicitly not an authenticity signature", () => {

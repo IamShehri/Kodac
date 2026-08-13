@@ -309,7 +309,7 @@ function deepFreeze<T>(value: T): T {
 export class ReviewerIntelligenceRuntime {
   readonly #adjudicatorId: string
   readonly #issuedFindings = new WeakSet<object>()
-  readonly #issuedAdjudications = new WeakSet<object>()
+  readonly #findingStates = new WeakMap<object, { state: FindingState; lastAdjudicationIdentity: string | null }>()
 
   constructor(options: ReviewerIntelligenceRuntimeOptions) {
     const record = plainObject(options, "options")
@@ -342,7 +342,7 @@ export class ReviewerIntelligenceRuntime {
       freshness,
       state,
     })
-    this.#issuedFindings.add(finding)
+    this.#issueFinding(finding)
     return finding
   }
 
@@ -367,43 +367,34 @@ export class ReviewerIntelligenceRuntime {
       freshness: currentHead === finding.review.reviewedHead ? "CURRENT" : "STALE",
       state: currentHead === finding.review.reviewedHead ? "NEW" : "STALE",
     }))
-    this.#issuedFindings.add(updated)
+    this.#issueFinding(updated)
     return updated
   }
 
-  currentState(finding: FindingRecord, history: readonly AdjudicationRecord[], currentHeadInput: unknown): FindingState {
+  currentState(finding: FindingRecord, currentHeadInput: unknown): FindingState {
     this.#assertIssuedFinding(finding)
     const currentHead = sha1(currentHeadInput, "currentHead")
     if (finding.evaluatedHead !== currentHead) throw new Error("finding evaluatedHead is stale relative to caller-supplied current head")
-    let state: FindingState = finding.state
-    let previousIdentity: string | null = null
-    for (const [index, raw] of history.entries()) {
-      this.#assertIssuedAdjudication(raw, index)
-      const record = adjudicationValue(raw)
-      if (record.findingIdentity !== finding.findingIdentity) throw new Error(`history[${index}] finding identity mismatch`)
-      if (record.previousAdjudicationIdentity !== previousIdentity) throw new Error(`history[${index}] chain identity mismatch`)
-      if (record.previousState !== state) throw new Error(`history[${index}] previous state mismatch`)
-      state = record.resultingState
-      previousIdentity = record.adjudicationIdentity
-    }
-    return state
+    const tracked = this.#findingStates.get(finding)
+    if (!tracked) throw new Error("finding lifecycle state is unavailable")
+    return tracked.state
   }
 
   applyAdjudication(
     finding: FindingRecord,
     decisionInput: unknown,
     currentHeadInput: unknown,
-    history: readonly AdjudicationRecord[] = [],
   ): AdjudicationResult {
-    const currentState = this.currentState(finding, history, currentHeadInput)
+    const currentState = this.currentState(finding, currentHeadInput)
     const decision = decisionValue(decisionInput)
     const resultingState = nextState(currentState, decision.action)
     if (decision.duplicateOf === finding.findingIdentity) throw new Error("finding cannot be a duplicate of itself")
-    const previousAdjudicationIdentity = history.length === 0 ? null : history[history.length - 1]!.adjudicationIdentity
+    const tracked = this.#findingStates.get(finding)
+    if (!tracked) throw new Error("finding lifecycle state is unavailable")
     const recordWithoutIdentity: Omit<AdjudicationRecord, "adjudicationIdentity"> = {
       version: KRI_R2_ADJUDICATION_VERSION,
       findingIdentity: finding.findingIdentity,
-      previousAdjudicationIdentity,
+      previousAdjudicationIdentity: tracked.lastAdjudicationIdentity,
       action: decision.action,
       previousState: currentState,
       resultingState,
@@ -417,19 +408,24 @@ export class ReviewerIntelligenceRuntime {
       ...recordWithoutIdentity,
       adjudicationIdentity: identity(adjudicationPreimage(recordWithoutIdentity)),
     })
-    this.#issuedAdjudications.add(adjudication)
+    this.#findingStates.set(finding, {
+      state: resultingState,
+      lastAdjudicationIdentity: adjudication.adjudicationIdentity,
+    })
     return deepFreeze({ finding, adjudication, state: resultingState })
+  }
+
+  #issueFinding(finding: FindingRecord): void {
+    this.#issuedFindings.add(finding)
+    this.#findingStates.set(finding, {
+      state: finding.state,
+      lastAdjudicationIdentity: null,
+    })
   }
 
   #assertIssuedFinding(finding: FindingRecord): void {
     if (typeof finding !== "object" || finding === null || !this.#issuedFindings.has(finding)) {
       throw new Error("finding is not an in-process record issued by this ReviewerIntelligenceRuntime")
-    }
-  }
-
-  #assertIssuedAdjudication(record: AdjudicationRecord, index: number): void {
-    if (typeof record !== "object" || record === null || !this.#issuedAdjudications.has(record)) {
-      throw new Error(`history[${index}] is not an in-process adjudication issued by this ReviewerIntelligenceRuntime`)
     }
   }
 }
