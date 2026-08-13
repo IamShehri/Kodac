@@ -251,6 +251,13 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
     throw new Error(`K3-R5 working tree exceeds ${HARD_MAX_WORKING_TREE_CHANGES} changes`)
   }
   const workingTree = snapshot.workingTree.map((change, index) => canonicalWorkingTreeChange(change, `snapshot.workingTree[${index}]`))
+  for (let index = 1; index < workingTree.length; index++) {
+    const previous = workingTree[index - 1]
+    const current = workingTree[index]
+    const order = compareStrings(previous.path, current.path)
+      || compareStrings(previous.sourcePath ?? "", current.sourcePath ?? "")
+    if (order > 0) throw new Error("K3-R5 requires canonical K3-R2 working-tree ordering")
+  }
 
   if (!Array.isArray(snapshot.inventory) || snapshot.inventory.length > HARD_MAX_INVENTORY_ENTRIES) {
     throw new Error(`K3-R5 inventory exceeds ${HARD_MAX_INVENTORY_ENTRIES} entries`)
@@ -274,6 +281,13 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
     }
     inventoryPaths.add(path)
     inventory.push({ path, type: entry.type, gitObjectId })
+  }
+  for (let index = 1; index < inventory.length; index++) {
+    const previous = inventory[index - 1]
+    const current = inventory[index]
+    const order = compareStrings(previous.path, current.path)
+      || compareStrings(previous.type, current.type)
+    if (order > 0) throw new Error("K3-R5 requires canonical K3-R2 inventory ordering")
   }
 
   const canonicalCompleteness = { state: "complete", reasons: [] as string[], omittedAtLeast: 0 }
