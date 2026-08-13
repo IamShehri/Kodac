@@ -90,6 +90,15 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFileSync, readdirSync } from "node:fs"
           const root = "packages/kodac-runtime/src/context-engine"
+          const allowedSpecifiers = new Set([
+            "node:crypto",
+            "./contracts.ts",
+            "../repository/contracts.ts",
+            "../repository-intelligence/contracts.ts",
+          ])
+          if (allowedSpecifiers.has("../execution/gateway.ts")) {
+            throw new Error("K3-R5 import allowlist self-test failed")
+          }
           for (const name of readdirSync(root, { recursive: true })
             .filter((entry) => entry.endsWith(".ts"))
             .sort()) {
@@ -99,7 +108,7 @@ jobs:
               ...source.matchAll(/\bimport\s+["']([^"']+)["']/g),
             ].map((match) => match[1])
             for (const specifier of specifiers) {
-              if (specifier !== "node:crypto" && !specifier.startsWith(".")) {
+              if (!allowedSpecifiers.has(specifier)) {
                 throw new Error(`Unauthorized K3-R5 import in ${name}: ${specifier}`)
               }
             }
