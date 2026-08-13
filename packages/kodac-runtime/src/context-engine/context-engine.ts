@@ -67,6 +67,12 @@ interface CanonicalWorkingTreeChange {
   sourcePath: string | null
 }
 
+interface CanonicalInventoryEntry {
+  path: string
+  type: RepositorySnapshot["inventory"][number]["type"]
+  gitObjectId: string | null
+}
+
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex")
 }
@@ -250,12 +256,53 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
     throw new Error(`K3-R5 inventory exceeds ${HARD_MAX_INVENTORY_ENTRIES} entries`)
   }
   const inventoryPaths = new Set<string>()
+  const inventory: CanonicalInventoryEntry[] = []
   for (const [index, entry] of snapshot.inventory.entries()) {
     if (!entry || typeof entry !== "object") throw new Error(`snapshot.inventory[${index}] must be an object`)
     const path = validateCanonicalPath(entry.path, `snapshot.inventory[${index}].path`)
     if (inventoryPaths.has(path)) throw new Error(`snapshot inventory path replay mismatch: ${path}`)
     if (!["file", "directory", "symlink"].includes(entry.type)) throw new Error(`snapshot.inventory[${index}] has an unsupported type`)
+    let gitObjectId: string | null = null
+    if (entry.type === "file") {
+      if (!isFullGitObjectId(entry.gitObjectId) || entry.gitObjectId !== entry.gitObjectId.toLowerCase()) {
+        throw new Error(`snapshot.inventory[${index}] file requires a canonical lowercase Git object id`)
+      }
+      gitObjectId = entry.gitObjectId
+    } else if (entry.gitObjectId !== undefined) {
+      throw new Error(`snapshot.inventory[${index}] non-file must not carry a Git object id`)
+    }
     inventoryPaths.add(path)
+    inventory.push({ path, type: entry.type, gitObjectId })
+  }
+
+  const canonicalCompleteness = { state: "complete", reasons: [] as string[], omittedAtLeast: 0 }
+  const expectedContentIdentity = sha256(JSON.stringify({
+    version: K3_R2_SNAPSHOT_CONTRACT_VERSION,
+    gitHead: snapshot.gitHead,
+    workingTree,
+    inventory,
+    completeness: canonicalCompleteness,
+  }))
+  if (expectedContentIdentity !== snapshot.contentIdentity.value) {
+    throw new Error("K3-R5 snapshot content identity does not match its canonical K3-R2 payload")
+  }
+
+  const expectedSnapshotIdentity = sha256(JSON.stringify({
+    version: K3_R2_SNAPSHOT_CONTRACT_VERSION,
+    repositoryIdentity: {
+      scheme: "workspace-root-sha256-v1",
+      scope: "workspace-local",
+      value: snapshot.repositoryIdentity.value,
+    },
+    contentIdentity: {
+      scheme: "sha256-canonical-repository-content-v1",
+      value: snapshot.contentIdentity.value,
+    },
+    freshness: "current",
+    completeness: canonicalCompleteness,
+  }))
+  if (expectedSnapshotIdentity !== snapshot.snapshotIdentity.value) {
+    throw new Error("K3-R5 snapshot identity does not match its canonical K3-R2 payload")
   }
 
   if (!Array.isArray(snapshot.evidence) || snapshot.evidence.length > HARD_MAX_EVIDENCE_INPUTS) {
