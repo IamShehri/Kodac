@@ -16,6 +16,13 @@ const REPOSITORY_ID = "a".repeat(64)
 const CONTENT_ID = "b".repeat(64)
 const SNAPSHOT_ID = "c".repeat(64)
 const GIT_HEAD = "d".repeat(40)
+const ARCHITECTURE_PATH = "docs/adr/ADR-0009-kodac-repo-graph-architecture.md"
+const DEFAULT_CHANGE: RepositorySnapshot["workingTree"][number] = {
+  path: "src/widget.ts",
+  state: "modified",
+  indexStatus: " ",
+  worktreeStatus: "M",
+}
 
 function canonicalize(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value)
@@ -29,6 +36,27 @@ function canonicalize(value: unknown): string {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex")
+}
+
+function canonicalChange(change: RepositorySnapshot["workingTree"][number]): object {
+  return {
+    path: change.path,
+    state: change.state,
+    indexStatus: change.indexStatus,
+    worktreeStatus: change.worktreeStatus,
+    sourcePath: change.sourcePath ?? null,
+  }
+}
+
+function workingTreeEvidenceId(
+  change: RepositorySnapshot["workingTree"][number],
+  contentIdentity = CONTENT_ID,
+): string {
+  return sha256(`${contentIdentity}\0git-derived\0${JSON.stringify(canonicalChange(change))}`)
+}
+
+function architectureEvidenceId(path = ARCHITECTURE_PATH, contentIdentity = CONTENT_ID): string {
+  return sha256(`${contentIdentity}\0heuristic-inference\0architecture-candidate\0${path}`)
 }
 
 function request(overrides: Partial<ContextBundleRequest> = {}): ContextBundleRequest {
@@ -47,7 +75,7 @@ function request(overrides: Partial<ContextBundleRequest> = {}): ContextBundleRe
 
 function gitEvidence(overrides: Partial<RepositoryEvidence> = {}): RepositoryEvidence {
   return {
-    evidenceId: "1".repeat(64),
+    evidenceId: workingTreeEvidenceId(DEFAULT_CHANGE),
     contentIdentity: CONTENT_ID,
     evidenceClass: "git-derived",
     source: {
@@ -55,15 +83,15 @@ function gitEvidence(overrides: Partial<RepositoryEvidence> = {}): RepositoryEvi
       kind: "builtin",
       provenanceRefs: ["receipt:git-status"],
     },
-    subjectPath: "src/widget.ts",
-    claim: { kind: "working-tree-change", value: "modified" },
+    subjectPath: DEFAULT_CHANGE.path,
+    claim: { kind: "working-tree-change", value: DEFAULT_CHANGE.state },
     ...overrides,
   }
 }
 
 function architectureEvidence(overrides: Partial<RepositoryEvidence> = {}): RepositoryEvidence {
   return {
-    evidenceId: "2".repeat(64),
+    evidenceId: architectureEvidenceId(),
     contentIdentity: CONTENT_ID,
     evidenceClass: "heuristic-inference",
     source: {
@@ -71,7 +99,7 @@ function architectureEvidence(overrides: Partial<RepositoryEvidence> = {}): Repo
       kind: "builtin",
       provenanceRefs: [],
     },
-    subjectPath: "docs/adr/ADR-0009-kodac-repo-graph-architecture.md",
+    subjectPath: ARCHITECTURE_PATH,
     claim: { kind: "architecture-candidate", value: "candidate" },
     ...overrides,
   }
@@ -86,11 +114,11 @@ function snapshot(overrides: Partial<RepositorySnapshot> = {}): RepositorySnapsh
     gitHead: GIT_HEAD,
     freshness: "current",
     completeness: { state: "complete", reasons: [], omittedAtLeast: 0 },
-    workingTree: [],
+    workingTree: [DEFAULT_CHANGE],
     inventory: [
       { path: "src", type: "directory" },
       { path: "src/widget.ts", type: "file", gitObjectId: "e".repeat(40) },
-      { path: "docs/adr/ADR-0009-kodac-repo-graph-architecture.md", type: "file", gitObjectId: "f".repeat(40) },
+      { path: ARCHITECTURE_PATH, type: "file", gitObjectId: "f".repeat(40) },
     ],
     sources: [
       { id: "builtin.git.status-porcelain-v1-z.v1", kind: "builtin", provenanceRefs: ["receipt:git-status", "receipt:git-status-post"] },
@@ -191,13 +219,13 @@ test("K3-R5 builds a deterministic bounded ContextBundle from current normalized
 
 test("K3-R5 selection is stable across source-array ordering and request hint ordering", () => {
   const forward = buildContextBundle({
-    request: request({ targetPaths: ["src/widget.ts", "docs/adr/ADR-0009-kodac-repo-graph-architecture.md"], symbolHints: ["Widget", "architecture"] }),
+    request: request({ targetPaths: ["src/widget.ts", ARCHITECTURE_PATH], symbolHints: ["Widget", "architecture"] }),
     snapshot: snapshot(),
     structuralResults: [structuralResult()],
   })
   const reversedSnapshot = snapshot({ evidence: [...snapshot().evidence].reverse(), sources: [...snapshot().sources].reverse() })
   const reversed = buildContextBundle({
-    request: request({ targetPaths: ["docs/adr/ADR-0009-kodac-repo-graph-architecture.md", "src/widget.ts"], symbolHints: ["architecture", "Widget"] }),
+    request: request({ targetPaths: [ARCHITECTURE_PATH, "src/widget.ts"], symbolHints: ["architecture", "Widget"] }),
     snapshot: reversedSnapshot,
     structuralResults: [structuralResult()],
   })
@@ -433,6 +461,62 @@ test("K3-R5 rejects incompatible canonical K3-R2 source/evidence/claim mappings"
   assert.throws(
     () => buildContextBundle({ request: request(), snapshot: snapshot({ evidence: [gitEvidence(), wrongArchitectureClass] }) }),
     /canonical architecture evidence mapping/,
+  )
+})
+
+test("K3-R5 rejects stale K3-R2 evidence identities after payload mutation", () => {
+  const originalId = gitEvidence().evidenceId
+
+  const movedChange: RepositorySnapshot["workingTree"][number] = {
+    path: "src/other.ts",
+    state: "modified",
+    indexStatus: " ",
+    worktreeStatus: "M",
+  }
+  const movedEvidence = gitEvidence({ evidenceId: originalId, subjectPath: movedChange.path })
+  assert.throws(
+    () => buildContextBundle({
+      request: request(),
+      snapshot: snapshot({ workingTree: [movedChange], evidence: [movedEvidence, architectureEvidence()] }),
+    }),
+    /evidence identity does not match its canonical K3-R2 payload/,
+  )
+
+  const addedChange: RepositorySnapshot["workingTree"][number] = {
+    path: DEFAULT_CHANGE.path,
+    state: "added",
+    indexStatus: "A",
+    worktreeStatus: " ",
+  }
+  const changedClaim = gitEvidence({
+    evidenceId: originalId,
+    claim: { kind: "working-tree-change", value: "added" },
+  })
+  assert.throws(
+    () => buildContextBundle({
+      request: request(),
+      snapshot: snapshot({ workingTree: [addedChange], evidence: [changedClaim, architectureEvidence()] }),
+    }),
+    /evidence identity does not match its canonical K3-R2 payload/,
+  )
+
+  const renamedChange: RepositorySnapshot["workingTree"][number] = {
+    path: DEFAULT_CHANGE.path,
+    sourcePath: "src/old-widget.ts",
+    state: "renamed",
+    indexStatus: "R",
+    worktreeStatus: " ",
+  }
+  const changedSource = gitEvidence({
+    evidenceId: originalId,
+    claim: { kind: "working-tree-change", value: "renamed", sourcePath: "src/old-widget.ts" },
+  })
+  assert.throws(
+    () => buildContextBundle({
+      request: request(),
+      snapshot: snapshot({ workingTree: [renamedChange], evidence: [changedSource, architectureEvidence()] }),
+    }),
+    /evidence identity does not match its canonical K3-R2 payload/,
   )
 })
 
