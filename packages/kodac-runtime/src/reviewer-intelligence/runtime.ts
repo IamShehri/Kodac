@@ -397,6 +397,9 @@ export class ReviewerIntelligenceRuntime {
     const decision = decisionValue(decisionInput)
     const resultingState = nextState(currentState, decision.action)
     if (decision.duplicateOf === finding.findingIdentity) throw new Error("finding cannot be a duplicate of itself")
+    if (decision.action === "MARK_DUPLICATE" && !this.#findingStates.has(decision.duplicateOf!)) {
+      throw new Error("duplicateOf must reference a finding tracked by this runtime")
+    }
     const tracked = this.#findingStates.get(findingAuthorityKey(finding))
     if (!tracked) throw new Error("finding lifecycle state is unavailable")
     const recordWithoutIdentity: Omit<AdjudicationRecord, "adjudicationIdentity"> = {
