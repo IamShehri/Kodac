@@ -14,19 +14,25 @@ Engineering milestones describe architectural and technical progress:
 K0/K1 — architecture, governance, provenance, donor-selection foundation
 K2    — trusted runtime spine
 K3    — evidence-backed repository intelligence & context engine
+KRI-P0 — Reviewer Intelligence planning / contract design gate
 K4+   — later milestones only when separately defined/authorized
 ```
 
 Current state:
 
-| Engineering milestone | Status |
+| Engineering milestone / gate | Status |
 | --- | --- |
 | K0/K1 | CLOSED |
 | K2 | CLOSED |
-| K3 | DEFINED; IMPLEMENTATION NOT AUTHORIZED |
-| K4-K7 | PROPOSED DIRECTIONS ONLY |
+| K3 | IN PROGRESS; K3-R1 THROUGH K3-R5 CANONICAL FOR THEIR AUTHORIZED SCOPES; K3 NOT CLOSED |
+| K3-R6+ | NOT AUTHORIZED |
+| KRI-P0 | AUTHORIZED FOR PLANNING AND CONTRACT DESIGN ONLY |
+| KRI implementation | NOT AUTHORIZED |
+| K4-K7 | PROPOSED / NOT AUTHORIZED |
 
 Engineering milestone closure does not itself establish a distributable product version.
+
+KRI-P0 is not a product-version grant and does not authorize K5, reviewer implementation, external review services, writes, approvals, merges, or completion decisions.
 
 ## Public product versions
 
@@ -69,8 +75,17 @@ engineering milestone closed
 Likewise:
 
 ```text
-K3 defined
-!= K3 implementation authorized
+K3-R1 through K3-R5 canonical
+!= K3 closed
+!= K3-R6+ authorized
+
+KRI-P0 planning authorized
+!= KRI implementation authorized
+!= K5 implementation authorized
+!= repository write authority
+!= PR approval authority
+!= merge authority
+!= PROVEN_READY authority
 ```
 
 ## Release-gate direction
@@ -93,7 +108,24 @@ This list is planning direction only. It does not authorize release work or esta
 ## Current authority boundary
 
 ```text
-K3 IMPLEMENTATION:
+K3: IN PROGRESS / NOT CLOSED
+K3-R1 THROUGH K3-R5: CANONICAL FOR THEIR AUTHORIZED SCOPES
+K3-R6+: NOT AUTHORIZED
+
+KRI-P0: AUTHORIZED FOR PLANNING AND CONTRACT DESIGN ONLY
+KRI IMPLEMENTATION: NOT AUTHORIZED
+K5 IMPLEMENTATION: NOT AUTHORIZED
+
+CODE IMPORT:
+NOT AUTHORIZED
+
+NEW KODAC DEPENDENCIES:
+NOT AUTHORIZED
+
+EXTERNAL REVIEW SERVICE INTEGRATION:
+NOT AUTHORIZED
+
+WRITE / REVIEW / APPROVAL / MERGE AUTHORITY FROM KRI-P0:
 NOT AUTHORIZED
 
 PUBLIC RELEASE:
@@ -108,3 +140,39 @@ NOT AUTHORIZED
 KODAC NAME / TRADEMARK CLEARANCE:
 NOT ESTABLISHED
 ```
+
+## KRI-P0 explicit non-grants
+
+```text
+KRI IMPLEMENTATION: NOT AUTHORIZED
+K5 IMPLEMENTATION: NOT AUTHORIZED
+K3-R6+: NOT AUTHORIZED
+
+CUBIC SOURCE INTAKE: NOT AUTHORIZED
+CODERABBIT SOURCE INTAKE: NOT AUTHORIZED
+CUBIC INTEGRATION: NOT AUTHORIZED
+CODERABBIT INTEGRATION: NOT AUTHORIZED
+EXTERNAL REVIEW SERVICE INTEGRATION: NOT AUTHORIZED
+
+NEW KODAC DEPENDENCIES: NOT AUTHORIZED
+CODE IMPORT: NOT AUTHORIZED
+
+PERSISTENT REVIEW STORAGE: NOT AUTHORIZED
+PERSISTENT REVIEW LEARNING: NOT AUTHORIZED
+VECTOR / EMBEDDING INFRASTRUCTURE: NOT AUTHORIZED
+
+AUTOFIX EXECUTION: NOT AUTHORIZED
+REPOSITORY WRITE AUTHORITY: NOT AUTHORIZED
+GITHUB COMMENT / REVIEW WRITE AUTHORITY: NOT AUTHORIZED
+PR APPROVAL AUTHORITY: NOT AUTHORIZED
+MERGE AUTHORITY: NOT AUTHORIZED
+
+RULESET CHANGE: NOT AUTHORIZED
+K2 EXECUTION-AUTHORITY EXPANSION: NOT AUTHORIZED
+
+PUBLIC RELEASE: NOT AUTHORIZED
+PACKAGE PUBLICATION: NOT AUTHORIZED
+BRAND LAUNCH: NOT AUTHORIZED
+```
+
+This documentation gate does not modify `code_import_authorized` and admits no external source.

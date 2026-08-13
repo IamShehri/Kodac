@@ -2,7 +2,7 @@
 
 ## Authority
 
-This document is the current Kodac engineering roadmap authority after K2 canonical closeout, K3-R1/K3-R2 canonical adoption, and the separately authorized K3-R3 external-adapter benchmark gate.
+This document is the current Kodac engineering roadmap authority after K2 canonical closeout and canonical adoption of K3-R1 through K3-R5. It also records KRI-P0 as a separate Reviewer Intelligence planning/contract-design gate only.
 
 The pre-reconstitution roadmap at canonical base `11227cc8c58e00879e8b40e7ff7948bee396fef7` remains historical evidence and is superseded only as current product/roadmap authority.
 
@@ -14,7 +14,8 @@ Engineering milestones do not themselves authorize public release, package publi
 | --- | --- | --- | --- |
 | **K0/K1** | Architecture, governance, provenance, donor-selection foundation | **CLOSED** | Complete historical milestone |
 | **K2** | Trusted Runtime Spine | **CLOSED** | Complete canonical milestone |
-| **K3** | Evidence-Backed Repository Intelligence & Context Engine | **IN PROGRESS — K3-R1 AND K3-R2 CANONICAL; K3-R3 AUTHORIZED / NOT YET CANONICAL** | **K3-R3 EXTERNAL ADAPTER BENCHMARK ONLY** |
+| **K3** | Evidence-Backed Repository Intelligence & Context Engine | **IN PROGRESS — K3-R1 THROUGH K3-R5 CANONICAL; K3 NOT CLOSED** | **K3-R1 THROUGH K3-R5 ONLY AS ALREADY CANONICALLY ADOPTED; K3-R6+ NOT AUTHORIZED** |
+| **KRI-P0** | Reviewer Intelligence authorization & planning gate | **PLANNING / CONTRACT DESIGN AUTHORIZED ONLY** | **KRI IMPLEMENTATION NOT AUTHORIZED** |
 | **K4** | Ecosystem Compatibility & Capability Registry | **PROPOSED** | Not authorized |
 | **K5** | Proof Review & Judge | **PROPOSED** | Not authorized |
 | **K6** | Evidence Router & Outcome Learning | **PROPOSED** | Not authorized |
@@ -48,32 +49,47 @@ Outcome:
 
 ```text
 K3 — Evidence-Backed Repository Intelligence & Context Engine
-STATUS: IN PROGRESS — K3-R1 AND K3-R2 CANONICAL; K3-R3 AUTHORIZED / NOT YET CANONICAL
+STATUS: IN PROGRESS — K3-R1 THROUGH K3-R5 CANONICAL; K3 NOT CLOSED
 K3-R1: CANONICAL / COMPLETE FOR ITS AUTHORIZED SCOPE
 K3-R2: CANONICAL / COMPLETE FOR ITS AUTHORIZED SCOPE
-K3-R3: AUTHORIZED FOR BOUNDED EXTERNAL ADAPTER BENCHMARK / NOT YET CANONICAL
-K3-R4+: NOT AUTHORIZED
-K3: NOT CLOSED
+K3-R3: CANONICAL / COMPLETE FOR ITS AUTHORIZED SCOPE
+K3-R4: CANONICAL / COMPLETE FOR ITS AUTHORIZED SCOPE
+K3-R5: CANONICAL / COMPLETE FOR ITS AUTHORIZED SCOPE
+K3-R6+: NOT AUTHORIZED
 ```
 
 Purpose:
 
 Turn a repository and engineering task into a bounded, freshness-aware, evidence-backed representation of relevant files, symbols, definitions, references, dependencies, tests, architecture/specification context, and likely blast radius, then produce a bounded Context Bundle for model reasoning.
 
-K3 must preserve the existing K2 execution authority. Repository intelligence can inform actions; it cannot authorize side effects.
+K3 preserves K2 execution authority. Repository intelligence can inform actions; it cannot authorize side effects.
 
-Canonical and planned contract direction includes:
+Canonical contract direction now includes already-adopted work for:
 
-- Repository Snapshot Identity;
-- evidence-backed Repo Graph;
-- Kodac-owned semantic query boundary;
-- bounded Context Engine / Context Bundle;
-- explicit evidence ordering and freshness semantics;
-- benchmark-first evaluation under ADR-0010.
+- repository gold evidence and fixture truth;
+- exact repository snapshot identity and freshness;
+- bounded external-adapter benchmarking;
+- bounded external ast-grep CLI structural-search adapter;
+- bounded deterministic Context Engine / Context Bundle;
+- evidence ordering, provenance, completeness, and identity semantics.
 
-K3-R1 and K3-R2 are canonical only for their separately authorized scopes. K3-R3 is separately founder-authorized only for bounded external-adapter benchmarking under `docs/planning/KODAC_K3_R3_EXTERNAL_ADAPTER_BENCHMARK_AUTHORIZATION_2026-08-12.md`; it is not yet canonical implementation/adoption evidence and grants no source-intake authority. K3 is not closed.
+K3-R1 through K3-R5 are canonical only for their separately authorized scopes. K3 remains open. K3-R6+ is not authorized.
 
-No permanent storage engine or donor implementation is selected by this roadmap. No vector or embedding infrastructure is selected. K3-R3 benchmarking does not admit any external donor implementation or dependency into Kodac.
+No permanent storage engine is selected by this roadmap. No vector or embedding infrastructure is selected.
+
+## KRI-P0 — Reviewer Intelligence planning gate
+
+KRI-P0 is an independent cross-cutting planning gate, not K5 implementation.
+
+It authorizes only planning and contract design for future evidence-backed Reviewer Intelligence, including exact-revision review identity, findings, adjudication, risk-aware review, CI/self-bypass awareness, provenance/identity review, non-authoritative suggestions, scoped learning concepts, multi-reviewer independence, and benchmark-first evaluation.
+
+```text
+KRI-P0: AUTHORIZED FOR PLANNING AND CONTRACT DESIGN ONLY
+KRI IMPLEMENTATION: NOT AUTHORIZED
+K5 IMPLEMENTATION: NOT AUTHORIZED
+```
+
+Reviewer output is planned as a claim requiring adjudication, not completion truth. K2 remains the sole trusted side-effect execution authority and the existing Done Gate remains the `PROVEN_READY` authority under accepted contracts.
 
 ## K4 — Proposed: Ecosystem Compatibility & Capability Registry
 
@@ -95,6 +111,8 @@ Proposed direction only:
 - proof-oriented review artifacts;
 - independent completion judgment;
 - stronger separation between model assertion and completion truth.
+
+KRI-P0 may become a future input or prerequisite, but it does not authorize K5.
 
 ## K6 — Proposed: Evidence Router & Outcome Learning
 
@@ -119,23 +137,32 @@ K7 does not itself authorize distribution or public release.
 
 ## Roadmap rules
 
-1. `Defined`, `authorized`, `implemented`, `canonical`, `closed`, and `released` are distinct states.
+1. `Defined`, `authorized for planning`, `implementation authorized`, `implemented`, `canonical`, `closed`, and `released` are distinct states.
 2. A roadmap entry never grants source-intake or implementation authority by implication.
-3. K3-R3 is authorized only for the bounded external-adapter benchmark gate recorded in its dedicated authorization document; K3-R4+ and K4 through K7 remain unauthorized until separately founder-reviewed and authorized.
-4. Storage engines, donors, models, protocols, and implementation tactics remain replaceable behind accepted Kodac boundaries unless separately ratified.
-5. Superiority claims require reproducible benchmark evidence.
-6. Public product versions and engineering milestones are separate governance tracks.
+3. K3-R1 through K3-R5 are canonical only for their already-authorized scopes; K3-R6+ remains unauthorized.
+4. KRI-P0 authorizes planning and contract design only; KRI implementation and K5 implementation remain unauthorized.
+5. Storage engines, donors, models, protocols, and implementation tactics remain replaceable behind accepted Kodac boundaries unless separately ratified.
+6. Superiority claims require reproducible benchmark evidence.
+7. Public product versions and engineering milestones are separate governance tracks.
 
 ## Current boundary
 
 ```text
 K0/K1: CLOSED
 K2: CLOSED
-K3: IN PROGRESS — K3-R1 AND K3-R2 CANONICAL; K3-R3 AUTHORIZED FOR BOUNDED EXTERNAL ADAPTER BENCHMARK / NOT YET CANONICAL; K3 NOT CLOSED
-K3-R4+: NOT AUTHORIZED
-K4-K7: PROPOSED / NOT AUTHORIZED
+K3: IN PROGRESS — K3-R1 THROUGH K3-R5 CANONICAL; K3 NOT CLOSED
+K3-R6+: NOT AUTHORIZED
+
+KRI-P0: AUTHORIZED FOR PLANNING AND CONTRACT DESIGN ONLY
+KRI IMPLEMENTATION: NOT AUTHORIZED
+K5: PROPOSED / NOT AUTHORIZED
+
 CODE IMPORT: NOT AUTHORIZED
 NEW KODAC DEPENDENCIES: NOT AUTHORIZED
+EXTERNAL REVIEW SERVICE INTEGRATION: NOT AUTHORIZED
+PERSISTENT REVIEW STORAGE / LEARNING: NOT AUTHORIZED
+REPOSITORY WRITE / REVIEW / APPROVAL / MERGE AUTHORITY: NOT AUTHORIZED BY KRI-P0
+
 PERSISTENT STORAGE: NOT AUTHORIZED
 VECTOR / EMBEDDING INFRASTRUCTURE: NOT AUTHORIZED
 PUBLIC RELEASE: NOT AUTHORIZED
@@ -143,3 +170,39 @@ PACKAGE PUBLICATION: NOT AUTHORIZED
 BRAND LAUNCH: NOT AUTHORIZED
 KODAC NAME / TRADEMARK CLEARANCE: NOT ESTABLISHED
 ```
+
+## KRI-P0 explicit non-grants
+
+```text
+KRI IMPLEMENTATION: NOT AUTHORIZED
+K5 IMPLEMENTATION: NOT AUTHORIZED
+K3-R6+: NOT AUTHORIZED
+
+CUBIC SOURCE INTAKE: NOT AUTHORIZED
+CODERABBIT SOURCE INTAKE: NOT AUTHORIZED
+CUBIC INTEGRATION: NOT AUTHORIZED
+CODERABBIT INTEGRATION: NOT AUTHORIZED
+EXTERNAL REVIEW SERVICE INTEGRATION: NOT AUTHORIZED
+
+NEW KODAC DEPENDENCIES: NOT AUTHORIZED
+CODE IMPORT: NOT AUTHORIZED
+
+PERSISTENT REVIEW STORAGE: NOT AUTHORIZED
+PERSISTENT REVIEW LEARNING: NOT AUTHORIZED
+VECTOR / EMBEDDING INFRASTRUCTURE: NOT AUTHORIZED
+
+AUTOFIX EXECUTION: NOT AUTHORIZED
+REPOSITORY WRITE AUTHORITY: NOT AUTHORIZED
+GITHUB COMMENT / REVIEW WRITE AUTHORITY: NOT AUTHORIZED
+PR APPROVAL AUTHORITY: NOT AUTHORIZED
+MERGE AUTHORITY: NOT AUTHORIZED
+
+RULESET CHANGE: NOT AUTHORIZED
+K2 EXECUTION-AUTHORITY EXPANSION: NOT AUTHORIZED
+
+PUBLIC RELEASE: NOT AUTHORIZED
+PACKAGE PUBLICATION: NOT AUTHORIZED
+BRAND LAUNCH: NOT AUTHORIZED
+```
+
+This documentation gate does not modify `code_import_authorized` and admits no external source.
