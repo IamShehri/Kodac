@@ -158,11 +158,16 @@ synthetic relabeling: NO
 `packages/kodac-runtime/test/kri-r1-gold-reviewer-evidence.test.ts` proves:
 
 - source PR confinement to #10/#13/#15/#17;
+- exact admitted claim tuples (comment/review/provider/base/reviewed-head/final-head/path/line) are pinned and mutation-rejected;
+- the corpus authorization base is pinned to canonical KRI-R1 authorization merge `a6649626fd0c91f8326311ce532ca3ed16dba068`;
 - exactly the two authorized fixture gold labels;
 - deterministic case and corpus identity recomputation;
 - case-order-independent corpus identity;
 - duplicate claim and duplicate identity rejection;
 - unauthorized PR rejection;
+- invented claim rejection even inside an authorized PR;
+- exact-head substitution rejection even after identity recomputation;
+- authorization-base substitution rejection even after corpus-identity recomputation;
 - mutation detection for identity-bearing gold fields;
 - accepted findings require a full correction commit;
 - rejected findings cannot invent a correction commit;

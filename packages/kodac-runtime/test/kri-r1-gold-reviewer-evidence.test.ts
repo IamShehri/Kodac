@@ -3,7 +3,54 @@ import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 
+const AUTHORIZATION_BASE = "a6649626fd0c91f8326311ce532ca3ed16dba068"
 const AUTHORIZED_PRS = new Set([10, 13, 15, 17])
+const EXPECTED_SOURCE_CLAIMS = new Map<string, Readonly<Record<string, string | number>>>([
+  ["10:3762788154", {
+    reviewId: 4912010020,
+    provider: "cubic-dev-ai[bot]",
+    commentNodeId: "PRRC_kwDOTVTeS87gR5c6",
+    canonicalBase: "971f830ce092c1c7bd0d77c9e0b7cf66a34c28f0",
+    reviewedHead: "4e20e65451f45366d4cce3dc654387ebcd1662c6",
+    commentAnchorCommit: "4e20e65451f45366d4cce3dc654387ebcd1662c6",
+    finalPrHead: "4f0861a5b748e223f7e41ba02f13cde018eb1e2b",
+    path: "packages/kodac-runtime/src/repository/snapshot.ts",
+    originalLine: 146,
+  }],
+  ["13:3768772220", {
+    reviewId: 4919330029,
+    provider: "cubic-dev-ai[bot]",
+    commentNodeId: "PRRC_kwDOTVTeS87gouZ8",
+    canonicalBase: "9e092a9d93fef07a8410b2e9efbb1da9c6f4fadc",
+    reviewedHead: "f1d79e7467c6ab06b3867d86be249f7695c431b2",
+    commentAnchorCommit: "33e8646f428eb2f0f476c09591980a46c172aa1f",
+    finalPrHead: "8050ff13dc983d1baa2e4553d78dc3741f48a256",
+    path: ".github/workflows/k3-r3-benchmark.yml",
+    originalLine: 37,
+  }],
+  ["17:3771191889", {
+    reviewId: 4922077616,
+    provider: "coderabbitai[bot]",
+    commentNodeId: "PRRC_kwDOTVTeS87gx9JR",
+    canonicalBase: "ebd74619d2038b87886fd8152aae282b7b132372",
+    reviewedHead: "e44c4adfe659fb2f5d51715956a63d8ff98d200d",
+    commentAnchorCommit: "e44c4adfe659fb2f5d51715956a63d8ff98d200d",
+    finalPrHead: "f16b237c650f721378da2a2d3fe212127e7ec9bf",
+    path: ".github/workflows/k3-r5-context-engine.yml",
+    originalLine: 104,
+  }],
+  ["17:3771191920", {
+    reviewId: 4922077616,
+    provider: "coderabbitai[bot]",
+    commentNodeId: "PRRC_kwDOTVTeS87gx9Jw",
+    canonicalBase: "ebd74619d2038b87886fd8152aae282b7b132372",
+    reviewedHead: "e44c4adfe659fb2f5d51715956a63d8ff98d200d",
+    commentAnchorCommit: "e44c4adfe659fb2f5d51715956a63d8ff98d200d",
+    finalPrHead: "f16b237c650f721378da2a2d3fe212127e7ec9bf",
+    path: "packages/kodac-runtime/src/context-engine/context-engine.ts",
+    originalLine: 461,
+  }],
+] as const)
 const ALLOWED_DISPOSITIONS = new Set(["VALID_ACCEPTED", "INVALID_REJECTED"])
 const REQUIRED_CATEGORIES = new Set([
   "exact-head-freshness",
@@ -114,6 +161,11 @@ function validateCase(caseRecord: unknown, seenClaims: Set<string>, seenCases: S
   assert.notEqual(source.createdAt, source.updatedAt, `${caseKey} body digest unavailability requires an edited comment record`)
 
   const claimKey = `${source.pr}:${source.commentId}`
+  const expectedSource = EXPECTED_SOURCE_CLAIMS.get(claimKey)
+  assert.ok(expectedSource, `${caseKey} references unauthorized source claim ${claimKey}`)
+  for (const [field, expected] of Object.entries(expectedSource)) {
+    assert.equal(source[field], expected, `${caseKey}.source.${field} does not match the admitted historical claim`)
+  }
   assert.ok(!seenClaims.has(claimKey), `duplicate source claim: ${claimKey}`)
   seenClaims.add(claimKey)
 
@@ -144,7 +196,7 @@ function validateCorpus(manifest: unknown): void {
   assert.ok(manifest && typeof manifest === "object" && !Array.isArray(manifest), "corpus must be an object")
   const corpus = manifest as Record<string, unknown>
   assert.equal(corpus.version, "kri-r1-gold-corpus-v1")
-  fullSha(corpus.authorizationBase, "authorizationBase")
+  assert.equal(fullSha(corpus.authorizationBase, "authorizationBase"), AUTHORIZATION_BASE, "authorizationBase must match the canonical KRI-R1 authorization merge")
   assert.deepEqual(corpus.authorizedClaimSourcePRs, [10, 13, 15, 17])
   assert.equal(corpus.identityScheme, "sha256-canonical-kri-r1-v1")
 
@@ -200,6 +252,33 @@ test("KRI-R1 rejects unauthorized source PR expansion", () => {
   first.caseIdentity = expectedCaseIdentity(first)
   mutated.corpusIdentity = expectedCorpusIdentity(mutated)
   assert.throws(() => validateCorpus(mutated), /unauthorized PR 99/)
+})
+
+test("KRI-R1 rejects invented source claims inside an otherwise authorized PR", () => {
+  const mutated = clone(corpus)
+  const first = (mutated.cases as Record<string, unknown>[])[0]
+  const source = first.source as Record<string, unknown>
+  source.commentId = 1234567890
+  first.caseIdentity = expectedCaseIdentity(first)
+  mutated.corpusIdentity = expectedCorpusIdentity(mutated)
+  assert.throws(() => validateCorpus(mutated), /unauthorized source claim/)
+})
+
+test("KRI-R1 rejects mutation of admitted exact-head evidence even with recomputed identities", () => {
+  const mutated = clone(corpus)
+  const first = (mutated.cases as Record<string, unknown>[])[0]
+  const source = first.source as Record<string, unknown>
+  source.reviewedHead = "0".repeat(40)
+  first.caseIdentity = expectedCaseIdentity(first)
+  mutated.corpusIdentity = expectedCorpusIdentity(mutated)
+  assert.throws(() => validateCorpus(mutated), /reviewedHead does not match/)
+})
+
+test("KRI-R1 rejects authorization-base substitution even when corpus identity is recomputed", () => {
+  const mutated = clone(corpus)
+  mutated.authorizationBase = "0".repeat(40)
+  mutated.corpusIdentity = expectedCorpusIdentity(mutated)
+  assert.throws(() => validateCorpus(mutated), /authorizationBase must match/)
 })
 
 test("KRI-R1 rejects duplicate source claims even with recomputed identities", () => {
