@@ -97,6 +97,7 @@ export interface ReviewerQualificationReport {
   readonly candidateIdentity: string
   readonly sourceCorpusIdentity: string
   readonly benchmarkSetIdentity: string
+  readonly benchmarkCases: readonly GoldBenchmarkCase[]
   readonly qualificationPolicy: QualificationPolicy
   readonly qualificationPolicyIdentity: string
   readonly observations: readonly QualificationObservation[]
