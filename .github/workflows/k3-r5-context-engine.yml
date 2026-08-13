@@ -1,0 +1,136 @@
+name: k3-r5-context-engine
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/kodac-runtime/src/context-engine/**"
+      - "packages/kodac-runtime/src/repository/contracts.ts"
+      - "packages/kodac-runtime/src/repository-intelligence/contracts.ts"
+      - "packages/kodac-runtime/src/index.ts"
+      - "packages/kodac-runtime/test/k3-r5-context-engine.test.ts"
+      - ".github/workflows/k3-r5-context-engine.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  context-engine:
+    name: k3-r5-context-engine
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      K3_R5_IMPLEMENTATION_BASELINE_SHA: "ebd74619d2038b87886fd8152aae282b7b132372"
+      K3_R5_IMPLEMENTATION_BRANCH: "feat/k3-r5-context-engine"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Attest exact PR head and implementation-gate scope
+        shell: bash
+        env:
+          K3_R5_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          K3_R5_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          K3_R5_PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$K3_R5_PR_HEAD_SHA"
+
+          git status --porcelain=v1 -z --untracked-files=all --ignored=matching > "$RUNNER_TEMP/k3-r5-status-before"
+          git diff --binary HEAD -- > "$RUNNER_TEMP/k3-r5-diff-before"
+          test ! -s "$RUNNER_TEMP/k3-r5-status-before"
+          test ! -s "$RUNNER_TEMP/k3-r5-diff-before"
+
+          # One-time certification for the canonically authorized K3-R5 implementation PR.
+          # Future PRs keep the reusable regression gate without being pinned to this historical base.
+          if [[ "$K3_R5_PR_HEAD_REF" = "$K3_R5_IMPLEMENTATION_BRANCH" ]]; then
+            test "$K3_R5_PR_BASE_SHA" = "$K3_R5_IMPLEMENTATION_BASELINE_SHA"
+            git fetch --no-tags --depth=1 origin "$K3_R5_IMPLEMENTATION_BASELINE_SHA"
+            test "$(git rev-parse FETCH_HEAD)" = "$K3_R5_IMPLEMENTATION_BASELINE_SHA"
+            mapfile -t changed < <(git diff --name-only "$K3_R5_IMPLEMENTATION_BASELINE_SHA" HEAD | LC_ALL=C sort)
+            test "${#changed[@]}" -eq 5
+            for path in "${changed[@]}"; do
+              case "$path" in
+                .github/workflows/k3-r5-context-engine.yml|\
+                packages/kodac-runtime/src/context-engine/contracts.ts|\
+                packages/kodac-runtime/src/context-engine/context-engine.ts|\
+                packages/kodac-runtime/src/index.ts|\
+                packages/kodac-runtime/test/k3-r5-context-engine.test.ts)
+                  ;;
+                *)
+                  printf 'Unauthorized K3-R5 implementation path: %s\n' "$path" >&2
+                  exit 1
+                  ;;
+              esac
+            done
+          fi
+
+      - name: Prove bounded pure deterministic Context Engine surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="packages/kodac-runtime/src/context-engine"
+          test -d "$root"
+
+          if grep -R -nE \
+            'node:(fs|child_process|http|https|http2|net|tls|dgram|worker_threads|os)|ExecutionGateway|WorkspaceFileSystem|fetch[[:space:]]*\(|require[[:space:]]*\(|import[[:space:]]*\(|process[[:space:]]*\.|Date[[:space:]]*\(|Date\.now|Math\.random|randomUUID|getRandomValues|performance\.now' \
+            "$root"; then
+            echo "K3-R5 Context Engine purity/determinism boundary violation" >&2
+            exit 1
+          fi
+
+          node --input-type=module <<'NODE'
+          import { readFileSync, readdirSync } from "node:fs"
+          const root = "packages/kodac-runtime/src/context-engine"
+          const allowedSpecifiers = new Set([
+            "node:crypto",
+            "./contracts.ts",
+            "../repository/contracts.ts",
+            "../repository-intelligence/contracts.ts",
+          ])
+          if (allowedSpecifiers.has("../execution/gateway.ts")) {
+            throw new Error("K3-R5 import allowlist self-test failed")
+          }
+          for (const name of readdirSync(root, { recursive: true })
+            .filter((entry) => entry.endsWith(".ts"))
+            .sort()) {
+            const source = readFileSync(`${root}/${name}`, "utf8")
+            const specifiers = [
+              ...source.matchAll(/\bfrom\s+["']([^"']+)["']/g),
+              ...source.matchAll(/\bimport\s+["']([^"']+)["']/g),
+            ].map((match) => match[1])
+            for (const specifier of specifiers) {
+              if (!allowedSpecifiers.has(specifier)) {
+                throw new Error(`Unauthorized K3-R5 import in ${name}: ${specifier}`)
+              }
+            }
+          }
+          NODE
+
+      - name: Run full runtime tests including K3-R5 Context Engine
+        working-directory: packages/kodac-runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f test/k3-r5-context-engine.test.ts
+          node --experimental-strip-types --test test/*.test.ts
+
+      - name: Attest checkout unchanged after Context Engine tests
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git status --porcelain=v1 -z --untracked-files=all --ignored=matching > "$RUNNER_TEMP/k3-r5-status-after"
+          git diff --binary HEAD -- > "$RUNNER_TEMP/k3-r5-diff-after"
+          cmp "$RUNNER_TEMP/k3-r5-status-before" "$RUNNER_TEMP/k3-r5-status-after"
+          cmp "$RUNNER_TEMP/k3-r5-diff-before" "$RUNNER_TEMP/k3-r5-diff-after"
+          test ! -s "$RUNNER_TEMP/k3-r5-status-after"
+          test ! -s "$RUNNER_TEMP/k3-r5-diff-after"
