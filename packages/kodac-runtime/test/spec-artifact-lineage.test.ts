@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
 import test from "node:test"
 
 import {
@@ -88,4 +89,30 @@ test("predecessor verification requires the actual immediate predecessor", () =>
     () => verifySpecificationArtifactPredecessor(second, spec({ featureKey: "feature/other" })),
     /feature lineage mismatch/,
   )
+})
+
+test("published schema mirrors the bounded structural contract", () => {
+  const schemaPath = new URL("../../../schema/kdo-spec-artifact-lineage.schema.json", import.meta.url)
+  const schema = JSON.parse(readFileSync(schemaPath, "utf8")) as Record<string, any>
+  assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema")
+  assert.equal(schema.$defs.spec.additionalProperties, false)
+  assert.equal(schema.$defs.plan.additionalProperties, false)
+  assert.equal(schema.$defs.tasks.additionalProperties, false)
+  assert.equal(schema.$defs.lineage.additionalProperties, false)
+  assert.equal(schema.$defs.rev.minimum, 1)
+  assert.equal(schema.$defs.rev.maximum, 1_000_000_000)
+  assert.equal(schema.$defs.spec.properties.version.const, KDO_S1_SPEC_ARTIFACT_VERSION)
+  assert.deepEqual(schema.oneOf.map((entry: { $ref: string }) => entry.$ref), [
+    "#/$defs/spec",
+    "#/$defs/plan",
+    "#/$defs/tasks",
+    "#/$defs/lineage",
+  ])
+})
+
+test("S1 production module imports only deterministic crypto support", () => {
+  const sourcePath = new URL("../src/specification/contracts.ts", import.meta.url)
+  const source = readFileSync(sourcePath, "utf8")
+  const imports = source.match(/^import .*$/gm) ?? []
+  assert.deepEqual(imports, ['import { createHash } from "node:crypto"'])
 })
