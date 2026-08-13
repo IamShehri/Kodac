@@ -1,0 +1,167 @@
+{
+  "version": "kodac-donor-component-registry-v1",
+  "feature": "001-kodac-developer-os-second-wave-donors",
+  "productionImportAuthorized": false,
+  "donorExecutionPerformed": false,
+  "donors": {
+    "spec-kit": {
+      "repository": "github/spec-kit",
+      "commit": "e79fa25f3f465b1ce779f570ccacef7b379e9166",
+      "rootLicense": "MIT",
+      "licenseBlob": "28a50fa22639e32febe14e4ffc7a732b0ba8c90a"
+    },
+    "deepseek-harness": {
+      "repository": "deepseek-ai/deepseek-harness",
+      "commit": "47f943859bef60e4160492346772ded9b24f765a",
+      "rootLicense": "MIT",
+      "licenseBlob": "c1f7a78e89e4e4dc7b86664c3b3c76eb5eee1785",
+      "componentTermsRequired": true
+    }
+  },
+  "components": [
+    {
+      "id": "KDO-S1",
+      "name": "Specification Artifact & Lineage Contracts",
+      "donor": "spec-kit",
+      "status": "AUDITED",
+      "intakeMode": "PORT",
+      "priority": "VERY_HIGH",
+      "dependsOn": [],
+      "kodacOverlap": ["planning governance", "K3 repository identity"],
+      "strengthening": ["exact repository head", "repository content identity", "artifact lineage identities"],
+      "nonGrants": ["execution", "repository-write", "verification", "PROVEN_READY"],
+      "recommendedGate": "KDO-S1"
+    },
+    {
+      "id": "KDO-S2",
+      "name": "Constitution + Cross-Artifact Analysis Engine",
+      "donor": "spec-kit",
+      "status": "AUDITED",
+      "intakeMode": "PORT_OR_BEHAVIORAL_REIMPLEMENTATION",
+      "priority": "HIGH",
+      "dependsOn": ["KDO-S1"],
+      "kodacOverlap": ["KRI finding discipline"],
+      "strengthening": ["typed artifact-bound findings", "constitution precedence", "read-only authority"],
+      "nonGrants": ["hook-execution", "repository-write", "review-adjudication", "PROVEN_READY"],
+      "recommendedGate": "KDO-S2"
+    },
+    {
+      "id": "KDO-S3",
+      "name": "Convergence / Remaining-Work Planner",
+      "donor": "spec-kit",
+      "status": "AUDITED",
+      "intakeMode": "PORT",
+      "priority": "HIGH",
+      "dependsOn": ["KDO-S1", "KDO-S2"],
+      "kodacOverlap": ["task governance", "verification planning"],
+      "strengthening": ["snapshot-bound convergence", "append-only remaining work", "SPEC_CONVERGED state"],
+      "nonGrants": ["implementation", "verification", "merge", "PROVEN_READY"],
+      "recommendedGate": "KDO-S3"
+    },
+    {
+      "id": "KDO-S4",
+      "name": "Specification-Driven Agent Workflow",
+      "donor": "spec-kit",
+      "status": "AUDITED",
+      "intakeMode": "BEHAVIORAL_REIMPLEMENTATION_PLUS_SELECTIVE_PORT",
+      "priority": "HIGH",
+      "dependsOn": ["KDO-S1", "KDO-S2", "KDO-S3", "KDO-H1", "KDO-H2"],
+      "kodacOverlap": ["agent runtime", "K2", "KRI", "Done Gate"],
+      "strengthening": ["exact lineage per phase", "capability-bound hooks", "K2 receipts", "separate completion states"],
+      "nonGrants": ["extension ambient authority", "hook implicit execution", "Done Gate bypass"],
+      "recommendedGate": "KDO-S4"
+    },
+    {
+      "id": "KDO-H1",
+      "name": "Plugin / Capability Seam Contract",
+      "donor": "deepseek-harness",
+      "status": "AUDITED",
+      "intakeMode": "PORT",
+      "priority": "VERY_HIGH",
+      "dependsOn": ["KDO-S1"],
+      "kodacOverlap": ["model capability registry", "context connector profiles", "provider registry"],
+      "strengthening": ["reversible owner-bound registration", "scoped services", "declared dependency injection", "revocation evidence"],
+      "nonGrants": ["authority-by-registration", "credential inheritance", "repository-write inheritance", "Done Gate authority"],
+      "recommendedGate": "KDO-H1"
+    },
+    {
+      "id": "KDO-H2",
+      "name": "Append-Only Session + Request Reconstructability",
+      "donor": "deepseek-harness",
+      "status": "AUDITED",
+      "intakeMode": "PORT",
+      "priority": "VERY_HIGH",
+      "dependsOn": ["KDO-S1", "KDO-H1"],
+      "kodacOverlap": ["runtime evidence", "K3 ContextBundle", "model turn records"],
+      "strengthening": ["append-only typed events", "request reconstructability", "fork/replay lineage", "sensitive-data policy"],
+      "nonGrants": ["credential logging", "repository-write", "model authority", "persistence authority"],
+      "recommendedGate": "KDO-H2"
+    },
+    {
+      "id": "KDO-H3",
+      "name": "Guarded Tool Execution Pipeline Differential Hardening",
+      "donor": "deepseek-harness",
+      "status": "AUDITED",
+      "intakeMode": "STUDY_PLUS_TARGETED_PORT",
+      "priority": "VERY_HIGH",
+      "dependsOn": ["KDO-H1", "KDO-H2", "KDO-H4"],
+      "kodacOverlap": ["K2 ExecutionGateway", "PolicyEngine", "execution receipts"],
+      "strengthening": ["typed pre-execute interception", "monotonic guard registry", "around-execute wrappers", "post-execute interception", "final-result invariants"],
+      "nonGrants": ["parallel executor", "K2 replacement", "plugin execution authority", "Done Gate authority"],
+      "recommendedGate": "KDO-H3"
+    },
+    {
+      "id": "KDO-H4",
+      "name": "Per-Call Sandbox + Approval Policy Contracts",
+      "donor": "deepseek-harness",
+      "status": "AUDITED",
+      "intakeMode": "PORT",
+      "priority": "VERY_HIGH",
+      "dependsOn": ["KDO-H1", "KDO-H2"],
+      "kodacOverlap": ["K2 policy allow/ask/deny", "workspace path validation"],
+      "strengthening": ["per-call sandbox policy", "full-vs-partial enforcement", "sandbox/approval separation", "fail-closed unavailable backend"],
+      "nonGrants": ["sandbox backend implementation", "process spawn", "network authority", "approval-by-preset"],
+      "recommendedGate": "KDO-H4"
+    },
+    {
+      "id": "KDO-H5",
+      "name": "Agent Turn / Step / Cancellation Lifecycle",
+      "donor": "deepseek-harness",
+      "status": "AUDITED",
+      "intakeMode": "PORT",
+      "priority": "HIGH",
+      "dependsOn": ["KDO-H1", "KDO-H2"],
+      "kodacOverlap": ["bounded agent loop", "provider cancellation", "tool budgets"],
+      "strengthening": ["turn/step identities", "owner-bound teardown", "late-value release", "bounded parallel tool calls"],
+      "nonGrants": ["side-effect authority", "unbounded concurrency", "repository-write inheritance"],
+      "recommendedGate": "KDO-H5"
+    },
+    {
+      "id": "KDO-H6",
+      "name": "Subagents + Background Jobs",
+      "donor": "deepseek-harness",
+      "status": "AUDITED",
+      "intakeMode": "PORT",
+      "priority": "HIGH",
+      "dependsOn": ["KDO-H1", "KDO-H2", "KDO-H5"],
+      "kodacOverlap": ["agent orchestration direction"],
+      "strengthening": ["monotone delegation depth", "owned job lifecycle", "bounded fan-out", "explicit narrowed capability delegation", "parent-child evidence linkage"],
+      "nonGrants": ["authority inheritance", "unbounded descendants", "background write authority", "merge authority"],
+      "recommendedGate": "KDO-H6"
+    },
+    {
+      "id": "KDO-H7",
+      "name": "LSP / Terminal / Workflow Capability Seams",
+      "donor": "deepseek-harness",
+      "status": "AUDITED",
+      "intakeMode": "PORT",
+      "priority": "HIGH_AFTER_C1_C2_AND_H1",
+      "dependsOn": ["KDO-H1", "KDO-H2", "KDO-H5", "KDO-C1", "KDO-C2"],
+      "kodacOverlap": ["C1 semantic direction", "K2 process execution"],
+      "strengthening": ["closed LSP semantic query seam", "no JSON-RPC escape hatch", "persistent terminal identity", "workflow run identities"],
+      "nonGrants": ["LSP edit authority", "direct process spawn", "workflow K2 bypass", "workflow Done Gate bypass"],
+      "recommendedGate": "KDO-H7"
+    }
+  ],
+  "recommendedOrder": ["KDO-S1", "KDO-H1", "KDO-H2", "KDO-H4", "KDO-H3", "KDO-S2", "KDO-H5", "KDO-S3", "KDO-S4", "KDO-H6", "KDO-C2", "KDO-H7"]
+}
