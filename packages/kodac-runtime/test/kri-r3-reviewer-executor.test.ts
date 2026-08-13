@@ -28,18 +28,18 @@ function sha256(value: unknown): string { return createHash("sha256").update(typ
 
 function contextBundle(overrides: Partial<ContextBundle> = {}): ContextBundle {
   const text = "working-tree-change:modified"
-  const item = {
+  const item: ContextBundle["items"][number] = {
     itemId: sha256("context-item:widget"),
-    sourceKind: "repository-evidence" as const,
+    sourceKind: "repository-evidence",
     sourceIdentity: sha256("evidence:widget"),
     sourceAdapter: "builtin.git.status-porcelain-v1-z.v1",
     subjectPath: "src/widget.ts",
-    evidenceClass: "git-derived" as const,
+    evidenceClass: "git-derived",
     text,
     contextUtf8Bytes: Buffer.byteLength(text, "utf8"),
     provenanceRefs: ["receipt:git-status"],
-    trust: "untrusted-repository-data" as const,
-    relevance: { score: 2050, reasons: ["exact-target-path", "working-tree-change"] as const },
+    trust: "untrusted-repository-data",
+    relevance: { score: 2050, reasons: ["exact-target-path", "working-tree-change"] },
   }
   const budget = { maxItems: 32, maxUtf8Bytes: 32 * 1024, usedItems: 1, usedUtf8Bytes: item.contextUtf8Bytes }
   const completeness = { state: "complete" as const, reasons: [], omittedAtLeast: 0 }
@@ -297,7 +297,17 @@ test("provider request is immutable and omits adjudication/completion authority"
 })
 
 test("provider identity is captured by Kodac and cannot mutate run attribution mid-call", async () => {
-  const p: ReviewerProvider = { providerId: PROVIDER_ID, providerVersion: PROVIDER_VERSION, async review() { this.providerId = "provider:mutated" as never; this.providerVersion = "v999" as never; return providerOutput() } }
+  let liveProviderId = PROVIDER_ID
+  let liveProviderVersion = PROVIDER_VERSION
+  const p: ReviewerProvider = {
+    get providerId() { return liveProviderId },
+    get providerVersion() { return liveProviderVersion },
+    async review() {
+      liveProviderId = "provider:mutated"
+      liveProviderVersion = "v999"
+      return providerOutput()
+    },
+  }
   const runtime = new ReviewerExecutionRuntime({ provider: p, findingRuntime: findingRuntime(), readCurrentHead: () => HEAD })
   const result = await runtime.execute(request())
   assert.equal(result.run.providerId, PROVIDER_ID)
