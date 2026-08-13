@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kodac.dev/schema/kdo-spec-artifact-lineage.schema.json",
+  "title": "Kodac KDO-S1 artifact lineage",
+  "description": "Structural schema. Derived identity recomputation and cross-record equality are runtime invariants.",
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "git": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+    "feature": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$" },
+    "rev": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind","version","featureKey","repositoryHead","artifactRevision","specificationContentIdentity","specificationArtifactIdentity"],
+      "properties": {
+        "kind": { "const": "SPECIFICATION" }, "version": { "const": "kodac-spec-artifact-lineage-v1" },
+        "featureKey": { "$ref": "#/$defs/feature" }, "repositoryHead": { "$ref": "#/$defs/git" }, "repositoryTreeIdentity": { "$ref": "#/$defs/git" },
+        "artifactRevision": { "$ref": "#/$defs/rev" }, "specificationContentIdentity": { "$ref": "#/$defs/sha" }, "governingPolicyIdentity": { "$ref": "#/$defs/sha" },
+        "predecessorSpecificationArtifactIdentity": { "$ref": "#/$defs/sha" }, "specificationArtifactIdentity": { "$ref": "#/$defs/sha" }
+      },
+      "allOf": [
+        { "if": { "properties": { "artifactRevision": { "const": 1 } } }, "then": { "not": { "required": ["predecessorSpecificationArtifactIdentity"] } } },
+        { "if": { "properties": { "artifactRevision": { "minimum": 2 } } }, "then": { "required": ["predecessorSpecificationArtifactIdentity"] } }
+      ]
+    },
+    "plan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind","version","featureKey","repositoryHead","artifactRevision","specificationArtifactIdentity","planContentIdentity","planArtifactIdentity"],
+      "properties": {
+        "kind": { "const": "PLAN" }, "version": { "const": "kodac-spec-artifact-lineage-v1" },
+        "featureKey": { "$ref": "#/$defs/feature" }, "repositoryHead": { "$ref": "#/$defs/git" }, "repositoryTreeIdentity": { "$ref": "#/$defs/git" }, "artifactRevision": { "$ref": "#/$defs/rev" },
+        "specificationArtifactIdentity": { "$ref": "#/$defs/sha" }, "planContentIdentity": { "$ref": "#/$defs/sha" }, "predecessorPlanArtifactIdentity": { "$ref": "#/$defs/sha" }, "planArtifactIdentity": { "$ref": "#/$defs/sha" }
+      },
+      "allOf": [
+        { "if": { "properties": { "artifactRevision": { "const": 1 } } }, "then": { "not": { "required": ["predecessorPlanArtifactIdentity"] } } },
+        { "if": { "properties": { "artifactRevision": { "minimum": 2 } } }, "then": { "required": ["predecessorPlanArtifactIdentity"] } }
+      ]
+    },
+    "tasks": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind","version","featureKey","repositoryHead","artifactRevision","specificationArtifactIdentity","planArtifactIdentity","taskSetContentIdentity","taskSetArtifactIdentity"],
+      "properties": {
+        "kind": { "const": "TASK_SET" }, "version": { "const": "kodac-spec-artifact-lineage-v1" },
+        "featureKey": { "$ref": "#/$defs/feature" }, "repositoryHead": { "$ref": "#/$defs/git" }, "repositoryTreeIdentity": { "$ref": "#/$defs/git" }, "artifactRevision": { "$ref": "#/$defs/rev" },
+        "specificationArtifactIdentity": { "$ref": "#/$defs/sha" }, "planArtifactIdentity": { "$ref": "#/$defs/sha" }, "taskSetContentIdentity": { "$ref": "#/$defs/sha" },
+        "predecessorTaskSetArtifactIdentity": { "$ref": "#/$defs/sha" }, "taskSetArtifactIdentity": { "$ref": "#/$defs/sha" }
+      },
+      "allOf": [
+        { "if": { "properties": { "artifactRevision": { "const": 1 } } }, "then": { "not": { "required": ["predecessorTaskSetArtifactIdentity"] } } },
+        { "if": { "properties": { "artifactRevision": { "minimum": 2 } } }, "then": { "required": ["predecessorTaskSetArtifactIdentity"] } }
+      ]
+    },
+    "lineage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind","version","featureKey","repositoryHead","artifactRevision","specificationArtifactIdentity","lineageIdentity"],
+      "properties": {
+        "kind": { "const": "LINEAGE" }, "version": { "const": "kodac-spec-artifact-lineage-v1" },
+        "featureKey": { "$ref": "#/$defs/feature" }, "repositoryHead": { "$ref": "#/$defs/git" }, "repositoryTreeIdentity": { "$ref": "#/$defs/git" }, "artifactRevision": { "$ref": "#/$defs/rev" },
+        "specificationArtifactIdentity": { "$ref": "#/$defs/sha" }, "planArtifactIdentity": { "$ref": "#/$defs/sha" }, "taskSetArtifactIdentity": { "$ref": "#/$defs/sha" },
+        "predecessorLineageIdentity": { "$ref": "#/$defs/sha" }, "lineageIdentity": { "$ref": "#/$defs/sha" }
+      },
+      "allOf": [
+        { "if": { "required": ["taskSetArtifactIdentity"] }, "then": { "required": ["planArtifactIdentity"] } },
+        { "if": { "properties": { "artifactRevision": { "const": 1 } } }, "then": { "not": { "required": ["predecessorLineageIdentity"] } } },
+        { "if": { "properties": { "artifactRevision": { "minimum": 2 } } }, "then": { "required": ["predecessorLineageIdentity"] } }
+      ]
+    }
+  },
+  "oneOf": [ { "$ref": "#/$defs/spec" }, { "$ref": "#/$defs/plan" }, { "$ref": "#/$defs/tasks" }, { "$ref": "#/$defs/lineage" } ]
+}
