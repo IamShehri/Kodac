@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kodac.dev/schema/kri-adjudication.schema.json",
+  "title": "Kodac KRI-R2 AdjudicationRecord",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "adjudicationIdentity",
+    "findingIdentity",
+    "previousAdjudicationIdentity",
+    "action",
+    "previousState",
+    "resultingState",
+    "adjudicatorId",
+    "evidenceRefs"
+  ],
+  "properties": {
+    "version": { "const": "kri-r2-adjudication-v1" },
+    "adjudicationIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "findingIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "previousAdjudicationIdentity": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      ]
+    },
+    "action": { "enum": ["CONFIRM", "REJECT", "MARK_DUPLICATE", "MARK_FIXED", "REVERIFY"] },
+    "previousState": { "enum": ["NEW", "CONFIRMED", "FIXED"] },
+    "resultingState": { "enum": ["CONFIRMED", "REJECTED", "DUPLICATE", "FIXED", "REVERIFIED"] },
+    "adjudicatorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "evidenceRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+    },
+    "duplicateOf": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "correctionRef": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "reverificationRef": { "type": "string", "minLength": 1, "maxLength": 1024 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "action": { "const": "MARK_DUPLICATE" } }, "required": ["action"] },
+      "then": {
+        "required": ["duplicateOf"],
+        "not": { "anyOf": [{ "required": ["correctionRef"] }, { "required": ["reverificationRef"] }] }
+      }
+    },
+    {
+      "if": { "properties": { "action": { "const": "MARK_FIXED" } }, "required": ["action"] },
+      "then": {
+        "required": ["correctionRef"],
+        "not": { "anyOf": [{ "required": ["duplicateOf"] }, { "required": ["reverificationRef"] }] }
+      }
+    },
+    {
+      "if": { "properties": { "action": { "const": "REVERIFY" } }, "required": ["action"] },
+      "then": {
+        "required": ["reverificationRef"],
+        "not": { "anyOf": [{ "required": ["duplicateOf"] }, { "required": ["correctionRef"] }] }
+      }
+    },
+    {
+      "if": { "properties": { "action": { "enum": ["CONFIRM", "REJECT"] } }, "required": ["action"] },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["duplicateOf"] },
+            { "required": ["correctionRef"] },
+            { "required": ["reverificationRef"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": { "properties": { "previousState": { "const": "NEW" } }, "required": ["previousState"] },
+      "then": {
+        "properties": {
+          "action": { "enum": ["CONFIRM", "REJECT", "MARK_DUPLICATE"] },
+          "previousAdjudicationIdentity": { "type": "null" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "action": { "const": "CONFIRM" } }, "required": ["action"] },
+            "then": { "properties": { "resultingState": { "const": "CONFIRMED" } } }
+          },
+          {
+            "if": { "properties": { "action": { "const": "REJECT" } }, "required": ["action"] },
+            "then": { "properties": { "resultingState": { "const": "REJECTED" } } }
+          },
+          {
+            "if": { "properties": { "action": { "const": "MARK_DUPLICATE" } }, "required": ["action"] },
+            "then": { "properties": { "resultingState": { "const": "DUPLICATE" } } }
+          }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "previousState": { "const": "CONFIRMED" } }, "required": ["previousState"] },
+      "then": {
+        "properties": {
+          "action": { "const": "MARK_FIXED" },
+          "resultingState": { "const": "FIXED" },
+          "previousAdjudicationIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "previousState": { "const": "FIXED" } }, "required": ["previousState"] },
+      "then": {
+        "properties": {
+          "action": { "const": "REVERIFY" },
+          "resultingState": { "const": "REVERIFIED" },
+          "previousAdjudicationIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    }
+  ]
+}
