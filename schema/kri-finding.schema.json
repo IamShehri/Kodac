@@ -7,6 +7,7 @@
   "required": [
     "version",
     "findingIdentity",
+    "stateIdentity",
     "claimKey",
     "review",
     "path",
@@ -22,6 +23,7 @@
   "properties": {
     "version": { "const": "kri-r2-finding-v1" },
     "findingIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "stateIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "claimKey": { "type": "string", "minLength": 1, "maxLength": 128 },
     "review": { "$ref": "#/$defs/reviewIdentity" },
     "path": {

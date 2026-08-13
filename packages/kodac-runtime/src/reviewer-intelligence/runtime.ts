@@ -151,7 +151,7 @@ function identity(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(canonicalize(value)), "utf8").digest("hex")
 }
 
-function findingPreimage(record: Omit<FindingRecord, "findingIdentity" | "freshness" | "state">): unknown {
+function findingPreimage(record: Omit<FindingRecord, "findingIdentity" | "stateIdentity" | "freshness" | "state">): unknown {
   return {
     ...record,
     review: {
@@ -165,6 +165,15 @@ function findingPreimage(record: Omit<FindingRecord, "findingIdentity" | "freshn
   }
 }
 
+function findingStateIdentity(
+  findingIdentity: string,
+  currentHead: string,
+  freshness: FindingFreshness,
+  state: FindingState,
+): string {
+  return identity({ findingIdentity, currentHead, freshness, state })
+}
+
 function adjudicationPreimage(record: Omit<AdjudicationRecord, "adjudicationIdentity">): unknown {
   return record
 }
@@ -173,7 +182,7 @@ function findingValue(value: unknown): FindingRecord {
   const record = plainObject(value, "finding")
   exactKeys(
     record,
-    ["version", "findingIdentity", "claimKey", "review", "path", "summary", "contractClaim", "category", "severity", "confidenceBps", "evidenceRefs", "freshness", "state"],
+    ["version", "findingIdentity", "stateIdentity", "claimKey", "review", "path", "summary", "contractClaim", "category", "severity", "confidenceBps", "evidenceRefs", "freshness", "state"],
     ["range"],
     "finding",
   )
@@ -213,11 +222,15 @@ function findingValue(value: unknown): FindingRecord {
   } as const
   const expected = identity(findingPreimage(withoutIdentity))
   if (sha256(record.findingIdentity, "findingIdentity") !== expected) throw new Error("finding identity mismatch")
+  const state = record.state as FindingState
+  const expectedStateIdentity = findingStateIdentity(expected, claim.review.currentHead, freshness, state)
+  if (sha256(record.stateIdentity, "stateIdentity") !== expectedStateIdentity) throw new Error("finding state identity mismatch")
   return {
     ...withoutIdentity,
     findingIdentity: expected,
+    stateIdentity: expectedStateIdentity,
     freshness,
-    state: record.state as FindingState,
+    state,
   }
 }
 
@@ -278,7 +291,7 @@ function adjudicationValue(value: unknown): AdjudicationRecord {
   const record = plainObject(value, "adjudication")
   exactKeys(
     record,
-    ["version", "adjudicationIdentity", "findingIdentity", "action", "previousState", "resultingState", "adjudicatorId", "evidenceRefs"],
+    ["version", "adjudicationIdentity", "findingIdentity", "previousStateIdentity", "resultingStateIdentity", "action", "previousState", "resultingState", "adjudicatorId", "evidenceRefs"],
     ["duplicateOf", "correctionRef", "reverificationRef"],
     "adjudication",
   )
@@ -291,6 +304,8 @@ function adjudicationValue(value: unknown): AdjudicationRecord {
   const normalized: Omit<AdjudicationRecord, "adjudicationIdentity"> = {
     version: KRI_R2_ADJUDICATION_VERSION,
     findingIdentity: sha256(record.findingIdentity, "adjudication.findingIdentity"),
+    previousStateIdentity: sha256(record.previousStateIdentity, "adjudication.previousStateIdentity"),
+    resultingStateIdentity: sha256(record.resultingStateIdentity, "adjudication.resultingStateIdentity"),
     action,
     previousState,
     resultingState,
@@ -338,11 +353,14 @@ export class ReviewerIntelligenceRuntime {
       evidenceRefs: claim.evidenceRefs,
     } as const
     const freshness: FindingFreshness = claim.review.currentHead === claim.review.reviewedHead ? "CURRENT" : "STALE"
+    const state: FindingState = freshness === "CURRENT" ? "NEW" : "STALE"
+    const findingIdentity = identity(findingPreimage(base))
     return deepFreeze({
       ...base,
-      findingIdentity: identity(findingPreimage(base)),
+      findingIdentity,
+      stateIdentity: findingStateIdentity(findingIdentity, claim.review.currentHead, freshness, state),
       freshness,
-      state: freshness === "CURRENT" ? "NEW" : "STALE",
+      state,
     })
   }
 
@@ -359,6 +377,7 @@ export class ReviewerIntelligenceRuntime {
     const updated: FindingRecord = {
       ...finding,
       review: { ...finding.review, currentHead },
+      stateIdentity: findingStateIdentity(finding.findingIdentity, currentHead, "STALE", staleState),
       freshness: "STALE",
       state: staleState,
     }
@@ -370,9 +389,17 @@ export class ReviewerIntelligenceRuntime {
     const decision = decisionValue(decisionInput)
     const resultingState = nextState(finding.state, decision.action)
     if (decision.duplicateOf === finding.findingIdentity) throw new Error("finding cannot be a duplicate of itself")
+    const resultingStateIdentity = findingStateIdentity(
+      finding.findingIdentity,
+      finding.review.currentHead,
+      finding.freshness,
+      resultingState,
+    )
     const recordWithoutIdentity: Omit<AdjudicationRecord, "adjudicationIdentity"> = {
       version: KRI_R2_ADJUDICATION_VERSION,
       findingIdentity: finding.findingIdentity,
+      previousStateIdentity: finding.stateIdentity,
+      resultingStateIdentity,
       action: decision.action,
       previousState: finding.state,
       resultingState,
@@ -386,7 +413,7 @@ export class ReviewerIntelligenceRuntime {
       ...recordWithoutIdentity,
       adjudicationIdentity: identity(adjudicationPreimage(recordWithoutIdentity)),
     }
-    const updatedFinding: FindingRecord = { ...finding, state: resultingState }
+    const updatedFinding: FindingRecord = { ...finding, stateIdentity: resultingStateIdentity, state: resultingState }
     return deepFreeze({ finding: updatedFinding, adjudication })
   }
 

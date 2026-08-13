@@ -93,9 +93,11 @@ Finding identity uses SHA-256 over a locale-independent canonical JSON preimage 
 - category/severity/confidence;
 - canonical sorted evidence references.
 
-`currentHead`, freshness, and lifecycle state are deliberately excluded from the finding identity because they are later evaluation/adjudication context; moving the repository head must make the finding stale without rewriting the historical claim identity.
+`currentHead`, freshness, and lifecycle state are deliberately excluded from the stable historical `findingIdentity` because they are later evaluation/adjudication context; moving the repository head must make the historical claim stale without rewriting its claim identity.
 
-Adjudication identity additionally binds:
+Each `FindingRecord` therefore also carries a separate deterministic `stateIdentity = sha256(findingIdentity + currentHead + freshness + state)`. This prevents a serialized record from changing `NEW` to `CONFIRMED`, `REJECTED`, `FIXED`, or `REVERIFIED` without detection while preserving a stable identity for the underlying reviewed claim.
+
+Adjudication records bind both `previousStateIdentity` and `resultingStateIdentity`. Adjudication identity additionally binds:
 
 - finding identity;
 - action;
@@ -159,13 +161,14 @@ The candidate test slice covers:
 - correction evidence before `FIXED`;
 - reverification evidence before `REVERIFIED`;
 - invalid transition rejection;
+- finding lifecycle-state substitution detection through `stateIdentity`;
 - adjudication identity mutation detection;
 - hostile reviewer text remaining inert data;
 - actual schema dialect/strictness checks;
 - unchanged KRI-R1 corpus identity;
 - static absence of network/process/filesystem-write/ExecutionGateway surfaces.
 
-Focused local validation before commit:
+Focused local validation before correction commit:
 
 ```text
 16 tests

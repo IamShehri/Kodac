@@ -37,6 +37,7 @@ export interface ReviewClaim {
 export interface FindingRecord {
   version: typeof KRI_R2_FINDING_VERSION
   findingIdentity: string
+  stateIdentity: string
   claimKey: string
   review: ReviewIdentity
   path: string
@@ -64,6 +65,8 @@ export interface AdjudicationRecord {
   version: typeof KRI_R2_ADJUDICATION_VERSION
   adjudicationIdentity: string
   findingIdentity: string
+  previousStateIdentity: string
+  resultingStateIdentity: string
   action: AdjudicationAction
   previousState: FindingState
   resultingState: FindingState

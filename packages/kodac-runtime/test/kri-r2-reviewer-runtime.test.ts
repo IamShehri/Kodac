@@ -48,6 +48,7 @@ test("creates a deterministic immutable NEW finding on the exact reviewed head",
   const second = runtime.createFinding(claim())
   assert.equal(first.findingIdentity, second.findingIdentity)
   assert.match(first.findingIdentity, /^[0-9a-f]{64}$/)
+  assert.match(first.stateIdentity, /^[0-9a-f]{64}$/)
   assert.equal(first.freshness, "CURRENT")
   assert.equal(first.state, "NEW")
   assert.deepEqual(first.evidenceRefs, ["evidence:a", "evidence:z"])
@@ -79,9 +80,11 @@ test("finding identity detects semantic substitution but ignores later current-h
   const finding = runtime.createFinding(claim())
   const altered = { ...finding, summary: "substituted semantics" }
   assert.throws(() => runtime.validateFinding(altered), /finding identity mismatch/)
+  assert.throws(() => runtime.validateFinding({ ...finding, state: "CONFIRMED" }), /finding state identity mismatch/)
 
   const stale = runtime.markStaleIfHeadMoved(finding, NEXT)
   assert.equal(stale.findingIdentity, finding.findingIdentity)
+  assert.notEqual(stale.stateIdentity, finding.stateIdentity)
   assert.equal(stale.review.currentHead, NEXT)
   assert.equal(stale.freshness, "STALE")
   assert.equal(stale.state, "STALE")
@@ -104,6 +107,8 @@ test("CONFIRM and REJECT are explicit Kodac adjudications with deterministic ide
   const confirmedAgain = runtime.applyAdjudication(finding, decision("CONFIRM"))
   assert.equal(confirmed.finding.state, "CONFIRMED")
   assert.equal(confirmed.adjudication.resultingState, "CONFIRMED")
+  assert.equal(confirmed.adjudication.previousStateIdentity, finding.stateIdentity)
+  assert.equal(confirmed.adjudication.resultingStateIdentity, confirmed.finding.stateIdentity)
   assert.equal(confirmed.adjudication.adjudicationIdentity, confirmedAgain.adjudication.adjudicationIdentity)
   assert.doesNotThrow(() => runtime.validateAdjudication(confirmed.adjudication))
 
