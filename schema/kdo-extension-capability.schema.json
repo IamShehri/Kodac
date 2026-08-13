@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kodac.dev/schema/kdo-extension-capability.schema.json",
+  "title": "Kodac H1 Extension Capability Descriptor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "extensionId", "extensionVersion", "provenance", "capabilities", "descriptorIdentity"],
+  "properties": {
+    "version": { "const": "kodac-extension-capability-v1" },
+    "extensionId": { "type": "string", "maxLength": 160, "pattern": "^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$" },
+    "extensionVersion": { "type": "string", "maxLength": 96, "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:/@-]*$" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceType", "sourceId", "sourceRevision", "license", "intakeMode", "provenanceIdentity"],
+      "properties": {
+        "sourceType": { "enum": ["KODAC_NATIVE", "DONOR_PORT", "EXTERNAL_DECLARATION"] },
+        "sourceId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "sourceRevision": { "type": "string", "maxLength": 160, "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:/@-]*$" },
+        "license": { "type": "string", "maxLength": 96, "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:/@-]*$" },
+        "intakeMode": { "enum": ["NATIVE", "PORT", "DECLARATION"] },
+        "provenanceIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["capabilityId", "roles"],
+        "properties": {
+          "capabilityId": { "type": "string", "maxLength": 160, "pattern": "^[a-z][a-z0-9_-]*(?:[./:][a-z][a-z0-9_-]*)+$" },
+          "roles": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": { "enum": ["DEFINITION", "PROVIDER", "CONSUMER"] }
+          }
+        }
+      }
+    },
+    "descriptorIdentity": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}
