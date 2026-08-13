@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
 import test from "node:test"
 
 import {
@@ -129,4 +130,10 @@ test("stable pointer is a locator record, not a live resolution result", () => {
 test("bounded graph surfaces reject oversized collections", () => {
   assert.throws(() => element({ childElementIdentities: Array.from({ length: KDO_C1_LIMITS.maxChildren + 1 }, (_, i) => digest(String(i))) }))
   assert.throws(() => validateSemanticElementSet(Array.from({ length: KDO_C1_LIMITS.maxElementSet + 1 }, () => element())))
+})
+
+test("production semantic module imports only node crypto", () => {
+  const text = readFileSync(new URL("../src/semantic/contracts.ts", import.meta.url), "utf8")
+  const imports = [...text.matchAll(/^import .* from "([^"]+)"/gm)].map(match => match[1])
+  assert.deepEqual(imports, ["node:crypto"])
 })
