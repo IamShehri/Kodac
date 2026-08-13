@@ -131,14 +131,22 @@ test("registry outputs are immutable snapshots rather than internal aliases", ()
   assert.equal(Object.isFrozen(registry.list()), true)
 })
 
-test("published schema mirrors the strict structural descriptor contract", () => {
+test("published schema mirrors descriptor and registration receipt contracts", () => {
   const schema = JSON.parse(source("../../../schema/kdo-extension-capability.schema.json")) as Record<string, unknown>
-  assert.equal(schema.type, "object")
-  assert.equal(schema.additionalProperties, false)
-  const properties = schema.properties as Record<string, Record<string, unknown>>
-  assert.equal(properties.version?.const, KDO_H1_EXTENSION_CONTRACT_VERSION)
-  assert.equal(properties.descriptorIdentity?.pattern, "^[0-9a-f]{64}$")
-  const provenance = properties.provenance as Record<string, unknown>
+  const oneOf = schema.oneOf as readonly Record<string, unknown>[]
+  assert.deepEqual(oneOf.map((entry) => entry.$ref), ["#/$defs/extensionDescriptor", "#/$defs/registrationReceipt"])
+  const defs = schema.$defs as Record<string, Record<string, unknown>>
+  const descriptor = defs.extensionDescriptor as Record<string, unknown>
+  const receipt = defs.registrationReceipt as Record<string, unknown>
+  assert.equal(descriptor.type, "object")
+  assert.equal(descriptor.additionalProperties, false)
+  assert.equal(receipt.type, "object")
+  assert.equal(receipt.additionalProperties, false)
+  const descriptorProperties = descriptor.properties as Record<string, Record<string, unknown>>
+  const receiptProperties = receipt.properties as Record<string, Record<string, unknown>>
+  assert.equal(descriptorProperties.version?.const, KDO_H1_EXTENSION_CONTRACT_VERSION)
+  assert.equal(receiptProperties.version?.const, "kodac-extension-registration-v1")
+  const provenance = defs.provenance as Record<string, unknown>
   assert.equal(provenance.additionalProperties, false)
 })
 
