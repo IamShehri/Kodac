@@ -162,7 +162,7 @@ function adjudicationPreimage(record: Omit<AdjudicationRecord, "adjudicationIden
 }
 
 function findingAuthorityKey(finding: FindingRecord): string {
-  return `${finding.findingIdentity}:${finding.evaluatedHead}`
+  return finding.findingIdentity
 }
 
 function findingValue(value: unknown): FindingRecord {
@@ -278,6 +278,8 @@ function adjudicationValue(value: unknown): AdjudicationRecord {
   const previousAdjudicationIdentity = record.previousAdjudicationIdentity === null
     ? null
     : sha256(record.previousAdjudicationIdentity, "adjudication.previousAdjudicationIdentity")
+  if (previousState === "NEW" && previousAdjudicationIdentity !== null) throw new Error("NEW adjudication must not have a previous adjudication identity")
+  if (previousState !== "NEW" && previousAdjudicationIdentity === null) throw new Error("non-NEW adjudication requires a previous adjudication identity")
   const normalized: Omit<AdjudicationRecord, "adjudicationIdentity"> = {
     version: KRI_R2_ADJUDICATION_VERSION,
     findingIdentity: sha256(record.findingIdentity, "adjudication.findingIdentity"),
@@ -314,7 +316,7 @@ function deepFreeze<T>(value: T): T {
 export class ReviewerIntelligenceRuntime {
   readonly #adjudicatorId: string
   readonly #issuedFindings = new WeakSet<object>()
-  readonly #findingStates = new Map<string, { state: FindingState; lastAdjudicationIdentity: string | null }>()
+  readonly #findingStates = new Map<string, { evaluatedHead: string; state: FindingState; lastAdjudicationIdentity: string | null }>()
 
   constructor(options: ReviewerIntelligenceRuntimeOptions) {
     const record = plainObject(options, "options")
@@ -382,6 +384,7 @@ export class ReviewerIntelligenceRuntime {
     if (finding.evaluatedHead !== currentHead) throw new Error("finding evaluatedHead is stale relative to caller-supplied current head")
     const tracked = this.#findingStates.get(findingAuthorityKey(finding))
     if (!tracked) throw new Error("finding lifecycle state is unavailable")
+    if (tracked.evaluatedHead !== finding.evaluatedHead) throw new Error("finding has been superseded by another evaluated head")
     return tracked.state
   }
 
@@ -414,6 +417,7 @@ export class ReviewerIntelligenceRuntime {
       adjudicationIdentity: identity(adjudicationPreimage(recordWithoutIdentity)),
     })
     this.#findingStates.set(findingAuthorityKey(finding), {
+      evaluatedHead: finding.evaluatedHead,
       state: resultingState,
       lastAdjudicationIdentity: adjudication.adjudicationIdentity,
     })
@@ -423,11 +427,13 @@ export class ReviewerIntelligenceRuntime {
   #issueFinding(finding: FindingRecord): void {
     this.#issuedFindings.add(finding)
     const key = findingAuthorityKey(finding)
-    if (this.#findingStates.has(key)) return
-    if (this.#findingStates.size >= MAX_TRACKED_FINDINGS) {
+    const existing = this.#findingStates.get(key)
+    if (existing?.evaluatedHead === finding.evaluatedHead) return
+    if (!existing && this.#findingStates.size >= MAX_TRACKED_FINDINGS) {
       throw new Error(`reviewer runtime finding-state capacity exceeded (${MAX_TRACKED_FINDINGS})`)
     }
     this.#findingStates.set(key, {
+      evaluatedHead: finding.evaluatedHead,
       state: finding.state,
       lastAdjudicationIdentity: null,
     })

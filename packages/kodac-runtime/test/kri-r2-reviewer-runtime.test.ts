@@ -99,6 +99,17 @@ test("historical finding identity detects semantic substitution but survives lat
   assert.equal(firstRuntime.currentState(stale, NEXT), "STALE")
 })
 
+test("head movement supersedes old finding objects for the same historical identity", () => {
+  const firstRuntime = runtime()
+  const original = firstRuntime.createFinding(claim(), HEAD)
+  firstRuntime.applyAdjudication(original, decision("CONFIRM"), HEAD)
+  const stale = firstRuntime.markStaleIfHeadMoved(original, NEXT)
+  assert.equal(stale.findingIdentity, original.findingIdentity)
+  assert.equal(firstRuntime.currentState(stale, NEXT), "STALE")
+  assert.throws(() => firstRuntime.currentState(original, HEAD), /superseded by another evaluated head/)
+  assert.throws(() => firstRuntime.applyAdjudication(original, decision("MARK_FIXED", { correctionRef: "commit:old" }), HEAD), /superseded by another evaluated head/)
+})
+
 test("externally reconstructed finding is structurally valid but cannot exercise adjudication authority", () => {
   const firstRuntime = runtime()
   const issued = firstRuntime.createFinding(claim(), HEAD)
@@ -236,6 +247,21 @@ test("adjudication identity detects structural mutation but is explicitly not an
   assert.doesNotThrow(() => firstRuntime.validateAdjudicationRecord(result.adjudication))
 })
 
+test("structural adjudication validation rejects impossible previous-chain identity relationships", () => {
+  const firstRuntime = runtime()
+  const finding = firstRuntime.createFinding(claim(), HEAD)
+  const confirmed = firstRuntime.applyAdjudication(finding, decision("CONFIRM"), HEAD)
+  assert.throws(
+    () => firstRuntime.validateAdjudicationRecord({ ...confirmed.adjudication, previousAdjudicationIdentity: "e".repeat(64) }),
+    /NEW adjudication must not have a previous adjudication identity|adjudication identity mismatch/,
+  )
+  const fixed = firstRuntime.applyAdjudication(finding, decision("MARK_FIXED", { correctionRef: "commit:fix" }), HEAD)
+  assert.throws(
+    () => firstRuntime.validateAdjudicationRecord({ ...fixed.adjudication, previousAdjudicationIdentity: null }),
+    /non-NEW adjudication requires a previous adjudication identity|adjudication identity mismatch/,
+  )
+})
+
 test("hostile reviewer text remains inert data", () => {
   const firstRuntime = runtime()
   const hostile = firstRuntime.createFinding(claim({
@@ -254,7 +280,11 @@ test("actual JSON schemas separate initial finding state from adjudication lifec
   assert.equal(findingSchema.additionalProperties, false)
   assert.equal(adjudicationSchema.additionalProperties, false)
   assert.deepEqual(findingSchema.properties.state.enum, ["NEW", "STALE"])
+  assert.match(findingSchema.$defs.range.description, /startLine <= endLine/)
   assert.deepEqual(adjudicationSchema.properties.action.enum, ["CONFIRM", "REJECT", "MARK_DUPLICATE", "MARK_FIXED", "REVERIFY"])
+  assert.deepEqual(adjudicationSchema.properties.previousState.enum, ["NEW", "CONFIRMED", "FIXED"])
+  assert.deepEqual(adjudicationSchema.properties.resultingState.enum, ["CONFIRMED", "REJECTED", "DUPLICATE", "FIXED", "REVERIFIED"])
+  assert.ok(adjudicationSchema.allOf.length >= 7, "schema must encode action evidence and lifecycle transition invariants")
 })
 
 test("KRI-R1 canonical corpus remains unchanged benchmark evidence", () => {
