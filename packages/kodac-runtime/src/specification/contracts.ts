@@ -218,6 +218,14 @@ function repositoryBinding(record: Record<string, unknown>): RepositoryBindingIn
   })
 }
 
+function projectRepositoryBinding(binding: RepositoryBindingInput): RepositoryBindingInput {
+  return Object.freeze({
+    featureKey: binding.featureKey,
+    repositoryHead: binding.repositoryHead,
+    ...(binding.repositoryTreeIdentity === undefined ? {} : { repositoryTreeIdentity: binding.repositoryTreeIdentity }),
+  })
+}
+
 function sameRepositoryBinding(a: RepositoryBindingInput, b: RepositoryBindingInput): boolean {
   return a.featureKey === b.featureKey && a.repositoryHead === b.repositoryHead &&
     a.repositoryTreeIdentity === b.repositoryTreeIdentity
@@ -296,13 +304,15 @@ function buildPlanArtifact(input: {
 }
 
 export function createPlanArtifact(input: PlanArtifactInput): PlanArtifact {
-  const specification = validateSpecificationArtifact(input.specification)
+  const record = asRecord(input, "planArtifactInput")
+  exactKeys(record, ["specification", "planContentIdentity", "artifactRevision", "predecessorPlanArtifactIdentity"], "planArtifactInput")
+  const specification = validateSpecificationArtifact(record.specification)
   return buildPlanArtifact({
-    binding: specification,
+    binding: projectRepositoryBinding(specification),
     specificationArtifactIdentity: specification.specificationArtifactIdentity,
-    planContentIdentity: input.planContentIdentity,
-    artifactRevision: input.artifactRevision,
-    predecessorPlanArtifactIdentity: input.predecessorPlanArtifactIdentity,
+    planContentIdentity: record.planContentIdentity,
+    artifactRevision: record.artifactRevision,
+    predecessorPlanArtifactIdentity: record.predecessorPlanArtifactIdentity,
   })
 }
 
@@ -348,17 +358,19 @@ function buildTaskSetArtifact(input: {
 }
 
 export function createTaskSetArtifact(input: TaskSetArtifactInput): TaskSetArtifact {
-  const specification = validateSpecificationArtifact(input.specification)
-  const plan = validatePlanArtifact(input.plan)
+  const record = asRecord(input, "taskSetArtifactInput")
+  exactKeys(record, ["specification", "plan", "taskSetContentIdentity", "artifactRevision", "predecessorTaskSetArtifactIdentity"], "taskSetArtifactInput")
+  const specification = validateSpecificationArtifact(record.specification)
+  const plan = validatePlanArtifact(record.plan)
   assertSameRepositoryBinding(specification, plan, "taskSetArtifact specification/plan")
   if (plan.specificationArtifactIdentity !== specification.specificationArtifactIdentity) throw new TypeError("taskSetArtifact plan does not reference the supplied specification")
   return buildTaskSetArtifact({
-    binding: specification,
+    binding: projectRepositoryBinding(specification),
     specificationArtifactIdentity: specification.specificationArtifactIdentity,
     planArtifactIdentity: plan.planArtifactIdentity,
-    taskSetContentIdentity: input.taskSetContentIdentity,
-    artifactRevision: input.artifactRevision,
-    predecessorTaskSetArtifactIdentity: input.predecessorTaskSetArtifactIdentity,
+    taskSetContentIdentity: record.taskSetContentIdentity,
+    artifactRevision: record.artifactRevision,
+    predecessorTaskSetArtifactIdentity: record.predecessorTaskSetArtifactIdentity,
   })
 }
 
@@ -406,9 +418,11 @@ function buildLineage(input: {
 }
 
 export function createFeatureArtifactLineage(input: FeatureArtifactLineageInput): FeatureArtifactLineage {
-  const specification = validateSpecificationArtifact(input.specification)
-  const plan = input.plan === undefined ? undefined : validatePlanArtifact(input.plan)
-  const taskSet = input.taskSet === undefined ? undefined : validateTaskSetArtifact(input.taskSet)
+  const record = asRecord(input, "featureArtifactLineageInput")
+  exactKeys(record, ["specification", "plan", "taskSet", "artifactRevision", "predecessorLineageIdentity"], "featureArtifactLineageInput")
+  const specification = validateSpecificationArtifact(record.specification)
+  const plan = record.plan === undefined ? undefined : validatePlanArtifact(record.plan)
+  const taskSet = record.taskSet === undefined ? undefined : validateTaskSetArtifact(record.taskSet)
   if (plan !== undefined) {
     assertSameRepositoryBinding(specification, plan, "featureArtifactLineage specification/plan")
     if (plan.specificationArtifactIdentity !== specification.specificationArtifactIdentity) throw new TypeError("featureArtifactLineage plan does not reference specification")
@@ -421,12 +435,12 @@ export function createFeatureArtifactLineage(input: FeatureArtifactLineageInput)
     }
   }
   return buildLineage({
-    binding: specification,
+    binding: projectRepositoryBinding(specification),
     specificationArtifactIdentity: specification.specificationArtifactIdentity,
     planArtifactIdentity: plan?.planArtifactIdentity,
     taskSetArtifactIdentity: taskSet?.taskSetArtifactIdentity,
-    artifactRevision: input.artifactRevision,
-    predecessorLineageIdentity: input.predecessorLineageIdentity,
+    artifactRevision: record.artifactRevision,
+    predecessorLineageIdentity: record.predecessorLineageIdentity,
   })
 }
 
