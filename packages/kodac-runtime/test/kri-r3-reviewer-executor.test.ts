@@ -195,7 +195,13 @@ test("claim must cite context evidence supporting its affected path", async () =
 
 test("context semantic substitution without identity update is rejected before provider execution", async () => {
   const valid = contextBundle()
-  const mutated = { ...valid, items: [{ ...valid.items[0]!, text: "substituted", contextUtf8Bytes: Buffer.byteLength("substituted") }] }
+  const substituted = "substituted"
+  const substitutedBytes = Buffer.byteLength(substituted, "utf8")
+  const mutated = {
+    ...valid,
+    budget: { ...valid.budget, usedUtf8Bytes: substitutedBytes },
+    items: [{ ...valid.items[0]!, text: substituted, contextUtf8Bytes: substitutedBytes }],
+  }
   const { runtime, providerCalls } = stableRuntime()
   await assert.rejects(runtime.execute(request(mutated as ContextBundle)), /contextBundle identity mismatch/)
   assert.equal(providerCalls(), 0)
