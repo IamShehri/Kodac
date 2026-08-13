@@ -143,6 +143,27 @@ test("runtime-owned state prevents adjudication forks from the same finding", ()
   assert.equal(firstRuntime.currentState(finding, HEAD), "CONFIRMED")
 })
 
+test("duplicate issued records for the same finding identity and head share one non-forking authority state", () => {
+  const firstRuntime = runtime()
+  const first = firstRuntime.createFinding(claim(), HEAD)
+  const duplicate = firstRuntime.createFinding(claim(), HEAD)
+  assert.equal(first.findingIdentity, duplicate.findingIdentity)
+  firstRuntime.applyAdjudication(first, decision("CONFIRM"), HEAD)
+  assert.equal(firstRuntime.currentState(duplicate, HEAD), "CONFIRMED")
+  assert.throws(() => firstRuntime.applyAdjudication(duplicate, decision("REJECT"), HEAD), /invalid finding transition/)
+})
+
+test("runtime-owned finding lifecycle registry is bounded and fails closed", () => {
+  const boundedRuntime = runtime()
+  for (let index = 0; index < 1024; index += 1) {
+    boundedRuntime.createFinding(claim({ claimKey: `claim-${index}` }), HEAD)
+  }
+  assert.throws(
+    () => boundedRuntime.createFinding(claim({ claimKey: "claim-over-capacity" }), HEAD),
+    /finding-state capacity exceeded \(1024\)/,
+  )
+})
+
 test("MARK_DUPLICATE requires another finding identity and rejects self-reference", () => {
   const firstRuntime = runtime()
   const finding = firstRuntime.createFinding(claim(), HEAD)

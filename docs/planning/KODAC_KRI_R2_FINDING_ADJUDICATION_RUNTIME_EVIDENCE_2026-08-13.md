@@ -22,7 +22,7 @@ CANONICAL STATUS: NOT CANONICAL UNTIL MERGE
 
 ## Exact authorized implementation scope
 
-The cumulative KRI-R2 implementation remains confined to the seven canonically authorized paths:
+The cumulative implementation remains confined to the seven canonically authorized paths:
 
 ```text
 schema/kri-finding.schema.json
@@ -38,103 +38,90 @@ No workflow, manifest, lockfile, dependency, trust-policy, ExecutionGateway, per
 
 ## Review-driven security corrections
 
-Three authority defects were discovered and corrected before canonical adoption.
+Four authority defects were found and corrected before canonical adoption.
 
-### 1. Historical finding identity did not bind lifecycle state
+### 1. Terminal state was not bound by the stable historical finding fingerprint
 
-The initial implementation used a stable historical `findingIdentity` while carrying terminal lifecycle state in the same `FindingRecord`. A serialized record could therefore change `NEW` to an adjudicated state without changing the historical claim fingerprint.
-
-An intermediate correction added `stateIdentity`.
+The first candidate stored terminal lifecycle state in `FindingRecord` while deliberately excluding state from the historical `findingIdentity`. A serialized record could therefore change `NEW` to an adjudicated state without changing the historical claim fingerprint.
 
 ### 2. A deterministic state hash is integrity, not authority
 
-Independent review then identified the deeper issue: a public deterministic hash can be recomputed by an untrusted producer. It can detect unrecomputed mutation, but cannot authenticate who had authority to advance the lifecycle.
+An intermediate `stateIdentity` improved mutation detection but independent review correctly identified that a public deterministic hash is recomputable by an untrusted producer. It cannot authenticate adjudication authority.
 
-The final model therefore removes terminal adjudication state from `FindingRecord` entirely.
+The model was redesigned so `FindingRecord` contains only initial `NEW` / `STALE` state. Terminal lifecycle truth exists only in runtime-issued adjudication state.
 
-`FindingRecord` has only:
+### 3. Caller-supplied history could fork the lifecycle
+
+A later candidate required all adjudication-history objects to be issued by the same runtime instance, but still accepted the history sequence from the caller. The same `NEW` finding could therefore be used with two separate empty histories to create independently valid `CONFIRM` and `REJECT` branches.
+
+Caller-supplied history was removed. The runtime now owns current lifecycle state and the latest adjudication identity.
+
+### 4. Object-keyed state still allowed duplicate-record forks
+
+Runtime-owned state was initially keyed by the JavaScript `FindingRecord` object. Two separately issued objects for the same `findingIdentity` and exact `evaluatedHead` could therefore hold independent lifecycle states and still fork.
+
+The final candidate keys adjudication authority by:
 
 ```text
-NEW
-STALE
+findingIdentity + evaluatedHead
 ```
 
-`CONFIRMED`, `REJECTED`, `DUPLICATE`, `FIXED`, and `REVERIFIED` exist only as runtime-issued adjudication lifecycle state.
+All duplicate in-process records representing the same historical finding on the same evaluated head share one lifecycle state and one latest-adjudication identity.
 
-### 3. Caller-supplied adjudication history permitted lifecycle forks
+The authority registry is explicitly bounded to:
 
-A later candidate accepted an array of previously issued adjudications from the caller. Although foreign, reconstructed, reordered, and malformed history was rejected, the caller could still ask the same runtime to create two valid first decisions from the same `NEW` finding by invoking separate empty histories, for example one `CONFIRM` branch and one `REJECT` branch.
+```text
+MAX_TRACKED_FINDINGS = 1024
+```
 
-That would create two individually valid but conflicting adjudication chains.
-
-The final candidate removes caller-supplied lifecycle history entirely.
-
-`ReviewerIntelligenceRuntime` now owns the current lifecycle state and the latest adjudication identity for every in-process issued finding using private runtime-instance `WeakMap` state.
-
-Consequences:
-
-- callers cannot choose an earlier lifecycle point;
-- callers cannot fork the same finding into conflicting valid branches;
-- callers cannot replay a reconstructed adjudication to advance state;
-- callers cannot inject a foreign-runtime adjudication chain;
-- the next transition always starts from the state already owned by the issuing runtime instance.
+A new unique finding/head authority beyond this bound fails closed rather than growing runtime state without limit.
 
 ## Final finding model
 
-A provider supplies only historical review-claim data:
+Provider-supplied review claims may contain only historical review metadata and claim evidence:
 
-- review run identity;
+- review-run identity;
 - reviewer identity;
 - reviewer version;
 - policy identity;
 - canonical base;
 - exact reviewed head;
-- affected path/range;
-- normalized summary;
-- contract claim;
+- path/range;
+- summary and contract claim;
 - category/severity/confidence;
 - evidence references.
 
-The provider cannot supply:
+The provider cannot provide current repository head, freshness, terminal lifecycle state, or adjudicator identity.
 
-- current repository head;
-- freshness state;
-- lifecycle state;
-- adjudicator identity.
-
-Kodac supplies `evaluatedHead` separately to `createFinding`.
-
-Freshness and initial state derive only from exact revision identity:
+Kodac supplies `evaluatedHead` separately.
 
 ```text
 evaluatedHead == reviewedHead → CURRENT / NEW
 evaluatedHead != reviewedHead → STALE / STALE
 ```
 
-A stale finding cannot be adjudicated. It requires a review against the current head.
+`STALE` is not equivalent to `REJECTED` and cannot be adjudicated in this slice.
 
-## Stable historical finding fingerprint
+## Historical finding fingerprint
 
-`findingIdentity` is SHA-256 over canonical historical claim semantics:
+`findingIdentity` is a deterministic SHA-256 fingerprint over historical claim semantics:
 
-- contract version;
+- version;
 - claim key;
 - review-run/reviewer/version/policy identity;
 - canonical base;
-- exact reviewed head;
-- affected path/range;
+- reviewed head;
+- path/range;
 - normalized summary;
-- violated-contract claim;
+- contract claim;
 - category/severity/confidence;
 - canonical sorted evidence references.
 
-Caller-supplied `evaluatedHead`, derived freshness, and derived initial state are intentionally excluded so later freshness evaluation does not rewrite the identity of the historical reviewer claim.
+The caller-supplied evaluated head and derived freshness/initial state are excluded so later freshness evaluation does not rewrite the identity of the historical claim.
 
-The fingerprint is an integrity/fingerprinting mechanism only. It is not a signature, capability, authentication token, or adjudication authority.
+The SHA-256 value is an integrity fingerprint only. It is not a signature, capability, authentication token, or proof of adjudication authority.
 
 ## Final adjudication lifecycle
-
-Supported lifecycle states:
 
 ```text
 NEW
@@ -156,73 +143,81 @@ CONFIRMED + MARK_FIXED → FIXED
 FIXED + REVERIFY       → REVERIFIED
 ```
 
-All other transitions fail closed. `STALE` has no adjudication transition in this slice.
+All other transitions fail closed. `STALE` requires a fresh review rather than a lifecycle transition.
 
-`AdjudicationDecision` does not accept `adjudicatorId`. The adjudicator identity is configured on the Kodac runtime instance:
+`AdjudicationDecision` cannot supply `adjudicatorId`. The Kodac runtime is constructed with the adjudicator identity.
 
-```text
-new ReviewerIntelligenceRuntime({ adjudicatorId: ... })
-```
-
-Each runtime-issued `AdjudicationRecord` binds:
+Each emitted `AdjudicationRecord` binds:
 
 - finding identity;
-- previous adjudication identity, or null for the first decision;
+- previous adjudication identity, or null;
 - action;
-- previous state;
-- resulting state;
+- previous and resulting state;
 - runtime-configured adjudicator identity;
-- canonical adjudication evidence;
+- evidence references;
 - duplicate/correction/reverification reference where applicable.
 
-The adjudication SHA-256 is also a deterministic integrity fingerprint, not authenticity proof.
+The adjudication SHA-256 is also an integrity fingerprint, not an authenticity signature.
 
-## Runtime-owned in-process authority
+## Runtime-owned bounded authority state
 
-For each `FindingRecord` issued by the runtime, private runtime state tracks:
+The runtime maintains two private surfaces:
 
 ```text
-current lifecycle state
-last adjudication identity
+WeakSet<object> of FindingRecord objects actually issued by this runtime
+Map<findingIdentity:evaluatedHead, { currentState, lastAdjudicationIdentity }>
 ```
 
-The public `currentState(finding, currentHead)` reads that runtime-owned state.
+The `WeakSet` prevents reconstructed or foreign-runtime finding objects from exercising authority.
 
-`applyAdjudication(finding, decision, currentHead)` derives the only allowed next state from that current runtime-owned state, emits one immutable `AdjudicationRecord`, then atomically advances the private lifecycle state and latest adjudication identity for that finding.
+The bounded identity/head-keyed `Map` ensures duplicate issued records for the same logical finding/head share exactly one lifecycle state and cannot fork.
 
-No external history parameter exists.
+`applyAdjudication`:
 
-A second incompatible decision from the same earlier state therefore fails because the runtime has already advanced the finding.
+1. verifies the finding object was issued by this runtime;
+2. verifies caller-supplied current head equals the finding's evaluated head;
+3. reads the one runtime-owned current state for the finding/head authority key;
+4. validates the requested transition;
+5. emits one immutable adjudication record whose `previousAdjudicationIdentity` is the runtime-owned latest identity;
+6. advances the runtime-owned state and latest identity.
 
-## Structural validation is not authority restoration
+There is no external history parameter.
 
-`validateFindingRecord` and `validateAdjudicationRecord` intentionally provide deterministic structural validation for serialized evidence.
+## Structural validation does not restore authority
 
-They do not restore in-process adjudication authority.
+`validateFindingRecord` and `validateAdjudicationRecord` can validate serialized evidence structurally.
 
-A reconstructed or deserialized finding may be structurally valid but cannot be passed to `applyAdjudication`, because it was not issued by that runtime instance.
+They do not register the validated object as an authority-bearing in-process record and cannot change runtime lifecycle state.
 
-A structurally valid external adjudication can be inspected but cannot alter runtime-owned lifecycle state because no API accepts external adjudication history as authority input.
+A structurally valid external adjudication has no method by which it can be supplied as lifecycle authority.
 
-A finding issued by another runtime instance likewise cannot exercise this runtime instance's authority.
+Persistent or cross-process adjudication authority is intentionally outside KRI-R2. It would require a later authenticated receipt, signature, capability, or equivalent persistence/replay protocol.
 
-This first slice is intentionally ephemeral. Persistent/replayed adjudication authority would require a future separately-authorized authenticated receipt, signature, capability, or equivalent persistence protocol.
+## Bounded runtime behavior
+
+In addition to per-field/string/array limits, the runtime-owned finding/head state registry is capped at 1024 unique authority keys.
+
+Duplicate objects with the same key do not consume another authority slot and share state.
+
+A 1025th unique key fails with a capacity error.
+
+This is intentionally fail-closed and prevents the first in-memory runtime slice from becoming an unbounded state accumulator.
 
 ## Actual JSON schemas
 
-Both schemas declare JSON Schema 2020-12:
+Both machine-readable schemas use JSON Schema 2020-12:
 
 ```text
 https://json-schema.org/draft/2020-12/schema
 ```
 
-`kri-finding.schema.json` models only initial `NEW` / `STALE` finding states and the caller-evaluated exact head.
+The finding schema models initial `NEW` / `STALE` state and exact evaluated-head metadata.
 
-`kri-adjudication.schema.json` models the full lifecycle transition record and `previousAdjudicationIdentity` chain.
+The adjudication schema models the full adjudication lifecycle record, including `previousAdjudicationIdentity`.
 
-Both use strict top-level object shapes, bounded fields, lowercase full Git SHA constraints, SHA-256 fingerprint constraints, enumerated state/action values, and conditional duplicate/correction/reverification evidence requirements.
+Both retain strict object shapes, bounded values, lowercase full Git SHA patterns, SHA-256 fingerprint patterns, enum constraints, and conditional evidence requirements.
 
-No JSON Schema runtime dependency is added; security-relevant validation is enforced directly in TypeScript.
+No new JSON Schema validator dependency is added; the TypeScript runtime enforces security-relevant validation directly.
 
 ## Trust boundary
 
@@ -233,24 +228,15 @@ PROVIDER LABELS ARE METADATA, NOT KODAC AUTHORITY.
 STRUCTURAL HASH VALIDATION IS NOT AUTHORITY AUTHENTICATION.
 ```
 
-The runtime imports only `node:crypto` from the platform and its local contracts.
+The runtime imports only `node:crypto` and local contracts.
 
-It does not import or invoke:
-
-- child-process execution;
-- HTTP/HTTPS/network APIs;
-- filesystem-write APIs;
-- K2 ExecutionGateway;
-- model/provider execution;
-- persistence;
-- repository mutation;
-- GitHub writes.
+It does not import or invoke child-process execution, network APIs, filesystem-write APIs, K2 ExecutionGateway, model/provider execution, persistence, repository mutation, or GitHub writes.
 
 K2 remains the sole trusted side-effect execution authority.
 
 The existing Done Gate remains the current `PROVEN_READY` authority.
 
-## Focused acceptance evidence
+## Final focused acceptance evidence
 
 The final local focused suite proves:
 
@@ -260,30 +246,32 @@ The final local focused suite proves:
 4. path/range/text/evidence bounds fail closed;
 5. historical finding semantic substitution is detected;
 6. reconstructed findings cannot exercise adjudication authority;
-7. old-head findings are `STALE`, not `REJECTED`, and cannot be adjudicated;
-8. `CONFIRM` / `REJECT` use the runtime-configured Kodac adjudicator;
-9. runtime-owned state prevents adjudication forks from one finding;
-10. duplicate decisions require another finding identity and reject self-reference;
-11. `FIXED` requires runtime-owned `CONFIRMED` state plus correction evidence;
-12. `REVERIFIED` requires runtime-owned `FIXED` state plus reverification evidence;
-13. structurally valid external adjudications cannot alter runtime-owned lifecycle state;
-14. foreign-runtime findings cannot exercise this runtime's authority;
-15. invalid transitions fail after runtime state advances;
-16. adjudication fingerprint mutation is detected while explicitly not being treated as authentication;
-17. hostile reviewer content remains inert;
-18. schemas separate initial finding state from adjudication lifecycle;
-19. KRI-R1 canonical corpus identity remains unchanged;
-20. runtime source introduces no network/process/filesystem-write/ExecutionGateway surface.
+7. old-head findings become `STALE`, not `REJECTED`;
+8. `CONFIRM` / `REJECT` use runtime-configured adjudicator identity;
+9. runtime-owned state prevents forks from one finding object;
+10. duplicate issued objects for the same finding/head share the same non-forking authority state;
+11. the finding/head authority registry is capped at 1024 and fails closed on overflow;
+12. duplicate decisions require another finding identity and reject self-reference;
+13. `FIXED` requires runtime-owned `CONFIRMED` state and correction evidence;
+14. `REVERIFIED` requires runtime-owned `FIXED` state and reverification evidence;
+15. structurally valid external adjudications cannot alter runtime-owned state;
+16. foreign-runtime finding objects cannot exercise authority;
+17. invalid transitions fail after runtime state advances;
+18. adjudication fingerprint mutation is detected without treating the hash as authentication;
+19. hostile reviewer text remains inert;
+20. schemas separate initial finding state from adjudication lifecycle;
+21. KRI-R1 corpus identity remains unchanged;
+22. runtime introduces no network/process/filesystem-write/ExecutionGateway surface.
 
-Focused validation before this correction commit:
+Focused validation before the final correction commit:
 
 ```text
-20 tests
-20 passed
+22 tests
+22 passed
 0 failed
 ```
 
-All CI/review results on earlier KRI-R2 heads are stale after this correction. Full exact-head repository CI, cross-platform runtime/typecheck/tests, cumulative review, ruleset verification, and unresolved-thread verification are required again before merge.
+All CI and review evidence on earlier KRI-R2 heads is stale. Full exact-head CI, cross-platform runtime/typecheck/tests, cumulative review, active ruleset verification, and unresolved-thread verification are required again before merge.
 
 ## Current non-grants
 
@@ -299,4 +287,4 @@ PROVEN_READY AUTHORITY FROM KRI: NOT GRANTED
 K3-R6+: NOT AUTHORIZED
 ```
 
-These describe the present implementation boundary, not the founder's ability to authorize later slices.
+These describe the current implementation boundary, not the founder's ability to authorize later slices.

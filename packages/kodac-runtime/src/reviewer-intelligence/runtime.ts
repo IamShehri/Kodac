@@ -28,6 +28,7 @@ const MAX_TEXT = 4096
 const MAX_PATH = 1024
 const MAX_REFS = 32
 const MAX_REF = 1024
+const MAX_TRACKED_FINDINGS = 1024
 
 type UnknownRecord = Record<string, unknown>
 
@@ -158,6 +159,10 @@ function findingPreimage(record: Omit<FindingRecord, "findingIdentity" | "evalua
 
 function adjudicationPreimage(record: Omit<AdjudicationRecord, "adjudicationIdentity">): unknown {
   return record
+}
+
+function findingAuthorityKey(finding: FindingRecord): string {
+  return `${finding.findingIdentity}:${finding.evaluatedHead}`
 }
 
 function findingValue(value: unknown): FindingRecord {
@@ -309,7 +314,7 @@ function deepFreeze<T>(value: T): T {
 export class ReviewerIntelligenceRuntime {
   readonly #adjudicatorId: string
   readonly #issuedFindings = new WeakSet<object>()
-  readonly #findingStates = new WeakMap<object, { state: FindingState; lastAdjudicationIdentity: string | null }>()
+  readonly #findingStates = new Map<string, { state: FindingState; lastAdjudicationIdentity: string | null }>()
 
   constructor(options: ReviewerIntelligenceRuntimeOptions) {
     const record = plainObject(options, "options")
@@ -375,7 +380,7 @@ export class ReviewerIntelligenceRuntime {
     this.#assertIssuedFinding(finding)
     const currentHead = sha1(currentHeadInput, "currentHead")
     if (finding.evaluatedHead !== currentHead) throw new Error("finding evaluatedHead is stale relative to caller-supplied current head")
-    const tracked = this.#findingStates.get(finding)
+    const tracked = this.#findingStates.get(findingAuthorityKey(finding))
     if (!tracked) throw new Error("finding lifecycle state is unavailable")
     return tracked.state
   }
@@ -389,7 +394,7 @@ export class ReviewerIntelligenceRuntime {
     const decision = decisionValue(decisionInput)
     const resultingState = nextState(currentState, decision.action)
     if (decision.duplicateOf === finding.findingIdentity) throw new Error("finding cannot be a duplicate of itself")
-    const tracked = this.#findingStates.get(finding)
+    const tracked = this.#findingStates.get(findingAuthorityKey(finding))
     if (!tracked) throw new Error("finding lifecycle state is unavailable")
     const recordWithoutIdentity: Omit<AdjudicationRecord, "adjudicationIdentity"> = {
       version: KRI_R2_ADJUDICATION_VERSION,
@@ -408,7 +413,7 @@ export class ReviewerIntelligenceRuntime {
       ...recordWithoutIdentity,
       adjudicationIdentity: identity(adjudicationPreimage(recordWithoutIdentity)),
     })
-    this.#findingStates.set(finding, {
+    this.#findingStates.set(findingAuthorityKey(finding), {
       state: resultingState,
       lastAdjudicationIdentity: adjudication.adjudicationIdentity,
     })
@@ -417,7 +422,12 @@ export class ReviewerIntelligenceRuntime {
 
   #issueFinding(finding: FindingRecord): void {
     this.#issuedFindings.add(finding)
-    this.#findingStates.set(finding, {
+    const key = findingAuthorityKey(finding)
+    if (this.#findingStates.has(key)) return
+    if (this.#findingStates.size >= MAX_TRACKED_FINDINGS) {
+      throw new Error(`reviewer runtime finding-state capacity exceeded (${MAX_TRACKED_FINDINGS})`)
+    }
+    this.#findingStates.set(key, {
       state: finding.state,
       lastAdjudicationIdentity: null,
     })
