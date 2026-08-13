@@ -65,6 +65,22 @@ function contextBundle(overrides: Partial<ContextBundle> = {}): ContextBundle {
   return result
 }
 
+function bundleIdentityFor(bundle: ContextBundle, items = bundle.items): string {
+  return sha256({
+    version: bundle.version,
+    requestIdentity: bundle.requestIdentity,
+    repositoryIdentity: bundle.repositoryIdentity,
+    snapshotIdentity: bundle.snapshotIdentity,
+    contentIdentity: bundle.contentIdentity,
+    freshness: bundle.freshness,
+    taskId: bundle.taskId,
+    selectionStrategy: bundle.selectionStrategy,
+    budget: bundle.budget,
+    completeness: bundle.completeness,
+    items,
+  })
+}
+
 function providerOutput(overrides: Obj = {}): ReviewerProviderOutput {
   const bundle = contextBundle()
   return {
@@ -135,22 +151,20 @@ test("provider cannot inject Kodac-owned review identity or lifecycle authority"
 
 test("pre-provider head mismatch fails closed before invoking provider", async () => {
   let calls = 0
-  const runtime = new ReviewerExecutionRuntime({
-    provider: provider(async () => { calls += 1; return providerOutput() }),
-    findingRuntime: findingRuntime(),
-    readCurrentHead: () => NEXT,
-  })
+  const runtime = new ReviewerExecutionRuntime({ provider: provider(async () => { calls += 1; return providerOutput() }), findingRuntime: findingRuntime(), readCurrentHead: () => NEXT })
   await assert.rejects(runtime.execute(request()), /no longer current before provider execution/)
   assert.equal(calls, 0)
 })
 
+test("policy identity bound is aligned with canonical KRI-R2 before provider execution", async () => {
+  const { runtime, providerCalls } = stableRuntime()
+  await assert.rejects(runtime.execute({ ...request(), policyIdentity: "p".repeat(129) }), /policyIdentity/)
+  assert.equal(providerCalls(), 0)
+})
+
 test("head movement during provider execution yields STALE findings", async () => {
   let headReads = 0
-  const runtime = new ReviewerExecutionRuntime({
-    provider: provider(async () => providerOutput()),
-    findingRuntime: findingRuntime(),
-    readCurrentHead: () => (++headReads === 1 ? HEAD : NEXT),
-  })
+  const runtime = new ReviewerExecutionRuntime({ provider: provider(async () => providerOutput()), findingRuntime: findingRuntime(), readCurrentHead: () => (++headReads === 1 ? HEAD : NEXT) })
   const result = await runtime.execute(request())
   assert.equal(result.run.status, "STALE")
   assert.equal(result.run.evaluatedHead, NEXT)
@@ -176,8 +190,7 @@ test("invalid provider ranges and overlong claim text fail closed", async () => 
 test("provider claim count bound fails closed", async () => {
   const claim = providerOutput().claims[0]!
   const { runtime } = stableRuntime({ claims: [claim, { ...claim, claimKey: "claim-2" }] }, { maxClaims: 1 })
-  const result = await runtime.execute(request())
-  assert.equal(result.run.status, "INVALID_PROVIDER_OUTPUT")
+  assert.equal((await runtime.execute(request())).run.status, "INVALID_PROVIDER_OUTPUT")
 })
 
 test("fabricated context evidence identity fails closed", async () => {
@@ -189,19 +202,14 @@ test("fabricated context evidence identity fails closed", async () => {
 
 test("claim must cite context evidence supporting its affected path", async () => {
   const { runtime } = stableRuntime(providerOutput({ path: "src/other.ts" }))
-  const result = await runtime.execute(request())
-  assert.equal(result.run.status, "INVALID_PROVIDER_OUTPUT")
+  assert.equal((await runtime.execute(request())).run.status, "INVALID_PROVIDER_OUTPUT")
 })
 
 test("context semantic substitution without identity update is rejected before provider execution", async () => {
   const valid = contextBundle()
   const substituted = "substituted"
   const substitutedBytes = Buffer.byteLength(substituted, "utf8")
-  const mutated = {
-    ...valid,
-    budget: { ...valid.budget, usedUtf8Bytes: substitutedBytes },
-    items: [{ ...valid.items[0]!, text: substituted, contextUtf8Bytes: substitutedBytes }],
-  }
+  const mutated = { ...valid, budget: { ...valid.budget, usedUtf8Bytes: substitutedBytes }, items: [{ ...valid.items[0]!, text: substituted, contextUtf8Bytes: substitutedBytes }] }
   const { runtime, providerCalls } = stableRuntime()
   await assert.rejects(runtime.execute(request(mutated as ContextBundle)), /contextBundle identity mismatch/)
   assert.equal(providerCalls(), 0)
@@ -212,6 +220,15 @@ test("context provenance aggregation mismatch is rejected", async () => {
   const mutated = { ...valid, provenanceRefs: ["receipt:invented"] }
   const { runtime, providerCalls } = stableRuntime()
   await assert.rejects(runtime.execute(request(mutated)), /provenance aggregation mismatch/)
+  assert.equal(providerCalls(), 0)
+})
+
+test("K3-R5-excluded model-hypothesis context is rejected even with recomputed identity", async () => {
+  const valid = contextBundle()
+  const items: ContextBundle["items"] = [{ ...valid.items[0]!, evidenceClass: "model-hypothesis" }]
+  const mutated: ContextBundle = { ...valid, items, bundleIdentity: bundleIdentityFor(valid, items) }
+  const { runtime, providerCalls } = stableRuntime()
+  await assert.rejects(runtime.execute(request(mutated)), /unsupported source metadata/)
   assert.equal(providerCalls(), 0)
 })
 
@@ -226,12 +243,7 @@ test("provider exception becomes provider-failed evidence with zero findings", a
 
 test("provider timeout aborts the call and returns zero findings", async () => {
   let signal: AbortSignal | undefined
-  const runtime = new ReviewerExecutionRuntime({
-    provider: provider(async (_request, receivedSignal) => { signal = receivedSignal; return await new Promise(() => {}) }),
-    findingRuntime: findingRuntime(),
-    readCurrentHead: () => HEAD,
-    timeoutMs: 5,
-  })
+  const runtime = new ReviewerExecutionRuntime({ provider: provider(async (_request, receivedSignal) => { signal = receivedSignal; return await new Promise(() => {}) }), findingRuntime: findingRuntime(), readCurrentHead: () => HEAD, timeoutMs: 5 })
   const result = await runtime.execute(request())
   assert.equal(result.run.status, "TIMED_OUT")
   assert.equal(result.run.failureCode, "timeout")
@@ -253,10 +265,8 @@ test("claim and evidence ordering canonicalize deterministically", async () => {
   const id = bundle.items[0]!.itemId
   const a = { ...providerOutput().claims[0]!, claimKey: "b", evidenceItemIds: [id] }
   const b = { ...providerOutput().claims[0]!, claimKey: "a", evidenceItemIds: [id] }
-  const first = stableRuntime({ claims: [a, b] })
-  const second = stableRuntime({ claims: [b, a] })
-  const one = await first.runtime.execute(request(bundle))
-  const two = await second.runtime.execute(request(bundle))
+  const one = await stableRuntime({ claims: [a, b] }).runtime.execute(request(bundle))
+  const two = await stableRuntime({ claims: [b, a] }).runtime.execute(request(bundle))
   assert.deepEqual(one.claims.map((claim) => claim.claimKey), ["a", "b"])
   assert.equal(one.run.reviewRunId, two.run.reviewRunId)
   assert.equal(one.run.reviewRunIdentity, two.run.reviewRunIdentity)
@@ -269,11 +279,18 @@ test("review run identity recomputation detects semantic mutation", async () => 
   assert.deepEqual(runtime.validateReviewRunRecord(result.run), result.run)
 })
 
+test("serialized COMPLETED/STALE status must agree with exact evaluated head", async () => {
+  const { runtime } = stableRuntime()
+  const result = await runtime.execute(request())
+  const { reviewRunIdentity: _identity, ...base } = result.run
+  const substituted = { ...base, status: "STALE" as const }
+  const record = { ...substituted, reviewRunIdentity: sha256(substituted) }
+  assert.throws(() => runtime.validateReviewRunRecord(record), /status\/head freshness mismatch/)
+})
+
 test("repeated identical review input and output has deterministic structural identity", async () => {
-  const first = stableRuntime()
-  const second = stableRuntime()
-  const one = await first.runtime.execute(request())
-  const two = await second.runtime.execute(request())
+  const one = await stableRuntime().runtime.execute(request())
+  const two = await stableRuntime().runtime.execute(request())
   assert.equal(one.run.reviewRunId, two.run.reviewRunId)
   assert.equal(one.run.reviewRunIdentity, two.run.reviewRunIdentity)
   assert.deepEqual(one.run.findingIdentities, two.run.findingIdentities)
@@ -290,16 +307,10 @@ test("hostile repository/provider text remains inert data", async () => {
 
 test("provider request is immutable and omits adjudication/completion authority", async () => {
   let observed: Obj | undefined
-  const runtime = new ReviewerExecutionRuntime({
-    provider: provider(async (received) => { observed = received as unknown as Obj; return providerOutput() }),
-    findingRuntime: findingRuntime(),
-    readCurrentHead: () => HEAD,
-  })
+  const runtime = new ReviewerExecutionRuntime({ provider: provider(async (received) => { observed = received as unknown as Obj; return providerOutput() }), findingRuntime: findingRuntime(), readCurrentHead: () => HEAD })
   await runtime.execute(request())
   assert.ok(observed && Object.isFrozen(observed) && Object.isFrozen(observed.contextItems))
-  for (const forbidden of ["reviewRunId", "reviewerId", "reviewerVersion", "evaluatedHead", "findingIdentity", "state", "adjudicatorId", "adjudication", "PROVEN_READY"]) {
-    assert.equal(forbidden in observed!, false)
-  }
+  for (const forbidden of ["reviewRunId", "reviewerId", "reviewerVersion", "evaluatedHead", "findingIdentity", "state", "adjudicatorId", "adjudication", "PROVEN_READY"]) assert.equal(forbidden in observed!, false)
 })
 
 test("provider identity is captured by Kodac and cannot mutate run attribution mid-call", async () => {
@@ -308,11 +319,7 @@ test("provider identity is captured by Kodac and cannot mutate run attribution m
   const p: ReviewerProvider = {
     get providerId() { return liveProviderId },
     get providerVersion() { return liveProviderVersion },
-    async review() {
-      liveProviderId = "provider:mutated"
-      liveProviderVersion = "v999"
-      return providerOutput()
-    },
+    async review() { liveProviderId = "provider:mutated"; liveProviderVersion = "v999"; return providerOutput() },
   }
   const runtime = new ReviewerExecutionRuntime({ provider: p, findingRuntime: findingRuntime(), readCurrentHead: () => HEAD })
   const result = await runtime.execute(request())
@@ -326,8 +333,7 @@ test("KRI-R3 cannot create terminal lifecycle truth; KRI-R2 adjudication remains
   const result = await runtime.execute(request())
   const finding = result.findings[0]!
   assert.equal(r2.currentState(finding, HEAD), "NEW")
-  const adjudicated = r2.applyAdjudication(finding, { action: "CONFIRM", evidenceRefs: ["human:review"] }, HEAD)
-  assert.equal(adjudicated.state, "CONFIRMED")
+  assert.equal(r2.applyAdjudication(finding, { action: "CONFIRM", evidenceRefs: ["human:review"] }, HEAD).state, "CONFIRMED")
 })
 
 test("review run failure/status accounting rejects substitution", async () => {
@@ -348,6 +354,8 @@ test("review run JSON schema preserves strict authority/failure separation", () 
   const schema = JSON.parse(readFileSync(new URL("../../../schema/kri-review-run.schema.json", import.meta.url), "utf8")) as Obj
   assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema")
   assert.equal(schema.additionalProperties, false)
+  const properties = schema.properties as Obj
+  assert.equal((properties.policyIdentity as Obj).maxLength, 128)
   const serialized = JSON.stringify(schema)
   for (const status of ["COMPLETED", "STALE", "PROVIDER_FAILED", "TIMED_OUT", "INVALID_PROVIDER_OUTPUT"]) assert.match(serialized, new RegExp(status))
   for (const failure of ["provider-error", "timeout", "invalid-output"]) assert.match(serialized, new RegExp(failure))
