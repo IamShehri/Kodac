@@ -31,14 +31,19 @@
     },
     "providerId": { "type": "string", "minLength": 1, "maxLength": 128 },
     "providerVersion": { "type": "string", "minLength": 1, "maxLength": 128 },
-    "policyIdentity": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "policyIdentity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Aligned with the canonical KRI-R2 ReviewIdentity bound. The runtime applies the stricter UTF-8 byte bound."
+    },
     "canonicalBase": { "$ref": "#/$defs/gitSha1" },
     "reviewedHead": { "$ref": "#/$defs/gitSha1" },
     "evaluatedHead": {
       "allOf": [
         { "$ref": "#/$defs/gitSha1" },
         {
-          "description": "Runtime-owned post-provider current head. For COMPLETED it equals reviewedHead; for STALE it differs. JSON Schema 2020-12 cannot compare sibling string values directly."
+          "description": "Runtime-owned post-provider current head. The runtime requires COMPLETED iff this equals reviewedHead and STALE iff it differs. JSON Schema 2020-12 cannot compare sibling string values directly."
         }
       ]
     },
