@@ -162,6 +162,8 @@ synthetic relabeling: NO
 - the corpus authorization base is pinned to canonical KRI-R1 authorization merge `a6649626fd0c91f8326311ce532ca3ed16dba068`;
 - exactly the two authorized fixture gold labels;
 - deterministic case and corpus identity recomputation;
+- the published v1 corpus is frozen to exactly four expected case identities and the expected corpus identity;
+- semantic substitution/addition is rejected even when an attacker recomputes case/corpus hashes;
 - case-order-independent corpus identity;
 - duplicate claim and duplicate identity rejection;
 - unauthorized PR rejection;
