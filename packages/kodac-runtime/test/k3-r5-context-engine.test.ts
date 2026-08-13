@@ -454,6 +454,36 @@ test("K3-R5 rejects stale, incomplete, unsupported, malformed, or noncanonical s
   assert.throws(() => buildContextBundle({ request: request(), snapshot: uppercaseIdentity }), /lowercase SHA-256 identity/)
 })
 
+test("K3-R5 rejects noncanonical R2 ordering even when identities are recomputed", () => {
+  const canonical = snapshot()
+  const reversedWithOldIdentity = {
+    ...canonical,
+    inventory: [...canonical.inventory].reverse(),
+  }
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: reversedWithOldIdentity }),
+    /canonical K3-R2 inventory ordering/,
+  )
+
+  const recomputedInventory = snapshot({ inventory: [...DEFAULT_INVENTORY].reverse() })
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: recomputedInventory }),
+    /canonical K3-R2 inventory ordering/,
+  )
+
+  const laterChange: RepositorySnapshot["workingTree"][number] = {
+    path: "src/zeta.ts",
+    state: "modified",
+    indexStatus: " ",
+    worktreeStatus: "M",
+  }
+  const recomputedWorkingTree = snapshot({ workingTree: [laterChange, DEFAULT_CHANGE] })
+  assert.throws(
+    () => buildContextBundle({ request: request(), snapshot: recomputedWorkingTree }),
+    /canonical K3-R2 working-tree ordering/,
+  )
+})
+
 test("K3-R5 rejects stale K3-R2 content and snapshot identities after payload mutation", () => {
   const canonical = snapshot()
   const changedInventory: RepositorySnapshot["inventory"] = [
