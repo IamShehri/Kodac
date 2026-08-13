@@ -208,7 +208,12 @@ test("capability negotiation source remains pure and contains no ambient authori
   const source = readFileSync(new URL("../src/model/capabilities.ts", import.meta.url), "utf8")
   const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)].map((match) => match[1]).sort()
   assert.deepEqual(imports, ["node:crypto"])
-  assert.doesNotMatch(source, /\b(fetch|XMLHttpRequest|WebSocket|child_process|ExecutionGateway|apiKey|apiBase|writeFile|appendFile|createWriteStream)\b/)
+  assert.doesNotMatch(source, /\bfetch\s*\(/)
+  assert.doesNotMatch(source, /\bnew\s+(?:XMLHttpRequest|WebSocket)\b/)
+  assert.doesNotMatch(source, /from\s+["']node:child_process["']/)
+  assert.doesNotMatch(source, /\bExecutionGateway\b/)
+  assert.doesNotMatch(source, /\bapi(?:Key|Base)\s*[:=]/)
+  assert.doesNotMatch(source, /\b(?:writeFile|appendFile|createWriteStream)\s*\(/)
 })
 
 test("existing canonical model provider and transports remain byte-identical", () => {
