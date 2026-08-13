@@ -20,8 +20,25 @@ interface ActiveRegistration {
   readonly registrationSerial: number
 }
 
+const RECEIPT_KEYS = ["version", "extensionId", "descriptorIdentity", "registrationSerial"] as const
+const SHA256 = /^[0-9a-f]{64}$/
+const EXTENSION_ID = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/
+const CAPABILITY_ID = /^[a-z][a-z0-9_-]*(?:[./:][a-z][a-z0-9_-]*)+$/
+
 function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0
+}
+
+function asRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${label} must be an object`)
+  return value as Record<string, unknown>
+}
+
+function exactKeys(record: Record<string, unknown>, allowed: readonly string[], label: string): void {
+  const allowedSet = new Set(allowed)
+  for (const key of Object.keys(record)) {
+    if (!allowedSet.has(key)) throw new TypeError(`${label} contains unknown field: ${key}`)
+  }
 }
 
 function cloneDescriptor(descriptor: ExtensionDescriptor): ExtensionDescriptor {
@@ -43,6 +60,21 @@ function receipt(extensionId: string, registration: ActiveRegistration): Extensi
     extensionId,
     descriptorIdentity: registration.descriptor.descriptorIdentity,
     registrationSerial: registration.registrationSerial,
+  })
+}
+
+export function validateExtensionRegistrationReceipt(value: unknown): ExtensionRegistrationReceipt {
+  const record = asRecord(value, "extension registration receipt")
+  exactKeys(record, RECEIPT_KEYS, "extension registration receipt")
+  if (record.version !== KDO_H1_REGISTRATION_VERSION) throw new TypeError("unsupported extension registration receipt")
+  if (typeof record.extensionId !== "string" || !EXTENSION_ID.test(record.extensionId)) throw new TypeError("registration receipt extension id is invalid")
+  if (typeof record.descriptorIdentity !== "string" || !SHA256.test(record.descriptorIdentity)) throw new TypeError("registration receipt descriptor identity is invalid")
+  if (!Number.isSafeInteger(record.registrationSerial) || (record.registrationSerial as number) < 1) throw new TypeError("registration receipt serial is invalid")
+  return Object.freeze({
+    version: KDO_H1_REGISTRATION_VERSION,
+    extensionId: record.extensionId,
+    descriptorIdentity: record.descriptorIdentity,
+    registrationSerial: record.registrationSerial as number,
   })
 }
 
@@ -81,13 +113,8 @@ export class ExtensionDescriptorRegistry {
     return receipt(descriptor.extensionId, registration)
   }
 
-  dispose(value: ExtensionRegistrationReceipt): boolean {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError("registration receipt must be an object")
-    const receiptValue = value as ExtensionRegistrationReceipt
-    if (receiptValue.version !== KDO_H1_REGISTRATION_VERSION) throw new TypeError("unsupported extension registration receipt")
-    if (!Number.isSafeInteger(receiptValue.registrationSerial) || receiptValue.registrationSerial < 1) {
-      throw new TypeError("registration receipt serial is invalid")
-    }
+  dispose(value: unknown): boolean {
+    const receiptValue = validateExtensionRegistrationReceipt(value)
     const current = this.registrations.get(receiptValue.extensionId)
     if (current === undefined) return false
     if (
@@ -101,10 +128,12 @@ export class ExtensionDescriptorRegistry {
   }
 
   has(extensionId: string): boolean {
+    if (!EXTENSION_ID.test(extensionId)) throw new TypeError("invalid extension id")
     return this.registrations.has(extensionId)
   }
 
   get(extensionId: string): ExtensionDescriptor | undefined {
+    if (!EXTENSION_ID.test(extensionId)) throw new TypeError("invalid extension id")
     const registration = this.registrations.get(extensionId)
     return registration === undefined ? undefined : cloneDescriptor(registration.descriptor)
   }
@@ -118,7 +147,7 @@ export class ExtensionDescriptorRegistry {
   }
 
   findByCapability(capabilityId: string, role?: ExtensionCapabilityRole): readonly ExtensionDescriptor[] {
-    if (typeof capabilityId !== "string" || capabilityId.length === 0) throw new TypeError("capabilityId must not be empty")
+    if (!CAPABILITY_ID.test(capabilityId)) throw new TypeError("invalid capability id")
     const normalizedRole = validateRole(role)
     return Object.freeze(
       [...this.registrations.values()]
