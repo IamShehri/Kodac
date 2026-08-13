@@ -53,8 +53,9 @@ function perfectObservations(set: GoldBenchmarkSet): QualificationObservation[] 
 function clone<T>(value: T): T { return structuredClone(value) }
 
 function gitBlobSha1(raw: Buffer): string {
-  const header = Buffer.from(`blob ${raw.byteLength}\0`, "utf8")
-  return createHash("sha1").update(header).update(raw).digest("hex")
+  const canonical = Buffer.from(raw.toString("utf8").replace(/\r\n/g, "\n"), "utf8")
+  const header = Buffer.from(`blob ${canonical.byteLength}\0`, "utf8")
+  return createHash("sha1").update(header).update(canonical).digest("hex")
 }
 
 function currentGoldBenchmark(): GoldBenchmarkSet {
