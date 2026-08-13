@@ -1,4 +1,5 @@
 export * from "./agent/loop.ts"
+export * from "./context-connectors/contracts.ts"
 export * from "./context-engine/context-engine.ts"
 export * from "./context-engine/contracts.ts"
 export * from "./edit/filesystem.ts"
