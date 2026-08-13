@@ -220,6 +220,8 @@ A regression provider intentionally ignored abort and rejected after the timeout
 
 This closes the review concern that a cancellation-ignoring provider might create an unhandled late rejection through this runtime path.
 
+The timeout bounds how long KRI-R3 waits before returning a normalized `TIMED_OUT` result. It does **not** prove forcible termination of arbitrary injected provider work. An injected provider that ignores `AbortSignal` may continue its own computation or transport after R3 has stopped awaiting it. Concrete adapters therefore require a later qualification gate that proves cancellation/resource behavior for that adapter; R3 core does not claim process-, thread-, socket-, or transport-level kill authority.
+
 ## KRI-R2 handoff
 
 KRI-R3 does not create terminal lifecycle truth.
@@ -296,7 +298,7 @@ Regression guards reject the introduction of direct:
 
 No concrete provider SDK or transport is imported by KRI-R3.
 
-The injected provider implementation is outside this core's side-effect proof. A concrete provider adapter can perform transport only after a later separately authorized adapter gate establishes credentials, privacy, retry, transport, and provider-specific trust boundaries.
+The injected provider implementation is outside this core's side-effect proof. A concrete provider adapter can perform transport only after a later separately authorized adapter gate establishes credentials, privacy, retry, cancellation/resource lifetime, transport, and provider-specific trust boundaries.
 
 ## Review-driven corrections before canonical adoption
 
@@ -399,6 +401,16 @@ This evidence record changes the PR head. Therefore every CI/review result liste
 ### Injected provider transport
 
 R3 core proves that it contains no provider transport or provider SDK. It does not prove that an arbitrary injected provider implementation is side-effect free. Concrete provider adapters require a later authorization/qualification gate.
+
+### Cooperative cancellation, not forcible provider termination
+
+R3's timeout bounds the caller-visible wait and signals cancellation through `AbortSignal`. It cannot forcibly terminate arbitrary injected provider work that ignores that signal. A non-cooperative provider can outlive the returned timeout result inside its own execution environment. A later concrete-adapter qualification must prove cancellation/resource-lifetime behavior and contain transport-specific side effects.
+
+### Exact Git head is not continuous workspace-content freshness
+
+R3's before/after revision check observes the caller-supplied current Git head. It does not independently re-snapshot the working tree or re-observe K3 `contentIdentity` after the ContextBundle was created. Therefore a same-HEAD working-tree mutation after bundle capture is not detected by the head comparison alone.
+
+The review result remains structurally bound to the exact `contextBundleIdentity` that was actually supplied, so it does not silently rewrite which context was reviewed. Callers that require live working-tree freshness must regenerate/revalidate the K3 bundle immediately before review or use a later separately authorized content-identity freshness/re-observation boundary. KRI-R3 does not claim continuous workspace freshness.
 
 ### Structural identity is not authentication
 
