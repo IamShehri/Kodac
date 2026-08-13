@@ -264,10 +264,11 @@ function assertSnapshot(snapshot: RepositorySnapshot): void {
     if (!["file", "directory", "symlink"].includes(entry.type)) throw new Error(`snapshot.inventory[${index}] has an unsupported type`)
     let gitObjectId: string | null = null
     if (entry.type === "file") {
-      if (!isFullGitObjectId(entry.gitObjectId) || entry.gitObjectId !== entry.gitObjectId.toLowerCase()) {
+      const candidate = entry.gitObjectId
+      if (typeof candidate !== "string" || !isFullGitObjectId(candidate) || candidate !== candidate.toLowerCase()) {
         throw new Error(`snapshot.inventory[${index}] file requires a canonical lowercase Git object id`)
       }
-      gitObjectId = entry.gitObjectId
+      gitObjectId = candidate
     } else if (entry.gitObjectId !== undefined) {
       throw new Error(`snapshot.inventory[${index}] non-file must not carry a Git object id`)
     }
