@@ -473,3 +473,89 @@ export function verifyFeatureArtifactLineage(input: FeatureArtifactLineageSet): 
   }
   return Object.freeze({ specification, ...(plan === undefined ? {} : { plan }), ...(taskSet === undefined ? {} : { taskSet }), lineage })
 }
+
+function verifyPredecessorLink(input: {
+  label: string
+  currentFeatureKey: string
+  predecessorFeatureKey: string
+  currentRevision: number
+  predecessorRevision: number
+  claimedPredecessorIdentity: string | undefined
+  actualPredecessorIdentity: string
+}): void {
+  if (input.currentFeatureKey !== input.predecessorFeatureKey) throw new TypeError(`${input.label} feature lineage mismatch`)
+  if (input.currentRevision !== input.predecessorRevision + 1) throw new TypeError(`${input.label} revision must immediately follow predecessor revision`)
+  if (input.claimedPredecessorIdentity !== input.actualPredecessorIdentity) throw new TypeError(`${input.label} predecessor identity mismatch`)
+}
+
+export function verifySpecificationArtifactPredecessor(
+  currentValue: unknown,
+  predecessorValue: unknown,
+): Readonly<{ current: SpecificationArtifact; predecessor: SpecificationArtifact }> {
+  const current = validateSpecificationArtifact(currentValue)
+  const predecessor = validateSpecificationArtifact(predecessorValue)
+  verifyPredecessorLink({
+    label: "specificationArtifact",
+    currentFeatureKey: current.featureKey,
+    predecessorFeatureKey: predecessor.featureKey,
+    currentRevision: current.artifactRevision,
+    predecessorRevision: predecessor.artifactRevision,
+    claimedPredecessorIdentity: current.predecessorSpecificationArtifactIdentity,
+    actualPredecessorIdentity: predecessor.specificationArtifactIdentity,
+  })
+  return Object.freeze({ current, predecessor })
+}
+
+export function verifyPlanArtifactPredecessor(
+  currentValue: unknown,
+  predecessorValue: unknown,
+): Readonly<{ current: PlanArtifact; predecessor: PlanArtifact }> {
+  const current = validatePlanArtifact(currentValue)
+  const predecessor = validatePlanArtifact(predecessorValue)
+  verifyPredecessorLink({
+    label: "planArtifact",
+    currentFeatureKey: current.featureKey,
+    predecessorFeatureKey: predecessor.featureKey,
+    currentRevision: current.artifactRevision,
+    predecessorRevision: predecessor.artifactRevision,
+    claimedPredecessorIdentity: current.predecessorPlanArtifactIdentity,
+    actualPredecessorIdentity: predecessor.planArtifactIdentity,
+  })
+  return Object.freeze({ current, predecessor })
+}
+
+export function verifyTaskSetArtifactPredecessor(
+  currentValue: unknown,
+  predecessorValue: unknown,
+): Readonly<{ current: TaskSetArtifact; predecessor: TaskSetArtifact }> {
+  const current = validateTaskSetArtifact(currentValue)
+  const predecessor = validateTaskSetArtifact(predecessorValue)
+  verifyPredecessorLink({
+    label: "taskSetArtifact",
+    currentFeatureKey: current.featureKey,
+    predecessorFeatureKey: predecessor.featureKey,
+    currentRevision: current.artifactRevision,
+    predecessorRevision: predecessor.artifactRevision,
+    claimedPredecessorIdentity: current.predecessorTaskSetArtifactIdentity,
+    actualPredecessorIdentity: predecessor.taskSetArtifactIdentity,
+  })
+  return Object.freeze({ current, predecessor })
+}
+
+export function verifyFeatureArtifactLineagePredecessor(
+  currentValue: unknown,
+  predecessorValue: unknown,
+): Readonly<{ current: FeatureArtifactLineage; predecessor: FeatureArtifactLineage }> {
+  const current = validateFeatureArtifactLineage(currentValue)
+  const predecessor = validateFeatureArtifactLineage(predecessorValue)
+  verifyPredecessorLink({
+    label: "featureArtifactLineage",
+    currentFeatureKey: current.featureKey,
+    predecessorFeatureKey: predecessor.featureKey,
+    currentRevision: current.artifactRevision,
+    predecessorRevision: predecessor.artifactRevision,
+    claimedPredecessorIdentity: current.predecessorLineageIdentity,
+    actualPredecessorIdentity: predecessor.lineageIdentity,
+  })
+  return Object.freeze({ current, predecessor })
+}
