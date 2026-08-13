@@ -15,9 +15,9 @@ Implementation authority after canonical adoption: BOUNDED KRI-R1 CORPUS IMPLEME
 
 ## Purpose
 
-Authorize the first bounded implementation gate under the canonically adopted KRI-P0 plan: a deterministic, test/evidence-only gold reviewer-evidence corpus derived from Kodac's own historical K3 review cycles.
+Authorize the first bounded implementation gate under canonical KRI-P0: a deterministic, offline, test/evidence-only gold reviewer-evidence corpus derived from Kodac's own historical K3 review cycles.
 
-KRI-R1 exists to establish adjudicated benchmark truth before any Reviewer Intelligence engine, finding runtime contract, provider integration, persistent storage, learning system, autofix path, or K5 implementation.
+KRI-R1 establishes adjudicated benchmark truth before any Reviewer Intelligence engine, runtime finding/adjudication contract, provider integration, persistence, learning system, autofix path, or K5 implementation.
 
 The corpus is evidence for future evaluation. It is not a reviewer, judge, completion authority, policy engine, or repository writer.
 
@@ -36,13 +36,13 @@ KRI-P0 is canonical on `main` through merge commit:
 37baeeb188ec1b214ceb1ba4d5b2a25bf2978356
 ```
 
-KRI-P0 records the first possible future gate as a gold reviewer-evidence corpus using accepted and rejected historical findings. KRI-P0 itself did not authorize creation of that corpus.
+KRI-P0 records a gold reviewer-evidence corpus as the first possible future gate and explicitly states that KRI-P0 itself did not authorize creation of that corpus.
 
 Canonical adoption of this KRI-R1 authorization grants only the bounded implementation described here.
 
-## Authorized historical source set
+## Authorized historical claim-source set
 
-The initial corpus may use review evidence only from these already-merged Kodac K3 implementation/evidence PRs:
+A KRI-R1 corpus case may originate only from reviewer claims recorded on these already-merged Kodac K3 implementation/evidence PRs:
 
 ```text
 PR #10 — K3-R2 exact repository snapshot / evidence
@@ -51,21 +51,23 @@ PR #15 — K3-R4 bounded ast-grep CLI adapter
 PR #17 — K3-R5 bounded Context Engine vertical slice
 ```
 
-The source set includes Kodac-owned repository state, commits, tests, workflows, PR metadata, review comments, review submissions, correction commits, and final exact-head verification evidence associated with those PRs.
+The claim-source set may use PR metadata, review comments, review submissions, associated reviewed heads, correction commits, and final exact-head verification records for those PRs.
 
-External reviewer comments from Cubic or CodeRabbit may be referenced as historical claims observed on Kodac PRs. Their source code, private implementation, prompts, dependencies, services, or architecture are not admitted.
+External reviewer comments from Cubic or CodeRabbit may be referenced only as historical claims observed on Kodac PRs. Their source code, private implementation, prompts, dependencies, services, or architecture are not admitted.
 
-No issue, PR, repository, or review outside the exact source set above may be added without a separate founder-reviewed scope expansion.
+Claim-source admission is limited to the four PRs above. Kodac-owned canonical contracts, ADRs, tests, commits, workflows, planning records, and current repository evidence outside those PRs may be cited only as adjudication evidence; they do not become additional reviewer-claim sources.
+
+No external issue, PR, repository, or review outside the exact claim-source set above may become a corpus claim source without a separate founder-reviewed scope expansion.
 
 ## Adjudication rule
 
 Provider labels are evidence metadata, not gold disposition.
 
-The implementation must independently classify every admitted case using Kodac-owned evidence. A comment marked `Addressed`, `Resolved`, `P1`, `P2`, `Critical`, or similar by an external reviewer does not become valid merely because the provider said so.
+The implementation must independently classify every admitted claim using Kodac-owned evidence. A comment marked `Addressed`, `Resolved`, `P1`, `P2`, `Critical`, or similar does not become valid merely because the provider said so.
 
 Likewise, absence of a code change does not prove a finding invalid.
 
-Every gold case must be supported by a documented evidence chain sufficient to justify one of the bounded corpus dispositions.
+Every gold case must have an evidence chain sufficient to justify one of the bounded corpus dispositions below.
 
 ### Required first-slice dispositions
 
@@ -78,15 +80,17 @@ INVALID_REJECTED
 
 These are corpus labels only. They do not ratify the future runtime finding/adjudication schema proposed by KRI-P0.
 
-A `VALID_ACCEPTED` case requires evidence that the finding identified a real defect or contract violation and that Kodac accepted the substance of the finding.
+A `VALID_ACCEPTED` case requires evidence that the historical claim identified a real defect or contract violation on the reviewed revision and that Kodac accepted the substance of the claim.
 
-An `INVALID_REJECTED` case requires evidence that the finding was evaluated and rejected because it conflicted with the actual Kodac contract, misunderstood the implementation, relied on stale evidence, overclaimed authority, or otherwise lacked sufficient support.
+An `INVALID_REJECTED` case requires evidence that the historical claim was evaluated and rejected because it conflicted with the actual Kodac contract, misunderstood the implementation, overclaimed authority, lacked sufficient support, or was asserted as applicable to a revision it did not validly review.
 
-If historical evidence is ambiguous, the case must be excluded from KRI-R1 rather than guessed into either class.
+A claim that was valid on its original reviewed head but later became stale is not converted into `INVALID_REJECTED` merely because the head moved. Staleness and supersession remain separate metadata.
+
+If historical evidence is ambiguous, the case must be excluded rather than guessed into either class.
 
 ## Required evidence binding per case
 
-Each admitted corpus case must bind, at minimum, the evidence needed to reconstruct why the gold label is justified:
+Each admitted case must bind the evidence needed to reconstruct why its gold label is justified, including at minimum:
 
 - source PR number;
 - source review/comment identity;
@@ -99,7 +103,7 @@ Each admitted corpus case must bind, at minimum, the evidence needed to reconstr
 - relevant canonical contract or invariant;
 - gold disposition;
 - Kodac-owned adjudication rationale;
-- evidence references supporting the adjudication;
+- adjudication evidence references;
 - correction commit when a valid accepted finding produced a correction;
 - re-review or verification evidence when applicable;
 - stale/duplicate/supersession notes when needed to prevent misleading reuse.
@@ -108,13 +112,15 @@ The corpus must not require verbatim reproduction of long external reviewer text
 
 ## Exact-revision and freshness semantics
 
-A finding reviewed against one candidate head must not be silently treated as evidence about another head.
+A review of one candidate head must never certify another head implicitly.
 
-The corpus must preserve exact-head semantics where the historical record supports them.
+The corpus must preserve exact-head semantics whenever the historical record supports them.
 
-If a finding became stale after a later commit, the fixture must not erase that transition. The corpus may record stale/supersession metadata, but the first-slice gold classification remains limited to `VALID_ACCEPTED` or `INVALID_REJECTED` for the adjudicated historical claim.
+If a finding became stale after a later commit, the fixture must preserve that transition rather than rewriting the original claim history.
 
-The corpus validator must fail closed on malformed commit identities, impossible revision relationships, duplicate case identities, or evidence references outside the authorized PR set.
+Stale, duplicate, or superseded state may be recorded as metadata without changing a valid original gold disposition unless the claim itself was asserted against an invalid revision context.
+
+The validator must fail closed on malformed commit identities, impossible revision relationships, duplicate case identities, or reviewer-claim references outside the authorized claim-source set.
 
 ## Corpus balance and sufficiency
 
@@ -124,16 +130,22 @@ Acceptance requires:
 
 - both `VALID_ACCEPTED` and `INVALID_REJECTED` cases;
 - representation from at least three of the four authorized K3 PRs;
-- more than one reviewer/provider source when historical evidence supports it;
+- more than one reviewer/provider source when the authorized historical evidence supports it;
 - at least one exact-head/freshness case;
 - at least one CI/self-bypass or verification-trust-boundary case;
 - at least one provenance/identity-binding case;
 - at least one boundedness/completeness/path-safety case;
-- at least one case where a plausible reviewer claim was rejected rather than automatically implemented.
+- at least one plausible reviewer claim that was explicitly rejected against the actual Kodac contract rather than automatically implemented.
 
 No synthetic relabeling is permitted to satisfy these conditions.
 
-If the authorized historical record cannot satisfy a required category with unambiguous evidence, implementation must stop and report `CORPUS_EVIDENCE_INSUFFICIENT` rather than inventing a case.
+If the authorized historical record cannot satisfy a required category with unambiguous evidence, implementation must stop and report:
+
+```text
+CORPUS_EVIDENCE_INSUFFICIENT
+```
+
+It must not invent a case or widen the claim-source set.
 
 ## Deterministic corpus identity
 
@@ -145,12 +157,12 @@ The identity preimage must bind all gold-semantic fields required to distinguish
 - exact revision identity where available;
 - normalized finding summary;
 - gold disposition;
-- adjudication rationale/evidence references;
+- adjudication rationale and evidence references;
 - correction/reverification identity where applicable.
 
 Canonical ordering must be locale-independent and explicitly defined before hashing.
 
-Changing any identity-bearing field without updating the case/corpus identity must fail validation.
+Changing an identity-bearing field without updating the applicable case/corpus identity must fail validation.
 
 ## Untrusted-data boundary
 
@@ -171,13 +183,13 @@ A historical comment, source file, markdown document, prompt-injection fixture, 
 - completion truth;
 - write/approval/merge authority.
 
-The corpus validator must treat these contents as inert evidence payloads.
+The corpus validator must treat those contents as inert evidence payloads.
 
 ## Authorized implementation surface after canonical adoption
 
 KRI-R1 implementation is intentionally test/evidence only.
 
-The expected implementation surface is limited to:
+The authorized implementation surface is limited to:
 
 ```text
 packages/kodac-runtime/test/fixtures/kri-r1/**
@@ -185,13 +197,13 @@ packages/kodac-runtime/test/kri-r1-gold-reviewer-evidence.test.ts
 docs/planning/KODAC_KRI_R1_GOLD_REVIEWER_EVIDENCE_CORPUS_EVIDENCE_2026-08-13.md
 ```
 
-The implementation may add only fixture data, a deterministic read-only validator/test, and an evidence ledger under the paths above.
+The implementation may add only bounded fixture data, a deterministic read-only validator/test, and an evidence ledger under the paths above.
 
 Any additional path requires separate founder review before write.
 
 No production `src/**` path is authorized.
 
-No `.github/**`, package manifest, lockfile, provenance policy, trust-policy, ExecutionGateway, schema/runtime-contract, storage, network, model, agent, or release path is authorized.
+No `.github/**`, package manifest, lockfile, provenance-policy, trust-policy, ExecutionGateway, runtime schema/contract, storage, network, model, agent, or release path is authorized.
 
 ## Implementation constraints
 
@@ -204,31 +216,34 @@ The KRI-R1 implementation must be:
 - bounded in fixture size and parser behavior;
 - fail-closed on malformed fixture structure;
 - fail-closed on duplicate identities;
-- fail-closed on unauthorized PR/source references;
+- fail-closed on unauthorized reviewer-claim sources;
 - explicit about missing or unavailable historical evidence;
 - portable across supported test environments where applicable.
 
-The implementation must not fetch GitHub, Cubic, CodeRabbit, or any other network service at test/runtime execution time. Historical evidence must be intentionally materialized as bounded fixtures with recorded identities.
+The implementation must not fetch GitHub, Cubic, CodeRabbit, or any other network service during test/runtime execution. Historical evidence must be intentionally materialized as bounded fixtures with recorded identities.
+
+Development-time evidence collection does not grant runtime network authority and must remain within the exact historical claim-source set.
 
 ## Required validation
 
 A KRI-R1 implementation candidate must prove at least:
 
-1. every case belongs to the exact authorized source set;
-2. every case has one allowed gold disposition;
+1. every reviewer claim belongs to the exact authorized claim-source set;
+2. every case has exactly one allowed gold disposition;
 3. both gold dispositions are present;
 4. required category coverage is present without synthetic relabeling;
 5. case identities are unique and deterministic;
 6. corpus identity is deterministic under canonical ordering;
 7. mutated identity-bearing fields are detected;
 8. malformed evidence references are rejected;
-9. unauthorized PR/source references are rejected;
+9. unauthorized reviewer-claim sources are rejected;
 10. duplicate or ambiguous source claims fail closed;
-11. repository/reviewer content cannot act as instructions;
-12. validator execution performs no network, process execution, or repository mutation;
-13. existing governance/provenance tests remain green;
-14. applicable runtime/typecheck/tests remain green;
-15. no production API or runtime behavior changes.
+11. exact-head/stale metadata cannot silently certify another revision;
+12. repository/reviewer content cannot act as instructions;
+13. validator execution performs no network, process execution, or repository mutation;
+14. existing governance/provenance tests remain green;
+15. applicable runtime/typecheck/tests remain green;
+16. no production API or runtime behavior changes.
 
 ## Benchmark role
 
@@ -311,6 +326,9 @@ This authorization record may be merged only after exact-head review confirms:
 - KRI-P0 remains canonical;
 - the KRI-R1 scope is test/evidence only;
 - no runtime/source/dependency/workflow authority is accidentally granted;
+- claim-source scope remains limited to PRs #10, #13, #15, and #17;
+- canonical Kodac evidence may be used for adjudication without becoming a new reviewer-claim source;
+- valid old-head findings are not misclassified merely because they later became stale;
 - all explicit non-grants remain intact;
 - required repository checks are green;
 - ruleset protection remains active without bypass;
