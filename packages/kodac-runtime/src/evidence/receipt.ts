@@ -28,6 +28,64 @@ export interface ExecutionReceipt {
   result: ReceiptResult
 }
 
+function immutableStrings(values: string[]): string[] {
+  return Object.freeze([...values]) as unknown as string[]
+}
+
+function immutablePolicy(policy: PolicyResult): PolicyResult {
+  return Object.freeze({ decision: policy.decision, reason: policy.reason })
+}
+
+function immutableApproval(approval: ApprovalReceiptBinding): ApprovalReceiptBinding {
+  return Object.freeze({
+    version: approval.version,
+    requestIdentity: approval.requestIdentity,
+    requestInstanceId: approval.requestInstanceId,
+    decisionEvidenceIdentity: approval.decisionEvidenceIdentity,
+    outcome: approval.outcome,
+  })
+}
+
+function immutableAffected(affected: AffectedPaths): AffectedPaths {
+  return Object.freeze({
+    added: immutableStrings(affected.added),
+    modified: immutableStrings(affected.modified),
+    deleted: immutableStrings(affected.deleted),
+  })
+}
+
+function immutableResult(result: ReceiptResult): ReceiptResult {
+  if (result.status === "success" && "affected" in result) {
+    return Object.freeze({
+      status: "success",
+      affected: immutableAffected(result.affected),
+      postStateDigest: result.postStateDigest,
+    })
+  }
+  if (result.status === "success") {
+    return Object.freeze({
+      status: "success",
+      outputDigest: result.outputDigest,
+      outputBytes: result.outputBytes,
+      exitCode: result.exitCode,
+    })
+  }
+  if (result.status === "blocked") {
+    return Object.freeze({ status: "blocked", reason: result.reason })
+  }
+  return Object.freeze({ status: "failure", error: result.error })
+}
+
 export function createReceipt(input: Omit<ExecutionReceipt, "receiptId">): ExecutionReceipt {
-  return { receiptId: randomUUID(), ...input }
+  return Object.freeze({
+    receiptId: randomUUID(),
+    capability: input.capability,
+    inputDigest: input.inputDigest,
+    paths: immutableStrings(input.paths),
+    policy: immutablePolicy(input.policy),
+    ...(input.approval === undefined ? {} : { approval: immutableApproval(input.approval) }),
+    startedAt: input.startedAt,
+    completedAt: input.completedAt,
+    result: immutableResult(input.result),
+  })
 }
