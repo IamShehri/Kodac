@@ -13,6 +13,7 @@ export type KodacEventType =
   | "tool.completed"
   | "tool.failed"
   | "receipt.recorded"
+  | "model.request.snapshot"
   | "model.requested"
   | "model.responded"
   | "model.failed"
