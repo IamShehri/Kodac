@@ -123,7 +123,11 @@ test("approval service failure becomes unavailable and remains blocked", async (
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: { append: (record) => evidence.push(record) },
+      evidence: {
+        append(record) {
+          evidence.push(record)
+        },
+      },
       service: { decide: () => { throw new Error("answerer offline") } },
     }
     const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
@@ -142,7 +146,11 @@ test("malformed or mismatched decisions fail closed as unavailable", async () =>
     try {
       const fs = new NodeWorkspaceFileSystem(dir)
       const runtime: ApprovalRuntime = {
-        evidence: { append: (record) => evidence.push(record) },
+        evidence: {
+          append(record) {
+            evidence.push(record)
+          },
+        },
         service: {
           decide(request) {
             if (mode === "malformed") return { outcome: "allowed-once" }
@@ -201,7 +209,11 @@ test("allowed-once is consumed by one invocation and cannot authorize the next i
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: { append: (record) => evidence.push(record) },
+      evidence: {
+        append(record) {
+          evidence.push(record)
+        },
+      },
       service: {
         decide(request) {
           call += 1
@@ -234,7 +246,11 @@ test("concurrent identical asks receive distinct one-shot request instances", as
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: { append: (record) => evidence.push(record) },
+      evidence: {
+        append(record) {
+          evidence.push(record)
+        },
+      },
       service: {
         async decide(request) {
           instanceIds.push(request.requestInstanceId)
@@ -323,7 +339,11 @@ test("an already-aborted approval is recorded as cancelled and never consults th
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: { append: (record) => evidence.push(record) },
+      evidence: {
+        append(record) {
+          evidence.push(record)
+        },
+      },
       service: { decide: () => { calls += 1; return null } },
     }
     const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
@@ -339,6 +359,35 @@ test("an already-aborted approval is recorded as cancelled and never consults th
     )
     assert.equal(calls, 0)
     assert.equal(evidence[1]?.outcome, "cancelled")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("an already-aborted applyPatch approval is cancelled before mutation", async () => {
+  const dir = await root()
+  const controller = new AbortController()
+  controller.abort(new Error("cancelled by caller"))
+  const evidence: ApprovalEvidence[] = []
+  let calls = 0
+  try {
+    const fs = new NodeWorkspaceFileSystem(dir)
+    const runtime: ApprovalRuntime = {
+      evidence: {
+        append(record) {
+          evidence.push(record)
+        },
+      },
+      service: { decide: () => { calls += 1; return null } },
+    }
+    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
+    await assert.rejects(
+      () => gateway.applyPatch(patch, undefined, { signal: controller.signal }),
+      ExecutionBlockedError,
+    )
+    assert.equal(calls, 0)
+    assert.equal(evidence[1]?.outcome, "cancelled")
+    assert.equal(await fs.exists("proof.txt"), false)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -399,6 +448,41 @@ test("approval request identity binds execution environment and bounds", async (
     assert.equal(identities.length, 2)
     assert.notEqual(identities[0], identities[1])
   } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("ambient environment is snapshotted before approval and cannot drift before execution", async () => {
+  const dir = await root()
+  const key = "KODAC_H4_R1_AMBIENT_FIXTURE"
+  const original = process.env[key]
+  process.env[key] = "before"
+  try {
+    const fs = new NodeWorkspaceFileSystem(dir)
+    const runtime: ApprovalRuntime = {
+      evidence: { append: () => undefined },
+      service: {
+        decide(request) {
+          process.env[key] = "after"
+          return {
+            version: KDO_H4_R1_APPROVAL_VERSION,
+            requestIdentity: request.requestIdentity,
+            requestInstanceId: request.requestInstanceId,
+            outcome: "allowed-once",
+          }
+        },
+      },
+    }
+    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
+    const result = await gateway.runCommand(
+      "fixture.approval-read",
+      process.execPath,
+      ["-e", `process.stdout.write(process.env.${key} ?? '')`],
+    )
+    assert.equal(result.stdout, "before")
+  } finally {
+    if (original === undefined) delete process.env[key]
+    else process.env[key] = original
     await rm(dir, { recursive: true, force: true })
   }
 })
