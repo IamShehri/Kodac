@@ -96,8 +96,10 @@ function denseArrayValues(value: unknown, label: string, maxItems: number): unkn
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError(`${label} must be a plain array`)
   if (Object.getOwnPropertySymbols(value).length !== 0) throw new TypeError(`${label} must not contain symbol fields`)
   const descriptors = Object.getOwnPropertyDescriptors(value)
-  const lengthDescriptor = descriptors.length
-  if (lengthDescriptor === undefined || typeof lengthDescriptor.value !== "number") throw new TypeError(`${label} length is invalid`)
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length")
+  if (lengthDescriptor === undefined || !("value" in lengthDescriptor) || typeof lengthDescriptor.value !== "number") {
+    throw new TypeError(`${label} length is invalid`)
+  }
   const length = lengthDescriptor.value
   if (!Number.isInteger(length) || length < 0 || length > maxItems) throw new TypeError(`${label} exceeds ${maxItems} entries`)
   const allowedKeys = new Set(["length", ...Array.from({ length }, (_, index) => String(index))])
