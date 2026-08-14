@@ -290,7 +290,7 @@ export function projectModelVisibleHistory(value: readonly KodacEvent[] | unknow
   }
 
   let sessionId: string | undefined
-  let previousSequence = 0
+  let previousSequence: number | undefined
   let anchorRequestIdentity: string | undefined
   let projected: ModelVisibleMessage[] = []
 
@@ -298,14 +298,14 @@ export function projectModelVisibleHistory(value: readonly KodacEvent[] | unknow
     const event = readEventEnvelope(eventValues[index], index)
     if (sessionId === undefined) {
       sessionId = event.sessionId
-      if (event.sequence !== 1) throw new TypeError("model history projection requires the complete session event prefix starting at sequence 1")
-    } else if (event.sessionId !== sessionId) {
-      throw new TypeError("model history projection cannot mix session ids")
+      previousSequence = event.sequence
+    } else {
+      if (event.sessionId !== sessionId) throw new TypeError("model history projection cannot mix session ids")
+      if (previousSequence === undefined || event.sequence !== previousSequence + 1) {
+        throw new TypeError("model history projection requires contiguous strictly increasing event sequence")
+      }
+      previousSequence = event.sequence
     }
-    if (event.sequence !== previousSequence + 1) {
-      throw new TypeError("model history projection requires contiguous strictly increasing event sequence")
-    }
-    previousSequence = event.sequence
 
     if (event.type === "model.request.snapshot") {
       const snapshot = validateModelVisibleRequestSnapshot(event.payload)
