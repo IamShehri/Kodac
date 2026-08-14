@@ -204,7 +204,9 @@ test("H4-R2C authority boundaries preserve ASK blocker protected surfaces and ke
   assert.equal(gitBlobSha1(source("../scripts/run-tests.mjs")), "9a0bcde0e565168c78eb7fe4d3cf08236d24baa7")
 })
 
-test("retained open-file bytes survive configured-path replacement", () => {
+test("Linux retained open-file bytes survive configured-path replacement", {
+  skip: process.platform !== "linux",
+}, () => {
   const root = mkdtempSync(join(tmpdir(), "kodac-r2c-fd-"))
   try {
     const configured = join(root, "launcher")
