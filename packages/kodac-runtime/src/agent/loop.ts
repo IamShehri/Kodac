@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import type { ModelMessage, ModelToolCall } from "../model/provider.ts"
 import type { AgentTurnRunner, AgentTurnResult } from "../model/turn.ts"
 import {
+  KDO_H2_R2_LIMITS,
   createModelHistoryMessageRecord,
   projectModelVisibleHistory,
 } from "../session/model-visible-history.ts"
@@ -179,6 +180,21 @@ function cloneBootstrapMessage(message: ModelMessage): ModelMessage {
   }
 }
 
+function assertHistoryAppendable(messages: readonly ModelMessage[], message: ModelMessage): void {
+  if (messages.length + 1 > KDO_H2_R2_LIMITS.maxProjectedMessages) {
+    throw new RangeError(`projected model history exceeds ${KDO_H2_R2_LIMITS.maxProjectedMessages} messages`)
+  }
+  const totalContentBytes = messages.reduce(
+    (total, current) => total + Buffer.byteLength(current.content, "utf8"),
+    Buffer.byteLength(message.content, "utf8"),
+  )
+  if (totalContentBytes > KDO_H2_R2_LIMITS.maxTotalMessageContentBytes) {
+    throw new RangeError(
+      `projected model history content exceeds ${KDO_H2_R2_LIMITS.maxTotalMessageContentBytes} UTF-8 bytes`,
+    )
+  }
+}
+
 export class BoundedAgentLoop {
   private readonly runner: AgentTurnRunner
   private readonly session: RuntimeSession
@@ -233,6 +249,23 @@ export class BoundedAgentLoop {
       return projection.anchorRequestIdentity === undefined
         ? bootstrapMessages.map(cloneBootstrapMessage)
         : projection.messages
+    }
+
+    const appendHistoryMessage = async (
+      source: "assistant_response" | "tool_result" | "recovery_system",
+      message: ModelMessage,
+    ): Promise<void> => {
+      const projection = projectModelVisibleHistory(runEvents())
+      if (projection.anchorRequestIdentity === undefined) {
+        throw new Error("H2-R2 history append requires an H2-R1 request snapshot anchor")
+      }
+      const record = createModelHistoryMessageRecord({
+        afterRequestIdentity: projection.anchorRequestIdentity,
+        source,
+        message,
+      })
+      assertHistoryAppendable(projection.messages, record.message as ModelMessage)
+      await this.session.emit("model.history.message.appended", record)
     }
 
     await this.session.emit("agent.loop.started", {
@@ -302,11 +335,7 @@ export class BoundedAgentLoop {
         if (projection.anchorRequestIdentity === undefined) {
           bootstrapMessages.push(cloneBootstrapMessage(RECOVERY_MESSAGE))
         } else {
-          await this.session.emit("model.history.message.appended", createModelHistoryMessageRecord({
-            afterRequestIdentity: projection.anchorRequestIdentity,
-            source: "recovery_system",
-            message: cloneBootstrapMessage(RECOVERY_MESSAGE),
-          }))
+          await appendHistoryMessage("recovery_system", cloneBootstrapMessage(RECOVERY_MESSAGE))
         }
         continue
       }
@@ -316,30 +345,21 @@ export class BoundedAgentLoop {
       if (projection.anchorRequestIdentity === undefined) {
         throw new Error("Successful model turn did not establish an H2-R1 request snapshot anchor")
       }
-      const afterRequestIdentity = projection.anchorRequestIdentity
 
       if (result.assistant || result.toolCalls.length > 0) {
-        await this.session.emit("model.history.message.appended", createModelHistoryMessageRecord({
-          afterRequestIdentity,
-          source: "assistant_response",
-          message: {
-            role: "assistant",
-            content: result.assistant,
-            toolCalls: result.toolCalls.map((call) => ({ ...call })),
-          },
-        }))
+        await appendHistoryMessage("assistant_response", {
+          role: "assistant",
+          content: result.assistant,
+          toolCalls: result.toolCalls.map((call) => ({ ...call })),
+        })
       }
       for (const toolResult of result.toolResults) {
-        await this.session.emit("model.history.message.appended", createModelHistoryMessageRecord({
-          afterRequestIdentity,
-          source: "tool_result",
-          message: {
-            role: "tool",
-            name: toolResult.name,
-            toolCallId: toolResult.id,
-            content: toolMessageContent(toolResult.output, limits.maxToolResultChars),
-          },
-        }))
+        await appendHistoryMessage("tool_result", {
+          role: "tool",
+          name: toolResult.name,
+          toolCallId: toolResult.id,
+          content: toolMessageContent(toolResult.output, limits.maxToolResultChars),
+        })
       }
 
       const signature = sha256(`${result.finishReason}\n${result.assistant}\n${callFingerprints.join("\n")}`)
