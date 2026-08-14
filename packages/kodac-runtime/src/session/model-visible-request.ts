@@ -30,6 +30,7 @@ export const KDO_H2_R1_LIMITS: Readonly<{
   maxToolDescriptionBytes: number
   maxToolSchemaBytes: number
   maxSnapshotBytes: number
+  maxJsonDepth: number
 }> = Object.freeze({
   maxProviderBytes: 160,
   maxModelBytes: 256,
@@ -46,6 +47,7 @@ export const KDO_H2_R1_LIMITS: Readonly<{
   maxToolDescriptionBytes: 64 * 1024,
   maxToolSchemaBytes: 512 * 1024,
   maxSnapshotBytes: 8 * 1024 * 1024,
+  maxJsonDepth: 64,
 })
 
 export type ModelVisibleMessage = Omit<Readonly<ModelMessage>, "toolCalls"> & {
@@ -87,6 +89,8 @@ const SNAPSHOT_KEYS = [
   "version", "provider", "model", "messages", "tools", "messageCount", "toolCount",
   "totalMessageContentBytes", "modelVisibleBytes", "requestIdentity",
 ] as const
+const CANONICAL_ENVELOPE_DEPTH_ALLOWANCE = 8
+const TRUSTED_SNAPSHOTS = new WeakSet<object>()
 
 function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0
@@ -152,25 +156,28 @@ function boundedString(value: unknown, label: string, maxBytes: number, allowEmp
   return value
 }
 
-function cloneJson(value: unknown, label: string, seen = new Set<object>()): unknown {
+function cloneJson(value: unknown, label: string, seen = new Set<object>(), depth = 0): unknown {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new TypeError(`${label} contains a non-finite number`)
     return value
   }
   if (typeof value !== "object") throw new TypeError(`${label} must be JSON-compatible; ${typeof value} is not allowed`)
+  if (depth > KDO_H2_R1_LIMITS.maxJsonDepth) {
+    throw new RangeError(`${label} exceeds ${KDO_H2_R1_LIMITS.maxJsonDepth} JSON nesting levels`)
+  }
   if (seen.has(value)) throw new TypeError(`${label} contains a cycle`)
   seen.add(value)
   try {
     if (Array.isArray(value)) {
       const items = ownArrayDataValues(value, label)
-      return Object.freeze(items.map((item, index) => cloneJson(item, `${label}[${index}]`, seen)))
+      return Object.freeze(items.map((item, index) => cloneJson(item, `${label}[${index}]`, seen, depth + 1)))
     }
     const input = asRecord(value, label)
     const output: Record<string, unknown> = {}
     for (const [key, item] of ownDataEntries(input, label).sort(([a], [b]) => compareStrings(a, b))) {
       if (item === undefined) throw new TypeError(`${label} contains undefined field: ${key}`)
-      output[key] = cloneJson(item, `${label}.${key}`, seen)
+      output[key] = cloneJson(item, `${label}.${key}`, seen, depth + 1)
     }
     return Object.freeze(output)
   } finally {
@@ -178,7 +185,24 @@ function cloneJson(value: unknown, label: string, seen = new Set<object>()): unk
   }
 }
 
-function canonicalize(value: unknown): string {
+function cloneMutableJson(value: unknown, label: string, depth = 0): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number") return value
+  if (typeof value !== "object") throw new TypeError(`${label} must be JSON-compatible`)
+  if (depth > KDO_H2_R1_LIMITS.maxJsonDepth) {
+    throw new RangeError(`${label} exceeds ${KDO_H2_R1_LIMITS.maxJsonDepth} JSON nesting levels`)
+  }
+  if (Array.isArray(value)) {
+    return ownArrayDataValues(value, label).map((item, index) => cloneMutableJson(item, `${label}[${index}]`, depth + 1))
+  }
+  const input = asRecord(value, label)
+  const output: Record<string, unknown> = {}
+  for (const [key, item] of ownDataEntries(input, label)) {
+    output[key] = cloneMutableJson(item, `${label}.${key}`, depth + 1)
+  }
+  return output
+}
+
+function canonicalize(value: unknown, depth = 0): string {
   if (value === null) return "null"
   if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value)
   if (typeof value === "number") {
@@ -186,15 +210,17 @@ function canonicalize(value: unknown): string {
     return JSON.stringify(value)
   }
   if (typeof value !== "object") throw new TypeError(`canonical value must be JSON-compatible; ${typeof value} is not allowed`)
+  const maxDepth = KDO_H2_R1_LIMITS.maxJsonDepth + CANONICAL_ENVELOPE_DEPTH_ALLOWANCE
+  if (depth > maxDepth) throw new RangeError(`canonical value exceeds ${maxDepth} JSON nesting levels`)
   if (Array.isArray(value)) {
     const items = ownArrayDataValues(value, "canonical value")
-    return `[${items.map(canonicalize).join(",")}]`
+    return `[${items.map((item) => canonicalize(item, depth + 1)).join(",")}]`
   }
   const record = asRecord(value, "canonical value")
   const entries = ownDataEntries(record, "canonical value").sort(([a], [b]) => compareStrings(a, b))
   return `{${entries.map(([key, item]) => {
     if (item === undefined) throw new TypeError(`canonical value contains undefined field: ${key}`)
-    return `${JSON.stringify(key)}:${canonicalize(item)}`
+    return `${JSON.stringify(key)}:${canonicalize(item, depth + 1)}`
   }).join(",")}}`
 }
 
@@ -315,7 +341,7 @@ export function createModelVisibleRequestSnapshot(input: ModelVisibleRequestInpu
   const preimage = requestPreimage({ provider, model, messages, tools })
   const canonical = canonicalize(preimage)
   const modelVisibleBytes = Buffer.byteLength(canonical, "utf8")
-  const snapshot = Object.freeze({
+  const snapshot: ModelVisibleRequestSnapshot = Object.freeze({
     version: KDO_H2_R1_REQUEST_VERSION,
     provider,
     model,
@@ -331,6 +357,7 @@ export function createModelVisibleRequestSnapshot(input: ModelVisibleRequestInpu
   if (snapshotBytes > KDO_H2_R1_LIMITS.maxSnapshotBytes) {
     throw new RangeError(`modelVisibleRequest snapshot exceeds ${KDO_H2_R1_LIMITS.maxSnapshotBytes} canonical JSON bytes`)
   }
+  TRUSTED_SNAPSHOTS.add(snapshot)
   return snapshot
 }
 
@@ -361,7 +388,7 @@ export function validateModelVisibleRequestSnapshot(value: unknown): ModelVisibl
 }
 
 function cloneToolCall(call: Readonly<ModelToolCall>): ModelToolCall {
-  return { id: call.id, name: call.name, input: cloneJson(call.input, "materialized tool call input") }
+  return { id: call.id, name: call.name, input: cloneMutableJson(call.input, "materialized tool call input") }
 }
 
 function cloneMessage(message: ModelVisibleMessage): ModelMessage {
@@ -379,12 +406,14 @@ function cloneTool(tool: Readonly<ModelToolDescriptor>): ModelToolDescriptor {
     name: tool.name,
     capability: tool.capability,
     description: tool.description,
-    inputSchema: cloneJson(tool.inputSchema, "materialized tool schema") as Record<string, unknown>,
+    inputSchema: cloneMutableJson(tool.inputSchema, "materialized tool schema") as Record<string, unknown>,
   }
 }
 
 export function materializeModelVisibleRequest(value: unknown): MaterializedModelVisibleRequest {
-  const snapshot = validateModelVisibleRequestSnapshot(value)
+  const snapshot = value !== null && typeof value === "object" && TRUSTED_SNAPSHOTS.has(value)
+    ? value as ModelVisibleRequestSnapshot
+    : validateModelVisibleRequestSnapshot(value)
   return {
     model: snapshot.model,
     messages: snapshot.messages.map(cloneMessage),
