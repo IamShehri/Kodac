@@ -5,6 +5,7 @@ import { ProviderRegistry, type ModelProvider } from "../src/model/provider.ts"
 import { AgentTurnRunner } from "../src/model/turn.ts"
 import { InMemoryEventSink } from "../src/protocol/event.ts"
 import { RuntimeOrchestrator } from "../src/runtime/orchestrator.ts"
+import { KDO_H2_R1_LIMITS } from "../src/session/model-visible-request.ts"
 import { RuntimeSession } from "../src/session/session.ts"
 import { ToolRegistry, type RuntimeTool } from "../src/tools/registry.ts"
 
@@ -46,6 +47,35 @@ test("runs a deterministic model turn with reconstructable request evidence and 
   const coarseEvents = sink.events.slice(1)
   assert.equal(JSON.stringify(coarseEvents).includes("secret prompt"), false)
   assert.equal(JSON.stringify(coarseEvents).includes("hello"), false)
+})
+
+test("snapshot construction rejection records coarse failure evidence and never invokes provider", async () => {
+  let providerCalls = 0
+  const provider: ModelProvider = {
+    name: "bounded-fixture",
+    async generate() {
+      providerCalls += 1
+      return { assistant: "unexpected", toolCalls: [], finishReason: "stop" }
+    },
+  }
+  const { runner, sink } = harness(provider)
+  const secretMarker = "private-validation-prompt"
+  const content = `${secretMarker}${"x".repeat(KDO_H2_R1_LIMITS.maxMessageContentBytes + 1)}`
+
+  await assert.rejects(
+    runner.run({ provider: provider.name, model: "fixture/model", messages: [{ role: "user", content }] }),
+    /content/,
+  )
+
+  assert.equal(providerCalls, 0)
+  assert.deepEqual(sink.events.map((event) => event.type), ["model.failed"])
+  assert.deepEqual(sink.events[0]?.payload, {
+    provider: provider.name,
+    stage: "request_snapshot",
+    error: "model-visible request snapshot rejected",
+  })
+  assert.equal(JSON.stringify(sink.events).includes(secretMarker), false)
+  assert.equal(JSON.stringify(sink.events).includes("exceeds"), false)
 })
 
 test("routes provider tool calls through the canonical RuntimeOrchestrator", async () => {
