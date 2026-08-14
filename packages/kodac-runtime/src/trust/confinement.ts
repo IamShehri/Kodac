@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { types as utilTypes } from "node:util"
 
 export const KDO_H4_R2A_CONFINEMENT_VERSION = "kodac-h4-r2a-confinement-v1" as const
 export const KDO_H4_R2A_ENFORCEMENT_EVIDENCE_VERSION = "kodac-h4-r2a-enforcement-evidence-v1" as const
@@ -73,7 +74,9 @@ function requireIdentity(value: unknown, label: string): string {
 }
 
 function asPlainRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${label} must be a plain object`)
+  if (value === null || typeof value !== "object" || Array.isArray(value) || utilTypes.isProxy(value)) {
+    throw new TypeError(`${label} must be a plain object`)
+  }
   const prototype = Object.getPrototypeOf(value)
   if (prototype !== Object.prototype && prototype !== null) throw new TypeError(`${label} must be a plain object`)
   if (Object.getOwnPropertySymbols(value).length !== 0) throw new TypeError(`${label} must not contain symbol fields`)
@@ -93,7 +96,9 @@ function exactKeys(record: Record<string, unknown>, expected: readonly string[],
 }
 
 function denseArrayValues(value: unknown, label: string, maxItems: number): unknown[] {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError(`${label} must be a plain array`)
+  if (!Array.isArray(value) || utilTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    throw new TypeError(`${label} must be a plain array`)
+  }
   if (Object.getOwnPropertySymbols(value).length !== 0) throw new TypeError(`${label} must not contain symbol fields`)
   const descriptors = Object.getOwnPropertyDescriptors(value)
   const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length")
