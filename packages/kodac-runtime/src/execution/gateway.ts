@@ -26,16 +26,20 @@ import {
   createLinuxLandlockLaunchPlan,
 } from "../trust/confinement-linux-landlock.ts"
 import {
+  KDO_H4_R2C_BOOTSTRAP_ENVIRONMENT_POLICY,
   KDO_H4_R2C_CONTROL_FLAG,
   KDO_H4_R2C_LAUNCHER_FD,
+  KDO_H4_R2C_LAUNCHER_WRITE_PROTECTION,
   KDO_H4_R2C_MAX_LAUNCHER_BYTES,
   KDO_H4_R2C_PERMIT_FD,
   KDO_H4_R2C_READY_FD,
+  KDO_H4_R2C_READY_MAX_BYTES,
   KDO_H4_R2C_RUNTIME_VERSION,
   createConfinementExecutionAttempt,
   createConfinementReceiptBinding,
   createDurableConfinementEvidenceRecord,
   createLauncherArtifactObservation,
+  createLauncherArtifactWriteProtection,
   createLocalWorkspaceRootIdentity,
   linuxLandlockReadyReason,
   parseLinuxLandlockReadyRecord,
@@ -139,6 +143,12 @@ function canonicalEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
       .filter((entry): entry is [string, string] => typeof entry[1] === "string")
       .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0),
   )
+}
+
+const R2C_UNSAFE_BOOTSTRAP_ENVIRONMENT_KEYS = new Set(["GCONV_PATH", "GLIBC_TUNABLES"])
+
+function unsafeLinuxLoaderEnvironmentKey(env: NodeJS.ProcessEnv): string | undefined {
+  return Object.keys(env).find((key) => key.startsWith("LD_") || R2C_UNSAFE_BOOTSTRAP_ENVIRONMENT_KEYS.has(key))
 }
 
 function blockedReceipt(
@@ -320,10 +330,29 @@ function releaseGo(stream: Writable): Promise<void> {
   })
 }
 
+function sameLauncherStat(
+  before: Awaited<ReturnType<FileHandle["stat"]>>,
+  after: Awaited<ReturnType<FileHandle["stat"]>>,
+): boolean {
+  return before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.size === after.size &&
+    before.mode === after.mode &&
+    before.uid === after.uid &&
+    before.gid === after.gid &&
+    before.nlink === after.nlink &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs
+}
+
 async function observeLauncherArtifact(config: LinuxLandlockRuntimeConfig): Promise<{
   handle: FileHandle
   observation: LauncherArtifactObservation
 }> {
+  if (typeof process.geteuid !== "function" || process.geteuid() === 0) {
+    throw new Error("R2C launcher write protection requires a non-root K2 host process")
+  }
+
   const handle = await open(config.launcherPath, "r")
   try {
     const stat = await handle.stat()
@@ -331,6 +360,12 @@ async function observeLauncherArtifact(config: LinuxLandlockRuntimeConfig): Prom
     if (!Number.isSafeInteger(stat.size) || stat.size <= 0 || stat.size > KDO_H4_R2C_MAX_LAUNCHER_BYTES) {
       throw new Error(`configured Landlock launcher must contain 1..${KDO_H4_R2C_MAX_LAUNCHER_BYTES} bytes`)
     }
+    const writeProtection = createLauncherArtifactWriteProtection({
+      ownerUid: stat.uid,
+      ownerGid: stat.gid,
+      permissions: stat.mode & 0o777,
+      linkCount: stat.nlink,
+    })
     const bytes = Buffer.allocUnsafe(stat.size)
     let offset = 0
     while (offset < bytes.byteLength) {
@@ -338,11 +373,16 @@ async function observeLauncherArtifact(config: LinuxLandlockRuntimeConfig): Prom
       if (bytesRead <= 0) throw new Error("configured Landlock launcher changed while its verified descriptor was read")
       offset += bytesRead
     }
+    const stableStat = await handle.stat()
+    if (!sameLauncherStat(stat, stableStat)) {
+      throw new Error("configured Landlock launcher metadata changed during same-FD verification")
+    }
     const digest = sha256Bytes(bytes)
     const observation = createLauncherArtifactObservation({
       launcherPath: config.launcherPath,
       sha256: digest,
       sizeBytes: bytes.byteLength,
+      writeProtection,
     })
     if (observation.sha256 !== config.expectedLauncherSha256) {
       throw new Error("configured Landlock launcher SHA-256 does not match trusted runtime identity")
@@ -714,6 +754,8 @@ export class ExecutionGateway {
           launcherFd: KDO_H4_R2C_LAUNCHER_FD,
           readyFd: KDO_H4_R2C_READY_FD,
           permitFd: KDO_H4_R2C_PERMIT_FD,
+          bootstrapEnvironmentPolicy: KDO_H4_R2C_BOOTSTRAP_ENVIRONMENT_POLICY,
+          launcherWriteProtection: KDO_H4_R2C_LAUNCHER_WRITE_PROTECTION,
         },
       })),
     })
@@ -746,6 +788,18 @@ export class ExecutionGateway {
         observer,
         "Linux Landlock confinement is unavailable on this platform",
         "Confined execution unavailable: Linux Landlock requires Linux",
+      )
+    }
+
+    const unsafeBootstrapKey = unsafeLinuxLoaderEnvironmentKey(environment)
+    if (unsafeBootstrapKey !== undefined) {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        `unsafe pre-Landlock loader environment: ${unsafeBootstrapKey}`,
+        `Confined execution unavailable: ${unsafeBootstrapKey} is forbidden before Landlock activation`,
       )
     }
 
@@ -833,7 +887,7 @@ export class ExecutionGateway {
       const killOnOverflow = () => child?.kill()
       const stdoutPromise = readBoundedStream(stdoutStream, maxOutputBytes, "confined stdout", killOnOverflow)
       const stderrPromise = readBoundedStream(stderrStream, maxOutputBytes, "confined stderr", killOnOverflow)
-      const readyPromise = readBoundedStream(readyStream, 128, "Landlock readiness record", killOnOverflow)
+      const readyPromise = readBoundedStream(readyStream, KDO_H4_R2C_READY_MAX_BYTES, "Landlock readiness record", killOnOverflow)
       void stdoutPromise.catch(() => {})
       void stderrPromise.catch(() => {})
       void readyPromise.catch(() => {})

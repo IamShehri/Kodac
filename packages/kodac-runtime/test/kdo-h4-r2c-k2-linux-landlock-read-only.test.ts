@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
+  chmodSync,
   closeSync,
   existsSync,
   mkdtempSync,
@@ -9,6 +10,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
@@ -36,8 +38,10 @@ import {
   createLinuxLandlockBackendDescriptor,
 } from "../src/trust/confinement-linux-landlock.ts"
 import {
+  KDO_H4_R2C_BOOTSTRAP_ENVIRONMENT_POLICY,
   KDO_H4_R2C_CONTROL_FLAG,
   KDO_H4_R2C_LAUNCHER_FD,
+  KDO_H4_R2C_LAUNCHER_WRITE_PROTECTION,
   KDO_H4_R2C_MAX_LAUNCHER_BYTES,
   KDO_H4_R2C_PERMIT_FD,
   KDO_H4_R2C_READY_FD,
@@ -47,6 +51,7 @@ import {
   createDurableConfinementEvidenceCommit,
   createDurableConfinementEvidenceRecord,
   createLauncherArtifactObservation,
+  createLauncherArtifactWriteProtection,
   createLinuxLandlockRuntimeConfig,
   createLocalWorkspaceRootIdentity,
   parseLinuxLandlockReadyRecord,
@@ -80,7 +85,7 @@ function compileC(root: string, name: string, text: string): string {
     encoding: "utf8",
     shell: false,
   })
-  assert.equal(compile.status, 0, `${name} compile failed: ${compile.stderr}`)
+  assert.equal(compile.status, 0, `${name} compile failed: ${String(compile.stderr)}`)
   return binary
 }
 
@@ -91,7 +96,7 @@ function compileLauncher(root: string): string {
     encoding: "utf8",
     shell: false,
   })
-  assert.equal(compile.status, 0, `native compile failed: ${compile.stderr}`)
+  assert.equal(compile.status, 0, `native compile failed: ${String(compile.stderr)}`)
   return binary
 }
 
@@ -101,6 +106,46 @@ function compileSigpipeProbe(root: string): string {
 
 function compileProtocolFixture(root: string): string {
   return compileC(root, "protocol-fixture", `#include <errno.h>\n#include <fcntl.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <unistd.h>\n\nstatic int write_all(int fd, const char *p, size_t n) {\n  size_t off = 0;\n  while (off < n) {\n    ssize_t w = write(fd, p + off, n - off);\n    if (w < 0) { if (errno == EINTR) continue; return 125; }\n    if (w == 0) return 125;\n    off += (size_t)w;\n  }\n  return 0;\n}\n\nint main(void) {\n  const char *mode = getenv("KODAC_FIXTURE_READY");\n  const char *ready = "kodac-landlock-ready-v1 abi=7 claim-set=kodac-linux-landlock-fs-v1 enforcement=full\\n";\n  char oversized[130];\n  size_t ready_len = strlen(ready);\n  if (mode != NULL && strcmp(mode, "partial") == 0) {\n    ready = "kodac-landlock-ready-v1 abi=3 claim-set=kodac-linux-landlock-fs-v1 enforcement=partial\\n";\n    ready_len = strlen(ready);\n  } else if (mode != NULL && strcmp(mode, "malformed") == 0) {\n    ready = "malformed\\n";\n    ready_len = strlen(ready);\n  } else if (mode != NULL && strcmp(mode, "oversized") == 0) {\n    memset(oversized, 'x', sizeof oversized);\n    oversized[sizeof oversized - 1] = '\\n';\n    ready = oversized;\n    ready_len = sizeof oversized;\n  }\n  if (write_all(4, ready, ready_len) != 0) return 125;\n  if (close(4) != 0) return 125;\n  char permit[4];\n  size_t used = 0;\n  for (;;) {\n    if (used == sizeof permit) return 125;\n    ssize_t r = read(5, permit + used, sizeof permit - used);\n    if (r < 0) { if (errno == EINTR) continue; return 125; }\n    if (r == 0) break;\n    used += (size_t)r;\n  }\n  if (used != 3 || memcmp(permit, "GO\\n", 3) != 0) return 125;\n  const char *witness = getenv("KODAC_GO_WITNESS");\n  if (witness != NULL) {\n    int fd = open(witness, O_WRONLY | O_CREAT | O_TRUNC, 0600);\n    if (fd < 0) return 125;\n    if (write_all(fd, "GO", 2) != 0) { close(fd); return 125; }\n    if (close(fd) != 0) return 125;\n  }\n  return 0;\n}\n`)
+}
+
+function compilePreloadFixture(root: string): string {
+  const sourcePath = join(root, "preload-fixture.c")
+  const library = join(root, "preload-fixture.so")
+  writeFileSync(sourcePath, `#include <fcntl.h>\n#include <stdlib.h>\n#include <unistd.h>\n__attribute__((constructor)) static void before_main(void) {\n  const char *path = getenv("KODAC_PRELOAD_WITNESS");\n  if (path == NULL) return;\n  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);\n  if (fd < 0) return;\n  (void)write(fd, "PREMAIN", 7);\n  (void)close(fd);\n}\n`, "utf8")
+  const compile = spawnSync("cc", ["-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-Werror", sourcePath, "-o", library], {
+    encoding: "utf8",
+    shell: false,
+  })
+  assert.equal(compile.status, 0, `preload fixture compile failed: ${String(compile.stderr)}`)
+  return library
+}
+
+function requireIntegrationHost(t: { skip(message?: string): void }): boolean {
+  const failOrSkip = (message: string): false => {
+    if (process.env.GITHUB_ACTIONS === "true") assert.fail(message)
+    t.skip(message)
+    return false
+  }
+  if (typeof process.geteuid !== "function" || process.geteuid() === 0) {
+    return failOrSkip("H4-R2C security proof requires a non-root Linux K2 process")
+  }
+  const compiler = spawnSync("cc", ["--version"], { encoding: "utf8", shell: false })
+  if (compiler.status !== 0) return failOrSkip(`C compiler unavailable: ${String(compiler.error ?? compiler.stderr)}`)
+  const sudo = spawnSync("sudo", ["-n", "true"], { encoding: "utf8", shell: false })
+  if (sudo.status !== 0) return failOrSkip(`passwordless sudo unavailable for trusted launcher fixture: ${String(sudo.error ?? sudo.stderr)}`)
+  return true
+}
+
+function protectLauncherForGateway(path: string): void {
+  chmodSync(path, 0o755)
+  const chown = spawnSync("sudo", ["-n", "chown", "0:0", path], { encoding: "utf8", shell: false })
+  assert.equal(chown.status, 0, `could not make launcher fixture root-owned: ${String(chown.error ?? chown.stderr)}`)
+  const stat = statSync(path)
+  assert.equal(stat.uid, 0)
+  assert.equal(stat.gid, 0)
+  assert.equal(stat.nlink, 1)
+  assert.equal(stat.mode & 0o022, 0)
+  assert.equal(stat.mode & 0o005, 0o005)
 }
 
 function durableRuntime(launcherPath: string, onCommit?: (record: DurableConfinementEvidenceRecord) => void) {
@@ -124,6 +169,8 @@ test("H4-R2C structural contracts are strict immutable and receipt binding rejec
   assert.equal(KDO_H4_R2C_PERMIT_FD, 5)
   assert.equal(KDO_H4_R2C_READY_MAX_BYTES, 128)
   assert.equal(KDO_H4_R2C_MAX_LAUNCHER_BYTES, 4 * 1024 * 1024)
+  assert.equal(KDO_H4_R2C_BOOTSTRAP_ENVIRONMENT_POLICY, "reject-linux-loader-control-v1")
+  assert.equal(KDO_H4_R2C_LAUNCHER_WRITE_PROTECTION, "root-owned-unprivileged-read-exec-v1")
 
   const fullReady = parseLinuxLandlockReadyRecord("kodac-landlock-ready-v1 abi=9 claim-set=kodac-linux-landlock-fs-v1 enforcement=full\n")
   assert.deepEqual(fullReady, { abi: 9, claimSet: "kodac-linux-landlock-fs-v1", enforcement: "full" })
@@ -140,11 +187,17 @@ test("H4-R2C structural contracts are strict immutable and receipt binding rejec
   assert.notEqual(firstAttempt.executionAttemptIdentity, secondAttempt.executionAttemptIdentity)
   assert.equal(Object.isFrozen(firstAttempt), true)
 
+  const writeProtection = createLauncherArtifactWriteProtection({ ownerUid: 0, ownerGid: 0, permissions: 0o755, linkCount: 1 })
+  assert.equal(Object.isFrozen(writeProtection), true)
+  assert.throws(() => createLauncherArtifactWriteProtection({ ownerUid: 1000, ownerGid: 0, permissions: 0o755, linkCount: 1 }))
+  assert.throws(() => createLauncherArtifactWriteProtection({ ownerUid: 0, ownerGid: 0, permissions: 0o775, linkCount: 1 }))
+  assert.throws(() => createLauncherArtifactWriteProtection({ ownerUid: 0, ownerGid: 0, permissions: 0o755, linkCount: 2 }))
+
   const workspaceIdentity = createLocalWorkspaceRootIdentity("/workspace")
   const request = createConfinementRequest({ mode: "read-only", workspaceIdentity, executionIntentIdentity: ID_A, scope: { readPaths: ["docs/readme.md"], writePaths: [] } })
   const backend = createLinuxLandlockBackendDescriptor()
   const enforcementEvidence = createConfinementEnforcementEvidence({ request, executionAttemptIdentity: firstAttempt.executionAttemptIdentity, backend, enforcement: "full", reason: "fixture full" })
-  const launcherArtifact = createLauncherArtifactObservation({ launcherPath: "/opt/kodac/landlock-run", sha256: ID_B, sizeBytes: 1234 })
+  const launcherArtifact = createLauncherArtifactObservation({ launcherPath: "/opt/kodac/landlock-run", sha256: ID_B, sizeBytes: 1234, writeProtection })
   const record = createDurableConfinementEvidenceRecord({ executionAttempt: firstAttempt, request, enforcementEvidence, launcherArtifact })
   const commit = createDurableConfinementEvidenceCommit(record)
   const binding = createConfinementReceiptBinding({ record, commit })
@@ -186,6 +239,8 @@ test("H4-R2C authority boundaries preserve ASK blocker protected surfaces and ke
   assert.match(gatewaySource, /artifact\.handle\.fd/)
   assert.match(gatewaySource, /KDO_H4_R2C_CONTROL_FLAG/)
   assert.match(gatewaySource, /awaitEvidenceCommit/)
+  assert.match(gatewaySource, /unsafeLinuxLoaderEnvironmentKey/)
+  assert.match(gatewaySource, /createLauncherArtifactWriteProtection/)
   assert.doesNotMatch(gatewaySource, /workspace-write/)
   assert.match(source("../src/evidence/receipt.ts"), /bindingIdentity/)
 
@@ -216,15 +271,56 @@ test("Linux retained open-file bytes survive configured-path replacement", { ski
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test("H4-R2C Linux integration proves controlled read-only execution and fail-closed protocol evidence", { skip: process.platform !== "linux" }, async () => {
+test("Linux same-inode mutation is observable and untrusted launcher ownership is rejected before spawn", { skip: process.platform !== "linux" }, async () => {
+  if (typeof process.geteuid !== "function" || process.geteuid() === 0) return
+  const root = mkdtempSync(join(tmpdir(), "kodac-r2c-inode-"))
+  try {
+    const configured = join(root, "launcher")
+    writeFileSync(configured, "verified-bytes", "utf8")
+    chmodSync(configured, 0o755)
+    const fd = openSync(configured, "r")
+    try {
+      writeFileSync(configured, "mutated-in-place", "utf8")
+      assert.equal(readFileSync(fd, "utf8"), "mutated-in-place")
+    } finally { closeSync(fd) }
+
+    let commits = 0
+    const runtime = createLinuxLandlockRuntimeConfig({
+      launcherPath: configured,
+      expectedLauncherSha256: sha256File(configured),
+      evidence: { commit() { commits += 1; throw new Error("must not commit") } },
+      requiredEnforcement: "full",
+    })
+    const gateway = new ExecutionGateway(new NodeWorkspaceFileSystem(root), fixedPolicy("allow", "fixture allow"), undefined, runtime)
+    await assert.rejects(
+      () => gateway.runConfinedReadOnlyCommand("fixture.landlock-untrusted-inode", "/bin/true", [], undefined, { env: {} }),
+      (error: unknown) => {
+        assert.ok(error instanceof ExecutionFailedError)
+        assert.match(error.message, /owned by root:root/)
+        return true
+      },
+    )
+    assert.equal(commits, 0)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test("H4-R2C Linux integration proves controlled read-only execution and fail-closed protocol evidence", { skip: process.platform !== "linux" }, async (t) => {
+  if (!requireIntegrationHost(t)) return
   const root = mkdtempSync(join(tmpdir(), "kodac-h4-r2c-"))
   try {
     const binary = compileLauncher(root)
     const probe = spawnSync(binary, ["--probe"], { encoding: "utf8", shell: false })
-    assert.equal(probe.status, 0, `Landlock probe unavailable: ${probe.stderr}`)
+    if (probe.status !== 0) {
+      const message = `Landlock unavailable on this host: ${String(probe.error ?? probe.stderr)}`
+      if (process.env.GITHUB_ACTIONS === "true") assert.fail(message)
+      t.skip(message)
+      return
+    }
     const probeMatch = /^kodac-landlock-v1 abi=([1-9][0-9]*) claim-set=kodac-linux-landlock-fs-v1 enforcement=(full|partial)\n$/.exec(probe.stdout)
     assert.ok(probeMatch, `unexpected probe output: ${probe.stdout}`)
     assert.equal(probeMatch[2], "full", `R2C requires full Landlock enforcement; got: ${probe.stdout}`)
+
+    protectLauncherForGateway(binary)
 
     const missingFdLauncher = openSync(binary, "r")
     try {
@@ -243,12 +339,48 @@ test("H4-R2C Linux integration proves controlled read-only execution and fail-cl
       assert.equal(aliased.stdout.includes("TARGET_EXECUTED"), false)
     } finally { closeSync(launcherFd); closeSync(aliasedControlFd) }
 
+    const readyControlPath = join(root, "ready-control")
+    const permitControlPath = join(root, "permit-control")
+    const directionalLauncherFd = openSync(binary, "r")
+    const readyControlFd = openSync(readyControlPath, "w+")
+    const permitControlFd = openSync(permitControlPath, "w+")
+    try {
+      const wrongDuplexTransport = spawnSync(binary, ["--controlled", "--ro", "/", "--", process.execPath, "-e", "process.stdout.write('TARGET_EXECUTED')"], {
+        encoding: "utf8",
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe", directionalLauncherFd, readyControlFd, permitControlFd],
+      })
+      assert.equal(wrongDuplexTransport.status, KDO_H4_R2B_LINUX_LANDLOCK_LAUNCHER_FAILURE_EXIT)
+      assert.match(wrongDuplexTransport.stderr, /cannot disable the forbidden (read|write) direction/)
+      assert.equal(wrongDuplexTransport.stdout.includes("TARGET_EXECUTED"), false)
+    } finally {
+      closeSync(directionalLauncherFd)
+      closeSync(readyControlFd)
+      closeSync(permitControlFd)
+    }
+
     const fs = new NodeWorkspaceFileSystem(root)
     const committed: DurableConfinementEvidenceRecord[] = []
     const runtime = durableRuntime(binary, (record) => committed.push(record))
     const gateway = new ExecutionGateway(fs, fixedPolicy("allow", "fixture allow"), undefined, runtime)
 
-    const read = await gateway.runConfinedReadOnlyCommand("fixture.landlock-read", process.execPath, ["-e", "require('node:fs').readFileSync('/etc/hosts'); process.stdout.write('READ_OK')"], undefined, { timeoutMs: 10_000 })
+    const preloadLibrary = compilePreloadFixture(root)
+    const preloadWitness = join(root, "pre-landlock-preload-witness")
+    await assert.rejects(
+      () => gateway.runConfinedReadOnlyCommand("fixture.landlock-preload-blocked", process.execPath, ["-e", "process.exit(0)"], undefined, {
+        env: { LD_PRELOAD: preloadLibrary, KODAC_PRELOAD_WITNESS: preloadWitness },
+        timeoutMs: 10_000,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof ExecutionBlockedError)
+        assert.match(error.message, /LD_PRELOAD is forbidden before Landlock activation/)
+        return true
+      },
+    )
+    assert.equal(existsSync(preloadWitness), false)
+    assert.equal(committed.length, 0)
+
+    const read = await gateway.runConfinedReadOnlyCommand("fixture.landlock-read", process.execPath, ["-e", "require('node:fs').readFileSync('/etc/hosts'); process.stdout.write('READ_OK')"], undefined, { env: {}, timeoutMs: 10_000 })
     assert.equal(read.stdout, "READ_OK")
     assert.equal(read.receipt.policy.decision, "allow")
     assert.equal(read.receipt.confinement?.enforcement, "full")
@@ -258,11 +390,16 @@ test("H4-R2C Linux integration proves controlled read-only execution and fail-cl
     assert.ok(proofRecord)
     const proofCommit = createDurableConfinementEvidenceCommit(proofRecord)
     assert.equal(proofRecord.launcherArtifact.sha256, sha256File(binary))
+    assert.equal(proofRecord.launcherArtifact.writeProtection.policy, KDO_H4_R2C_LAUNCHER_WRITE_PROTECTION)
+    assert.equal(proofRecord.launcherArtifact.writeProtection.ownerUid, 0)
+    assert.equal(proofRecord.launcherArtifact.writeProtection.ownerGid, 0)
     assert.ok(read.receipt.confinement)
     console.log(`H4_R2C_LINUX_PROOF ${JSON.stringify({
       abi: Number(probeMatch[1]),
       claimSet: "kodac-linux-landlock-fs-v1",
       enforcement: probeMatch[2],
+      bootstrapEnvironmentPolicy: KDO_H4_R2C_BOOTSTRAP_ENVIRONMENT_POLICY,
+      launcherWriteProtection: proofRecord.launcherArtifact.writeProtection,
       launcherExpectedSha256: sha256File(binary),
       launcherObservedSha256: proofRecord.launcherArtifact.sha256,
       workspaceIdentity: proofRecord.request.workspaceIdentity,
@@ -277,30 +414,30 @@ test("H4-R2C Linux integration proves controlled read-only execution and fail-cl
     })}`)
 
     const blockedWrite = join(root, "target-must-not-write.txt")
-    await assert.rejects(() => gateway.runConfinedReadOnlyCommand("fixture.landlock-no-write", process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(blockedWrite)}, 'BAD')`], undefined, { timeoutMs: 10_000 }), (error: unknown) => {
+    await assert.rejects(() => gateway.runConfinedReadOnlyCommand("fixture.landlock-no-write", process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(blockedWrite)}, 'BAD')`], undefined, { env: {}, timeoutMs: 10_000 }), (error: unknown) => {
       assert.ok(error instanceof ExecutionFailedError)
       assert.equal(error.receipt.confinement?.enforcement, "full")
       return true
     })
     assert.equal(existsSync(blockedWrite), false)
 
-    const fdClean = await gateway.runConfinedReadOnlyCommand("fixture.landlock-fd-clean", "/bin/sh", ["-c", "for fd in 3 4 5; do if [ -e /proc/self/fd/$fd ]; then exit 91; fi; done; printf FD_CLEAN"], undefined, { timeoutMs: 10_000 })
+    const fdClean = await gateway.runConfinedReadOnlyCommand("fixture.landlock-fd-clean", "/bin/sh", ["-c", "for fd in 3 4 5; do if [ -e /proc/self/fd/$fd ]; then exit 91; fi; done; printf FD_CLEAN"], undefined, { env: {}, timeoutMs: 10_000 })
     assert.equal(fdClean.stdout, "FD_CLEAN")
 
     const sigpipeProbe = compileSigpipeProbe(root)
-    const sigpipe = await gateway.runConfinedReadOnlyCommand("fixture.landlock-sigpipe-default", sigpipeProbe, [], undefined, { timeoutMs: 10_000 })
+    const sigpipe = await gateway.runConfinedReadOnlyCommand("fixture.landlock-sigpipe-default", sigpipeProbe, [], undefined, { env: {}, timeoutMs: 10_000 })
     assert.equal(sigpipe.stdout, "SIGPIPE_DEFAULT")
 
     const commitMarker = join(root, "durable-before-go.txt")
     const orderingRuntime = durableRuntime(binary, () => writeFileSync(commitMarker, "COMMITTED", "utf8"))
     const orderingGateway = new ExecutionGateway(fs, fixedPolicy("allow", "fixture allow"), undefined, orderingRuntime)
-    const ordering = await orderingGateway.runConfinedReadOnlyCommand("fixture.landlock-ordering", process.execPath, ["-e", `process.stdout.write(require('node:fs').readFileSync(${JSON.stringify(commitMarker)}, 'utf8'))`], undefined, { timeoutMs: 10_000 })
+    const ordering = await orderingGateway.runConfinedReadOnlyCommand("fixture.landlock-ordering", process.execPath, ["-e", `process.stdout.write(require('node:fs').readFileSync(${JSON.stringify(commitMarker)}, 'utf8'))`], undefined, { env: {}, timeoutMs: 10_000 })
     assert.equal(ordering.stdout, "COMMITTED")
 
     let approvalCalls = 0
     const approval = { service: { decide() { approvalCalls += 1; return {} } }, evidence: { commit() { approvalCalls += 1; return {} } } }
     const askGateway = new ExecutionGateway(fs, fixedPolicy("ask", "fixture ask"), approval as never, runtime)
-    await assert.rejects(() => askGateway.runConfinedReadOnlyCommand("fixture.landlock-ask", process.execPath, ["-e", "process.exit(0)"]), (error: unknown) => {
+    await assert.rejects(() => askGateway.runConfinedReadOnlyCommand("fixture.landlock-ask", process.execPath, ["-e", "process.exit(0)"], undefined, { env: {} }), (error: unknown) => {
       assert.ok(error instanceof ExecutionBlockedError)
       assert.match(error.message, /external executable identity requires H4-R2 confinement/)
       return true
@@ -309,21 +446,21 @@ test("H4-R2C Linux integration proves controlled read-only execution and fail-cl
 
     const denyRuntime = createLinuxLandlockRuntimeConfig({ launcherPath: "/definitely/missing/kodac-landlock-run", expectedLauncherSha256: ID_C, evidence: { commit() { throw new Error("must not run") } }, requiredEnforcement: "full" })
     const denyGateway = new ExecutionGateway(fs, fixedPolicy("deny", "fixture deny"), undefined, denyRuntime)
-    await assert.rejects(() => denyGateway.runConfinedReadOnlyCommand("fixture.landlock-deny", process.execPath, ["-e", "process.exit(0)"]), ExecutionBlockedError)
+    await assert.rejects(() => denyGateway.runConfinedReadOnlyCommand("fixture.landlock-deny", process.execPath, ["-e", "process.exit(0)"], undefined, { env: {} }), ExecutionBlockedError)
 
     const missingRuntimeGateway = new ExecutionGateway(fs, fixedPolicy("allow", "fixture allow"))
-    await assert.rejects(() => missingRuntimeGateway.runConfinedReadOnlyCommand("fixture.landlock-missing-runtime", process.execPath, ["-e", "process.exit(0)"]), ExecutionBlockedError)
+    await assert.rejects(() => missingRuntimeGateway.runConfinedReadOnlyCommand("fixture.landlock-missing-runtime", process.execPath, ["-e", "process.exit(0)"], undefined, { env: {} }), ExecutionBlockedError)
 
     let mismatchCommits = 0
     const mismatchRuntime = createLinuxLandlockRuntimeConfig({ launcherPath: binary, expectedLauncherSha256: ID_C, evidence: { commit() { mismatchCommits += 1; throw new Error("must not commit") } }, requiredEnforcement: "full" })
     const mismatchGateway = new ExecutionGateway(fs, fixedPolicy("allow", "fixture allow"), undefined, mismatchRuntime)
-    await assert.rejects(() => mismatchGateway.runConfinedReadOnlyCommand("fixture.landlock-digest-mismatch", process.execPath, ["-e", "process.exit(0)"]), ExecutionFailedError)
+    await assert.rejects(() => mismatchGateway.runConfinedReadOnlyCommand("fixture.landlock-digest-mismatch", process.execPath, ["-e", "process.exit(0)"], undefined, { env: {} }), ExecutionFailedError)
     assert.equal(mismatchCommits, 0)
 
     const noCommitTarget = join(root, "must-not-run-on-commit-failure.txt")
     const failingRuntime = createLinuxLandlockRuntimeConfig({ launcherPath: binary, expectedLauncherSha256: sha256File(binary), evidence: { commit() { throw new Error("fixture durable commit failure") } }, requiredEnforcement: "full" })
     const failingGateway = new ExecutionGateway(fs, fixedPolicy("allow", "fixture allow"), undefined, failingRuntime)
-    await assert.rejects(() => failingGateway.runConfinedReadOnlyCommand("fixture.landlock-commit-failure", process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(noCommitTarget)}, 'BAD')`], undefined, { timeoutMs: 10_000 }), ExecutionFailedError)
+    await assert.rejects(() => failingGateway.runConfinedReadOnlyCommand("fixture.landlock-commit-failure", process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(noCommitTarget)}, 'BAD')`], undefined, { env: {}, timeoutMs: 10_000 }), ExecutionFailedError)
     assert.equal(existsSync(noCommitTarget), false)
 
     let neverCommitStartedResolve: (() => void) | undefined
@@ -331,7 +468,7 @@ test("H4-R2C Linux integration proves controlled read-only execution and fail-cl
     const neverCommitTarget = join(root, "must-not-run-on-never-commit.txt")
     const neverCommitRuntime = createLinuxLandlockRuntimeConfig({ launcherPath: binary, expectedLauncherSha256: sha256File(binary), evidence: { commit() { neverCommitStartedResolve?.(); return new Promise<never>(() => {}) } }, requiredEnforcement: "full" })
     const neverCommitGateway = new ExecutionGateway(fs, fixedPolicy("allow", "fixture allow"), undefined, neverCommitRuntime)
-    const neverCommitRun = neverCommitGateway.runConfinedReadOnlyCommand("fixture.landlock-never-commit", process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(neverCommitTarget)}, 'BAD')`], undefined, { timeoutMs: 250 })
+    const neverCommitRun = neverCommitGateway.runConfinedReadOnlyCommand("fixture.landlock-never-commit", process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(neverCommitTarget)}, 'BAD')`], undefined, { env: {}, timeoutMs: 250 })
     await neverCommitStarted
     await assert.rejects(() => neverCommitRun, ExecutionFailedError)
     assert.equal(existsSync(neverCommitTarget), false)
@@ -343,7 +480,7 @@ test("H4-R2C Linux integration proves controlled read-only execution and fail-cl
     const pendingRuntime = createLinuxLandlockRuntimeConfig({ launcherPath: binary, expectedLauncherSha256: sha256File(binary), evidence: { commit(record) { commitStartedResolve?.(); return new Promise((resolve) => { releaseCommit = () => resolve(createDurableConfinementEvidenceCommit(record)) }) } }, requiredEnforcement: "full" })
     const controller = new AbortController()
     const pendingGateway = new ExecutionGateway(fs, fixedPolicy("allow", "fixture allow"), undefined, pendingRuntime)
-    const pending = pendingGateway.runConfinedReadOnlyCommand("fixture.landlock-cancel-before-go", process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(cancelTarget)}, 'BAD')`], undefined, { signal: controller.signal, timeoutMs: 10_000 })
+    const pending = pendingGateway.runConfinedReadOnlyCommand("fixture.landlock-cancel-before-go", process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(cancelTarget)}, 'BAD')`], undefined, { signal: controller.signal, env: {}, timeoutMs: 10_000 })
     await commitStarted
     controller.abort()
     assert.ok(releaseCommit)
@@ -352,6 +489,7 @@ test("H4-R2C Linux integration proves controlled read-only execution and fail-cl
     assert.equal(existsSync(cancelTarget), false)
 
     const protocolFixture = compileProtocolFixture(root)
+    protectLauncherForGateway(protocolFixture)
     const protocolSha = sha256File(protocolFixture)
     const witness = join(root, "go-witness")
 
@@ -380,7 +518,7 @@ test("H4-R2C Linux integration proves controlled read-only execution and fail-cl
     }
 
     const unprovenGateway = new ExecutionGateway(fs, fixedPolicy("allow", "fixture allow"), undefined, runtime)
-    await assert.rejects(() => unprovenGateway.runConfinedReadOnlyCommand("fixture.landlock-receipt-persist-failure", process.execPath, ["-e", "process.stdout.write('TARGET_OK')"], { onReceipt() { throw new Error("fixture receipt sink failure") } }, { timeoutMs: 10_000 }), (error: unknown) => {
+    await assert.rejects(() => unprovenGateway.runConfinedReadOnlyCommand("fixture.landlock-receipt-persist-failure", process.execPath, ["-e", "process.stdout.write('TARGET_OK')"], { onReceipt() { throw new Error("fixture receipt sink failure") } }, { env: {}, timeoutMs: 10_000 }), (error: unknown) => {
       assert.ok(error instanceof ExecutionUnprovenError)
       assert.equal(error.receipt.confinement?.enforcement, "full")
       assert.ok(error.receipt.confinement?.bindingIdentity)

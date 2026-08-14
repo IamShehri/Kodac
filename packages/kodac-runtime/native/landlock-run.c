@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -259,8 +260,17 @@ static int require_fd_direction(int fd, int need_write, const char *label) {
   int status_flags = fcntl(fd, F_GETFL);
   if (status_flags < 0) return fail(label, "cannot inspect descriptor flags");
   int access = status_flags & O_ACCMODE;
-  if (need_write && access == O_RDONLY) return fail(label, "descriptor is not writable");
-  if (!need_write && access == O_WRONLY) return fail(label, "descriptor is not readable");
+  if (need_write) {
+    if (access == O_RDONLY) return fail(label, "descriptor is not writable");
+    if (access == O_RDWR && shutdown(fd, SHUT_RD) != 0) {
+      return fail(label, "cannot disable the forbidden read direction");
+    }
+  } else {
+    if (access == O_WRONLY) return fail(label, "descriptor is not readable");
+    if (access == O_RDWR && shutdown(fd, SHUT_WR) != 0) {
+      return fail(label, "cannot disable the forbidden write direction");
+    }
+  }
   return 0;
 }
 
@@ -317,11 +327,11 @@ static int controlled_ready_and_wait(int partial, long abi) {
   if (fcntl(KODAC_LAUNCHER_FD, F_GETFD) < 0) {
     return fail("controlled launcher fd 3", "descriptor is not open");
   }
-  int code = require_fd_direction(KODAC_READY_FD, 1, "controlled READY fd 4");
+  int code = require_distinct_control_fds();
+  if (code != 0) return code;
+  code = require_fd_direction(KODAC_READY_FD, 1, "controlled READY fd 4");
   if (code != 0) return code;
   code = require_fd_direction(KODAC_PERMIT_FD, 0, "controlled permit fd 5");
-  if (code != 0) return code;
-  code = require_distinct_control_fds();
   if (code != 0) return code;
 
   if (close(KODAC_LAUNCHER_FD) != 0) {

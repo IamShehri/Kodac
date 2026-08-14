@@ -21,6 +21,8 @@ export const KDO_H4_R2C_EVIDENCE_RECORD_VERSION = "kodac-h4-r2c-confinement-reco
 export const KDO_H4_R2C_EVIDENCE_COMMIT_VERSION = "kodac-h4-r2c-confinement-commit-v1" as const
 export const KDO_H4_R2C_RUNTIME_VERSION = "kodac-h4-r2c-linux-landlock-runtime-v1" as const
 export const KDO_H4_R2C_RECEIPT_BINDING_VERSION = "kodac-h4-r2c-confinement-receipt-v1" as const
+export const KDO_H4_R2C_BOOTSTRAP_ENVIRONMENT_POLICY = "reject-linux-loader-control-v1" as const
+export const KDO_H4_R2C_LAUNCHER_WRITE_PROTECTION = "root-owned-unprivileged-read-exec-v1" as const
 export const KDO_H4_R2C_CONTROL_FLAG = "--controlled" as const
 export const KDO_H4_R2C_LAUNCHER_FD = 3 as const
 export const KDO_H4_R2C_READY_FD = 4 as const
@@ -41,12 +43,21 @@ export interface ConfinementExecutionAttempt {
   nonce: string
 }
 
+export interface LauncherArtifactWriteProtection {
+  policy: typeof KDO_H4_R2C_LAUNCHER_WRITE_PROTECTION
+  ownerUid: 0
+  ownerGid: 0
+  permissions: number
+  linkCount: 1
+}
+
 export interface LauncherArtifactObservation {
   version: typeof KDO_H4_R2C_LAUNCHER_OBSERVATION_VERSION
   observationIdentity: string
   launcherPath: string
   sha256: string
   sizeBytes: number
+  writeProtection: LauncherArtifactWriteProtection
 }
 
 export interface LinuxLandlockReadyRecord {
@@ -155,6 +166,13 @@ function positiveBoundedInteger(value: unknown, label: string, maximum: number):
   return value
 }
 
+function nonNegativeBoundedInteger(value: unknown, label: string, maximum: number): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > maximum) {
+    throw new TypeError(`${label} must be an integer from 0 through ${maximum}`)
+  }
+  return value
+}
+
 function requireObservedEnforcement(value: unknown): ObservedReadyEnforcement {
   if (value !== "full" && value !== "partial") throw new TypeError("observed enforcement must be full or partial")
   return value
@@ -198,33 +216,79 @@ export function createLocalWorkspaceRootIdentity(root: string): string {
   return sha256(`${KDO_H4_R2C_WORKSPACE_ROOT_VERSION}\n${canonical}`)
 }
 
+export function createLauncherArtifactWriteProtection(input: {
+  ownerUid: number
+  ownerGid: number
+  permissions: number
+  linkCount: number
+}): LauncherArtifactWriteProtection {
+  const record = asPlainRecord(input, "launcher artifact write-protection input")
+  exactKeys(record, ["ownerUid", "ownerGid", "permissions", "linkCount"], "launcher artifact write-protection input")
+  if (record.ownerUid !== 0 || record.ownerGid !== 0) {
+    throw new TypeError("R2C launcher artifact must be owned by root:root")
+  }
+  const permissions = nonNegativeBoundedInteger(record.permissions, "launcher artifact permissions", 0o777)
+  if ((permissions & 0o022) !== 0) {
+    throw new TypeError("R2C launcher artifact must not be group- or world-writable")
+  }
+  if ((permissions & 0o005) !== 0o005) {
+    throw new TypeError("R2C launcher artifact must be world-readable and world-executable for the non-root K2 host")
+  }
+  if (record.linkCount !== 1) throw new TypeError("R2C launcher artifact must have exactly one hard link")
+  return Object.freeze({
+    policy: KDO_H4_R2C_LAUNCHER_WRITE_PROTECTION,
+    ownerUid: 0,
+    ownerGid: 0,
+    permissions,
+    linkCount: 1,
+  })
+}
+
+export function validateLauncherArtifactWriteProtection(value: unknown): LauncherArtifactWriteProtection {
+  const record = asPlainRecord(value, "launcher artifact write protection")
+  exactKeys(record, ["policy", "ownerUid", "ownerGid", "permissions", "linkCount"], "launcher artifact write protection")
+  if (record.policy !== KDO_H4_R2C_LAUNCHER_WRITE_PROTECTION) {
+    throw new TypeError("launcher artifact write-protection policy mismatch")
+  }
+  return createLauncherArtifactWriteProtection({
+    ownerUid: record.ownerUid as number,
+    ownerGid: record.ownerGid as number,
+    permissions: record.permissions as number,
+    linkCount: record.linkCount as number,
+  })
+}
+
 export function createLauncherArtifactObservation(input: {
   launcherPath: string
   sha256: string
   sizeBytes: number
+  writeProtection: LauncherArtifactWriteProtection
 }): LauncherArtifactObservation {
   const record = asPlainRecord(input, "launcher artifact observation input")
-  exactKeys(record, ["launcherPath", "sha256", "sizeBytes"], "launcher artifact observation input")
+  exactKeys(record, ["launcherPath", "sha256", "sizeBytes", "writeProtection"], "launcher artifact observation input")
   const launcherPath = absoluteCanonicalPath(record.launcherPath, "launcherPath")
   const digest = requireIdentity(record.sha256, "launcher artifact sha256")
   const sizeBytes = positiveBoundedInteger(record.sizeBytes, "launcher artifact sizeBytes", KDO_H4_R2C_MAX_LAUNCHER_BYTES)
+  const writeProtection = validateLauncherArtifactWriteProtection(record.writeProtection)
   const base = Object.freeze({
     version: KDO_H4_R2C_LAUNCHER_OBSERVATION_VERSION,
     launcherPath,
     sha256: digest,
     sizeBytes,
+    writeProtection,
   })
   return Object.freeze({ ...base, observationIdentity: sha256(JSON.stringify(base)) })
 }
 
 export function validateLauncherArtifactObservation(value: unknown): LauncherArtifactObservation {
   const record = asPlainRecord(value, "launcher artifact observation")
-  exactKeys(record, ["version", "observationIdentity", "launcherPath", "sha256", "sizeBytes"], "launcher artifact observation")
+  exactKeys(record, ["version", "observationIdentity", "launcherPath", "sha256", "sizeBytes", "writeProtection"], "launcher artifact observation")
   if (record.version !== KDO_H4_R2C_LAUNCHER_OBSERVATION_VERSION) throw new TypeError("launcher observation version mismatch")
   const rebuilt = createLauncherArtifactObservation({
     launcherPath: absoluteCanonicalPath(record.launcherPath, "launcherPath"),
     sha256: requireIdentity(record.sha256, "launcher artifact sha256"),
     sizeBytes: positiveBoundedInteger(record.sizeBytes, "launcher artifact sizeBytes", KDO_H4_R2C_MAX_LAUNCHER_BYTES),
+    writeProtection: validateLauncherArtifactWriteProtection(record.writeProtection),
   })
   if (requireIdentity(record.observationIdentity, "launcher observation identity") !== rebuilt.observationIdentity) {
     throw new TypeError("launcher observation identity mismatch")
