@@ -113,7 +113,7 @@ test("unknown fields enums malformed identities and non-plain inputs fail closed
   assert.throws(() => validateConfinementRequest({ ...request(), requestIdentity: ID_C }))
 })
 
-test("sparse accessor symbol and hidden structural hooks fail closed without executing getters", () => {
+test("sparse accessor symbol hidden and proxy structural hooks fail closed without executing traps", () => {
   let getterCalls = 0
   const accessorScope: Record<string, unknown> = { writePaths: [] }
   Object.defineProperty(accessorScope, "readPaths", {
@@ -148,6 +148,33 @@ test("sparse accessor symbol and hidden structural hooks fail closed without exe
   const symbolScope: Record<string, unknown> = { readPaths: [], writePaths: [] }
   Object.defineProperty(symbolScope, Symbol("hidden"), { value: true, enumerable: true })
   assert.throws(() => createConfinementRequest({ mode: "read-only", workspaceIdentity: ID_A, executionIntentIdentity: ID_B, scope: symbolScope as never }))
+
+  let proxyTrapCalls = 0
+  const proxyScope = new Proxy({ readPaths: [], writePaths: [] }, {
+    getPrototypeOf() {
+      proxyTrapCalls += 1
+      return Object.prototype
+    },
+    ownKeys(target) {
+      proxyTrapCalls += 1
+      return Reflect.ownKeys(target)
+    },
+  })
+  assert.throws(() => createConfinementRequest({ mode: "read-only", workspaceIdentity: ID_A, executionIntentIdentity: ID_B, scope: proxyScope }))
+  assert.equal(proxyTrapCalls, 0)
+
+  const proxyPaths = new Proxy(["docs/readme.md"], {
+    getPrototypeOf() {
+      proxyTrapCalls += 1
+      return Array.prototype
+    },
+    ownKeys(target) {
+      proxyTrapCalls += 1
+      return Reflect.ownKeys(target)
+    },
+  })
+  assert.throws(() => createConfinementRequest({ mode: "read-only", workspaceIdentity: ID_A, executionIntentIdentity: ID_B, scope: { readPaths: proxyPaths, writePaths: [] } }))
+  assert.equal(proxyTrapCalls, 0)
 })
 
 test("backend descriptors are inert deterministic immutable structural data", () => {
@@ -229,6 +256,7 @@ test("published schema mirrors strict structural contract without pretending run
 test("H4-R2A production module is pure and protected authority surfaces remain byte-identical", () => {
   const confinementSource = source("../src/trust/confinement.ts")
   assert.match(confinementSource, /from "node:crypto"/)
+  assert.match(confinementSource, /from "node:util"/)
   assert.doesNotMatch(confinementSource, /child_process|execFile|spawn\(|fetch\(|http|https|readFile|writeFile|appendFile|process\.env|Deno|Bun/)
 
   assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "8b481c226276d0b06fabc8d614c1295cd0881a6a")
