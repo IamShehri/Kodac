@@ -10,6 +10,7 @@ import {
   createApprovalEvidence,
   createApprovalRequest,
   validateApprovalDecision,
+  validateApprovalEvidenceCommit,
   type ApprovalOutcome,
   type ApprovalRuntime,
 } from "../trust/approval.ts"
@@ -230,16 +231,18 @@ export class ExecutionGateway {
     }
 
     const request = createApprovalRequest(intent)
+    const askedEvidence = createApprovalEvidence(request, "asked")
     try {
-      await runtime.evidence.append(createApprovalEvidence(request, "asked"))
+      const commit = await runtime.evidence.commit(askedEvidence)
+      validateApprovalEvidenceCommit(commit, askedEvidence)
     } catch {
       return this.block(
         intent,
         policy,
         startedAt,
         observer,
-        "approval asked evidence could not be persisted",
-        "Approval unavailable: asked evidence could not be persisted",
+        "approval asked evidence could not be durably committed",
+        "Approval unavailable: asked evidence could not be durably committed",
       )
     }
 
@@ -257,15 +260,16 @@ export class ExecutionGateway {
 
     const decisionEvidence = createApprovalEvidence(request, "decided", outcome)
     try {
-      await runtime.evidence.append(decisionEvidence)
+      const commit = await runtime.evidence.commit(decisionEvidence)
+      validateApprovalEvidenceCommit(commit, decisionEvidence)
     } catch {
       return this.block(
         intent,
         policy,
         startedAt,
         observer,
-        "approval decision evidence could not be persisted",
-        "Approval unavailable: decision evidence could not be persisted",
+        "approval decision evidence could not be durably committed",
+        "Approval unavailable: decision evidence could not be durably committed",
       )
     }
 
