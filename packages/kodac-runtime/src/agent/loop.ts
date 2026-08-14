@@ -3,7 +3,6 @@ import type { ModelMessage, ModelToolCall } from "../model/provider.ts"
 import type { AgentTurnRunner, AgentTurnResult } from "../model/turn.ts"
 import {
   createModelHistoryMessageRecord,
-  modelVisibleMessagesEqual,
   projectModelVisibleHistory,
 } from "../session/model-visible-history.ts"
 import type { RuntimeSession } from "../session/session.ts"
@@ -177,6 +176,7 @@ export class BoundedAgentLoop {
   async run(input: AgentLoopInput): Promise<AgentLoopResult> {
     const limits = resolveLimits(input.limits)
     const startedAt = this.clock()
+    const runJournalOffset = this.session.eventsSnapshot().length
     let turnsUsed = 0
     let toolCallsUsed = 0
     let failuresUsed = 0
@@ -185,13 +185,7 @@ export class BoundedAgentLoop {
     const toolCounts = new Map<string, number>()
     const turnCounts = new Map<string, number>()
 
-    const startingProjection = projectModelVisibleHistory(this.session.eventsSnapshot())
-    if (
-      startingProjection.anchorRequestIdentity !== undefined &&
-      !modelVisibleMessagesEqual(bootstrapMessages, startingProjection.messages)
-    ) {
-      throw new Error("Anchored model-visible history is event-derived; caller messages do not match the canonical projection")
-    }
+    const runEvents = () => this.session.eventsSnapshot().slice(runJournalOffset)
 
     const budget = (): AgentLoopBudget => ({
       turnsUsed,
@@ -214,7 +208,7 @@ export class BoundedAgentLoop {
     }
 
     const messagesForNextTurn = (): ModelMessage[] => {
-      const projection = projectModelVisibleHistory(this.session.eventsSnapshot())
+      const projection = projectModelVisibleHistory(runEvents())
       return projection.anchorRequestIdentity === undefined
         ? bootstrapMessages.map(cloneBootstrapMessage)
         : projection.messages
@@ -283,7 +277,7 @@ export class BoundedAgentLoop {
         })
         if (failuresUsed >= limits.maxFailures) return stop("max_failures")
 
-        const projection = projectModelVisibleHistory(this.session.eventsSnapshot())
+        const projection = projectModelVisibleHistory(runEvents())
         if (projection.anchorRequestIdentity === undefined) {
           bootstrapMessages.push(cloneBootstrapMessage(RECOVERY_MESSAGE))
         } else {
@@ -297,7 +291,7 @@ export class BoundedAgentLoop {
       }
 
       assistant = result.assistant
-      const projection = projectModelVisibleHistory(this.session.eventsSnapshot())
+      const projection = projectModelVisibleHistory(runEvents())
       if (projection.anchorRequestIdentity === undefined) {
         throw new Error("Successful model turn did not establish an H2-R1 request snapshot anchor")
       }
