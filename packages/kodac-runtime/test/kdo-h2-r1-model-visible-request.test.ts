@@ -291,6 +291,19 @@ test("array accessors and hidden array fields fail closed without executing gett
   }), /plain array/)
 })
 
+test("JSON nesting depth is bounded with an attributable validation error", () => {
+  let nested: unknown = "leaf"
+  for (let depth = 0; depth < KDO_H2_R1_LIMITS.maxJsonDepth + 2; depth += 1) {
+    nested = { nested }
+  }
+  assert.throws(() => createModelVisibleRequestSnapshot({
+    provider: "fixture",
+    model: "model",
+    messages: [{ role: "assistant", content: "", toolCalls: [{ id: "x", name: "tool", input: nested }] }],
+    tools: [],
+  }), /JSON nesting levels/)
+})
+
 test("all authorized item and byte bounds fail closed without truncation", () => {
   const L = KDO_H2_R1_LIMITS
   assert.throws(() => createModelVisibleRequestSnapshot({ provider: "p".repeat(L.maxProviderBytes + 1), model: "m", messages: [], tools: [] }), /provider/)
@@ -327,7 +340,7 @@ test("all authorized item and byte bounds fail closed without truncation", () =>
   assert.throws(() => createModelVisibleRequestSnapshot({ provider: "p", model: "m", messages: [], tools: overTools }), /snapshot exceeds/)
 })
 
-test("snapshots are deeply immutable and materialization returns independent data", () => {
+test("snapshots stay deeply immutable while materialized provider data is deeply mutable and independent", () => {
   const snapshot = createModelVisibleRequestSnapshot(baseInput())
   assert.ok(Object.isFrozen(snapshot))
   assert.ok(Object.isFrozen(snapshot.messages))
@@ -335,10 +348,37 @@ test("snapshots are deeply immutable and materialization returns independent dat
   assert.ok(Object.isFrozen(snapshot.tools))
   assert.ok(Object.isFrozen(snapshot.tools[0]))
   assert.ok(Object.isFrozen(snapshot.tools[0]?.inputSchema))
+  assert.ok(Object.isFrozen(snapshot.messages[2]?.toolCalls?.[0]?.input as object))
+
   const materialized = materializeModelVisibleRequest(snapshot)
   assert.deepEqual(materialized, { model: snapshot.model, messages: snapshot.messages, tools: snapshot.tools })
   assert.notEqual(materialized.messages, snapshot.messages)
   assert.notEqual(materialized.tools, snapshot.tools)
+
+  const materializedInput = materialized.messages[2]?.toolCalls?.[0]?.input as Record<string, unknown>
+  const snapshotInput = snapshot.messages[2]?.toolCalls?.[0]?.input as Record<string, unknown>
+  assert.equal(Object.isFrozen(materializedInput), false)
+  materializedInput.query = "changed"
+  assert.equal(snapshotInput.query, "needle")
+
+  const materializedTool = materialized.tools.find((tool) => tool.name === "zeta.read")
+  const snapshotTool = snapshot.tools.find((tool) => tool.name === "zeta.read")
+  assert.ok(materializedTool)
+  assert.ok(snapshotTool)
+  assert.equal(Object.isFrozen(materializedTool.inputSchema), false)
+  const materializedProperties = materializedTool.inputSchema.properties as Record<string, unknown>
+  const snapshotProperties = snapshotTool.inputSchema.properties as Record<string, unknown>
+  const materializedPath = materializedProperties.path as Record<string, unknown>
+  const snapshotPath = snapshotProperties.path as Record<string, unknown>
+  assert.equal(Object.isFrozen(materializedProperties), false)
+  assert.equal(Object.isFrozen(materializedPath), false)
+  materializedPath.type = "number"
+  assert.equal(snapshotPath.type, "string")
+
+  assert.throws(() => materializeModelVisibleRequest({
+    ...snapshot,
+    messageCount: snapshot.messageCount + 1,
+  }), /derived fields mismatch/)
 })
 
 test("fixture provider receives exactly the model-visible request reconstructed from the logged snapshot", async () => {
