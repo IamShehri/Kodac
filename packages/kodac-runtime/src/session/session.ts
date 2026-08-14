@@ -5,6 +5,7 @@ export class RuntimeSession {
   readonly sessionId: string
   private readonly sink: EventSink
   private sequence = 0
+  private readonly journal: KodacEvent[] = []
 
   constructor(sink: EventSink, sessionId: string = randomUUID()) {
     this.sink = sink
@@ -20,8 +21,13 @@ export class RuntimeSession {
       payload,
     })
     await this.sink.append(event)
+    this.journal.push(event)
     this.sequence = nextSequence
     return event
+  }
+
+  eventsSnapshot(): readonly KodacEvent[] {
+    return Object.freeze(this.journal.map((event) => Object.freeze({ ...event })))
   }
 
   async start(input: { workspace: string; command: string; runtimeSlice?: string }): Promise<void> {
