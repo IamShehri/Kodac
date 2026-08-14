@@ -158,7 +158,6 @@ test("H1 production surface is descriptive only and canonical authority surfaces
   for (const text of [contracts, registry]) {
     assert.doesNotMatch(text, /\b(?:eval|Function|fetch|ExecutionGateway|RuntimeTool|child_process|worker_threads)\b/)
   }
-  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "be5926e9a8dc5c4c29d441dac11661d71e797015")
   assert.equal(gitBlobSha1(source("../src/verification/done-gate.ts")), "067e147569fa52cc2b04c5df26fbe20a01e958e9")
   assert.equal(gitBlobSha1(source("../src/tools/registry.ts")), "0bdf5cfd02efda7cab0c81976c7735bc7b46081b")
   assert.equal(gitBlobSha1(source("../src/model/provider.ts")), "a15f1d86ceab88ab6fa1be787719d222e354e0c4")

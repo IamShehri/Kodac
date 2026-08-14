@@ -3,8 +3,17 @@ import { createHash } from "node:crypto"
 import { isAbsolute, relative, resolve, sep } from "node:path"
 import type { WorkspaceFileSystem } from "../edit/filesystem.ts"
 import { applyHunks, parsePatch, type AffectedPaths } from "../edit/patch.ts"
-import { createReceipt, type ExecutionReceipt } from "../evidence/receipt.ts"
+import { createReceipt, type ApprovalReceiptBinding, type ExecutionReceipt } from "../evidence/receipt.ts"
 import { isFullGitObjectId } from "../repository/contracts.ts"
+import {
+  KDO_H4_R1_APPROVAL_VERSION,
+  createApprovalEvidence,
+  createApprovalRequest,
+  validateApprovalDecision,
+  validateApprovalEvidenceCommit,
+  type ApprovalOutcome,
+  type ApprovalRuntime,
+} from "../trust/approval.ts"
 import type { ExecutionIntent, PolicyEngine, PolicyResult } from "../trust/policy.ts"
 
 export interface ExecutionObserver {
@@ -51,6 +60,25 @@ function uniquePaths(paths: string[]): string[] {
   return [...new Set(paths)].sort()
 }
 
+function immutableExecutionIntent(intent: ExecutionIntent): ExecutionIntent {
+  const paths = Object.freeze([...intent.paths]) as unknown as string[]
+  return Object.freeze({
+    capability: intent.capability,
+    paths,
+    inputDigest: intent.inputDigest,
+  })
+}
+
+function immutablePolicyResult(value: PolicyResult): PolicyResult {
+  const decision = value.decision
+  const reason = value.reason
+  if (decision !== "allow" && decision !== "ask" && decision !== "deny") {
+    throw new TypeError("policy decision is invalid")
+  }
+  if (typeof reason !== "string") throw new TypeError("policy reason must be a string")
+  return Object.freeze({ decision, reason })
+}
+
 function portablePath(path: string): string {
   return path.split(sep).join("/")
 }
@@ -70,7 +98,20 @@ function canonicalParent(path: string): string {
   return separator < 0 ? "." : path.slice(0, separator)
 }
 
-function blockedReceipt(intent: ExecutionIntent, policy: PolicyResult, startedAt: string): ExecutionReceipt {
+function canonicalEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0),
+  )
+}
+
+function blockedReceipt(
+  intent: ExecutionIntent,
+  policy: PolicyResult,
+  startedAt: string,
+  reason = policy.reason,
+): ExecutionReceipt {
   return createReceipt({
     capability: intent.capability,
     inputDigest: intent.inputDigest,
@@ -78,7 +119,7 @@ function blockedReceipt(intent: ExecutionIntent, policy: PolicyResult, startedAt
     policy,
     startedAt,
     completedAt: new Date().toISOString(),
-    result: { status: "blocked", reason: policy.reason },
+    result: { status: "blocked", reason },
   })
 }
 
@@ -104,7 +145,7 @@ interface ProcessOptions {
   signal?: AbortSignal
   maxOutputBytes: number
   timeoutMs: number
-  env?: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv
   allowedExitCodes: number[]
 }
 
@@ -170,15 +211,122 @@ async function digestAffectedState(fs: WorkspaceFileSystem, affected: AffectedPa
 export class ExecutionGateway {
   private readonly fs: WorkspaceFileSystem
   private readonly policy: PolicyEngine
+  private readonly approval?: ApprovalRuntime
 
-  constructor(fs: WorkspaceFileSystem, policy: PolicyEngine) {
+  constructor(fs: WorkspaceFileSystem, policy: PolicyEngine, approval?: ApprovalRuntime) {
     this.fs = fs
     this.policy = policy
+    this.approval = approval
+  }
+
+  private async block(
+    intent: ExecutionIntent,
+    policy: PolicyResult,
+    startedAt: string,
+    observer: ExecutionObserver | undefined,
+    reason: string,
+    message: string,
+  ): Promise<never> {
+    const receipt = blockedReceipt(intent, policy, startedAt, reason)
+    await persistReceipt(observer, receipt)
+    throw new ExecutionBlockedError(message, receipt)
+  }
+
+  private async authorize(
+    intent: ExecutionIntent,
+    policy: PolicyResult,
+    startedAt: string,
+    observer: ExecutionObserver | undefined,
+    signal?: AbortSignal,
+  ): Promise<ApprovalReceiptBinding | undefined> {
+    if (policy.decision === "allow") return undefined
+    if (policy.decision === "deny") {
+      return this.block(intent, policy, startedAt, observer, policy.reason, `Execution denied: ${policy.reason}`)
+    }
+
+    const runtime = this.approval
+    if (!runtime) {
+      return this.block(intent, policy, startedAt, observer, policy.reason, `Approval required: ${policy.reason}`)
+    }
+
+    const request = createApprovalRequest(intent)
+    const askedEvidence = createApprovalEvidence(request, "asked")
+    try {
+      const commit = await runtime.evidence.commit(askedEvidence)
+      validateApprovalEvidenceCommit(commit, askedEvidence)
+    } catch {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        "approval asked evidence could not be durably committed",
+        "Approval unavailable: asked evidence could not be durably committed",
+      )
+    }
+
+    let outcome: ApprovalOutcome
+    try {
+      if (signal?.aborted) {
+        outcome = "cancelled"
+      } else {
+        const rawDecision = await runtime.service.decide(request, { signal })
+        outcome = signal?.aborted ? "cancelled" : validateApprovalDecision(rawDecision, request).outcome
+      }
+    } catch {
+      outcome = signal?.aborted ? "cancelled" : "unavailable"
+    }
+
+    const decisionEvidence = createApprovalEvidence(request, "decided", outcome)
+    try {
+      const commit = await runtime.evidence.commit(decisionEvidence)
+      validateApprovalEvidenceCommit(commit, decisionEvidence)
+    } catch {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        "approval decision evidence could not be durably committed",
+        "Approval unavailable: decision evidence could not be durably committed",
+      )
+    }
+
+    if (outcome !== "allowed-once") {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        `one-shot approval outcome: ${outcome}`,
+        `Execution blocked by one-shot approval outcome: ${outcome}`,
+      )
+    }
+
+    if (signal?.aborted) {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        "operation aborted after one-shot approval",
+        "Execution blocked: operation aborted after one-shot approval",
+      )
+    }
+
+    return Object.freeze({
+      version: KDO_H4_R1_APPROVAL_VERSION,
+      requestIdentity: request.requestIdentity,
+      requestInstanceId: request.requestInstanceId,
+      decisionEvidenceIdentity: decisionEvidence.evidenceIdentity,
+      outcome: "allowed-once",
+    })
   }
 
   async applyPatch(
     patchText: string,
     observer?: ExecutionObserver,
+    options: { signal?: AbortSignal } = {},
   ): Promise<{ affected: Awaited<ReturnType<typeof applyHunks>>; receipt: ExecutionReceipt }> {
     const startedAt = new Date().toISOString()
     const parsed = parsePatch(patchText)
@@ -187,22 +335,24 @@ export class ExecutionGateway {
         hunk.type === "update" && hunk.movePath ? [hunk.path, hunk.movePath] : [hunk.path],
       ),
     )
-    const intent: ExecutionIntent = {
+    const intent = immutableExecutionIntent({
       capability: "repo.apply_patch",
       paths,
       inputDigest: sha256(patchText),
-    }
+    })
     await observer?.onIntent?.(intent)
 
-    const policy = await this.policy.evaluate(intent)
+    const policy = immutablePolicyResult(await this.policy.evaluate(intent))
     await observer?.onPolicy?.(intent, policy)
-
-    if (policy.decision !== "allow") {
-      const receipt = blockedReceipt(intent, policy, startedAt)
-      await persistReceipt(observer, receipt)
-      throw new ExecutionBlockedError(
-        policy.decision === "ask" ? `Approval required: ${policy.reason}` : `Execution denied: ${policy.reason}`,
-        receipt,
+    const approval = await this.authorize(intent, policy, startedAt, observer, options.signal)
+    if (options.signal?.aborted) {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        "operation aborted before patch execution",
+        "Execution blocked: operation aborted before patch execution",
       )
     }
 
@@ -216,6 +366,7 @@ export class ExecutionGateway {
         inputDigest: intent.inputDigest,
         paths: intent.paths,
         policy,
+        ...(approval === undefined ? {} : { approval }),
         startedAt,
         completedAt: new Date().toISOString(),
         result: { status: "failure", error: message },
@@ -229,6 +380,7 @@ export class ExecutionGateway {
       inputDigest: intent.inputDigest,
       paths: intent.paths,
       policy,
+      ...(approval === undefined ? {} : { approval }),
       startedAt,
       completedAt: new Date().toISOString(),
       result: { status: "success", affected, postStateDigest: await digestAffectedState(this.fs, affected) },
@@ -379,37 +531,52 @@ export class ExecutionGateway {
     validateOutput?: (stdout: string, stderr: string) => void,
   ): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
     const startedAt = new Date().toISOString()
+    const executionArgs = [...args]
     const maxOutputBytes = options.maxOutputBytes ?? 256 * 1024
     const timeoutMs = options.timeoutMs ?? 5_000
     const allowedExitCodes = normalizedAllowedExitCodes(options.allowedExitCodes)
+    const environment = canonicalEnvironment(options.env ?? process.env)
     if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) throw new Error("maxOutputBytes must be a positive integer")
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive integer")
 
-    const intent: ExecutionIntent = {
+    const intent = immutableExecutionIntent({
       capability,
       paths,
-      inputDigest: sha256(JSON.stringify({ executable, args, allowedExitCodes })),
-    }
+      inputDigest: sha256(JSON.stringify({
+        executable,
+        args: executionArgs,
+        allowedExitCodes,
+        maxOutputBytes,
+        timeoutMs,
+        env: environment,
+      })),
+    })
     await observer?.onIntent?.(intent)
-    const policy = await this.policy.evaluate(intent)
+    const policy = immutablePolicyResult(await this.policy.evaluate(intent))
     await observer?.onPolicy?.(intent, policy)
 
-    if (policy.decision !== "allow") {
-      const receipt = blockedReceipt(intent, policy, startedAt)
-      await persistReceipt(observer, receipt)
-      throw new ExecutionBlockedError(
-        policy.decision === "ask" ? `Approval required: ${policy.reason}` : `Execution denied: ${policy.reason}`,
-        receipt,
+    // H4-R1 cannot prove executable-byte identity through path-based execFile.
+    // External-process one-shot approval remains fail-closed until H4-R2 confinement.
+    if (policy.decision === "ask") {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        "external executable identity requires H4-R2 confinement",
+        "Approval unavailable: external executable identity requires H4-R2 confinement",
       )
     }
 
+    const approval = await this.authorize(intent, policy, startedAt, observer, options.signal)
+
     try {
       for (const path of paths) await this.fs.validatePath(path)
-      const { stdout, stderr, exitCode } = await runProcess(executable, args, this.fs.root, {
+      const { stdout, stderr, exitCode } = await runProcess(executable, executionArgs, this.fs.root, {
         signal: options.signal,
         maxOutputBytes,
         timeoutMs,
-        env: options.env,
+        env: environment,
         allowedExitCodes,
       })
       validateOutput?.(stdout, stderr)
@@ -419,6 +586,7 @@ export class ExecutionGateway {
         inputDigest: intent.inputDigest,
         paths: intent.paths,
         policy,
+        ...(approval === undefined ? {} : { approval }),
         startedAt,
         completedAt: new Date().toISOString(),
         result: {
@@ -438,6 +606,7 @@ export class ExecutionGateway {
         inputDigest: intent.inputDigest,
         paths: intent.paths,
         policy,
+        ...(approval === undefined ? {} : { approval }),
         startedAt,
         completedAt: new Date().toISOString(),
         result: { status: "failure", error: message },

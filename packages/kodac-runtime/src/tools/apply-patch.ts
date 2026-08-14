@@ -41,7 +41,7 @@ export function createApplyPatchTool(gateway: ExecutionGateway, ledger: ReceiptL
             result: receipt.result.status,
           })
         },
-      })
+      }, { signal: context.signal })
     },
   }
 }
