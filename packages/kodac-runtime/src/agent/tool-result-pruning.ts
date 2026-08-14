@@ -224,27 +224,34 @@ function normalizeMessages(value: unknown): ModelVisibleMessage[] {
 }
 
 function takeUtf8Prefix(value: string, maxBytes: number): { text: string; bytes: number } {
-  let text = ""
+  const selected: string[] = []
   let bytes = 0
   for (const character of value) {
     const characterBytes = Buffer.byteLength(character, "utf8")
     if (bytes + characterBytes > maxBytes) break
-    text += character
+    selected.push(character)
     bytes += characterBytes
   }
-  return { text, bytes }
+  return { text: selected.join(""), bytes }
 }
 
 function takeUtf8Suffix(value: string, maxBytes: number): { text: string; bytes: number } {
-  const characters = Array.from(value)
   const selected: string[] = []
   let bytes = 0
-  for (let index = characters.length - 1; index >= 0; index -= 1) {
-    const character = characters[index] as string
+  let end = value.length
+  while (end > 0) {
+    let start = end - 1
+    const trailing = value.charCodeAt(start)
+    if (trailing >= 0xdc00 && trailing <= 0xdfff && start > 0) {
+      const leading = value.charCodeAt(start - 1)
+      if (leading >= 0xd800 && leading <= 0xdbff) start -= 1
+    }
+    const character = value.slice(start, end)
     const characterBytes = Buffer.byteLength(character, "utf8")
     if (bytes + characterBytes > maxBytes) break
     selected.push(character)
     bytes += characterBytes
+    end = start
   }
   selected.reverse()
   return { text: selected.join(""), bytes }
