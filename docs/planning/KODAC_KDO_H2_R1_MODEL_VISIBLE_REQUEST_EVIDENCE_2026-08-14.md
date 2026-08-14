@@ -1,7 +1,7 @@
 # KDO-H2-R1 Model-Visible Request Reconstruction Evidence
 
 Date: 2026-08-14
-Status: PRE-LEDGER CANDIDATE CERTIFIED; LEDGER HEAD RE-CERTIFICATION REQUIRED
+Status: EVIDENCE LEDGER — PRE-LEDGER CERTIFICATION RECORDED; POST-LEDGER CERTIFICATION IS EXTERNAL
 
 ## Identity
 
@@ -17,7 +17,7 @@ Supplemental legacy-test authorization merge: `4a070a3258521bd34ab9dd4476739091e
 
 Certified pre-ledger head: `2e0cab36288b5b1177396a25bedb69349a25d336`
 
-This file records H2-R1 evidence only. It does not certify the commit that adds this ledger; that new head must be re-certified before PR #45 may be marked Ready for review.
+This file records H2-R1 evidence only. It does not self-certify the commit that contains this ledger. Post-ledger certification is established externally by exact-head GitHub Actions and review state so that recording the certification does not recursively create another uncertified repository head.
 
 ## Certified invariant
 
@@ -85,15 +85,15 @@ Intake mode: `PORT`
 
 ## Protected baselines
 
-The H2-R1 focused regression suite preserves these protected identities:
+The H2-R1 focused regression suite preserves these protected repository-path identities:
 
-- `src/agent/loop.ts`: `fe92ffdc9cc057d620a8f2de2296e14eec43a1e0`
-- `src/tools/registry.ts`: `0bdf5cfd02efda7cab0c81976c7735bc7b46081b`
-- `src/model/provider.ts`: `a15f1d86ceab88ab6fa1be787719d222e354e0c4`
-- `src/model/openai.ts`: `564851b2dc8cd1aa610fbc7eaa4b5be5853f97f4`
-- `src/model/openai-compatible.ts`: `7ed56c7bac8e03d315b465e1f173ad934227051f`
-- `src/execution/gateway.ts`: `be5926e9a8dc5c4c29d441dac11661d71e797015`
-- `src/verification/done-gate.ts`: `067e147569fa52cc2b04c5df26fbe20a01e958e9`
+- `packages/kodac-runtime/src/agent/loop.ts`: `fe92ffdc9cc057d620a8f2de2296e14eec43a1e0`
+- `packages/kodac-runtime/src/tools/registry.ts`: `0bdf5cfd02efda7cab0c81976c7735bc7b46081b`
+- `packages/kodac-runtime/src/model/provider.ts`: `a15f1d86ceab88ab6fa1be787719d222e354e0c4`
+- `packages/kodac-runtime/src/model/openai.ts`: `564851b2dc8cd1aa610fbc7eaa4b5be5853f97f4`
+- `packages/kodac-runtime/src/model/openai-compatible.ts`: `7ed56c7bac8e03d315b465e1f173ad934227051f`
+- `packages/kodac-runtime/src/execution/gateway.ts`: `be5926e9a8dc5c4c29d441dac11661d71e797015`
+- `packages/kodac-runtime/src/verification/done-gate.ts`: `067e147569fa52cc2b04c5df26fbe20a01e958e9`
 
 ## Exact-head CI evidence
 
@@ -131,7 +131,7 @@ H2-R2 remains outstanding.
 
 ## Mandatory post-ledger gate
 
-After this file is added, the new exact PR head must again pass:
+The exact PR head containing this ledger must pass:
 
 - the full authorized changed-path check;
 - governance and provenance;
@@ -144,6 +144,8 @@ After this file is added, the new exact PR head must again pass:
 - exact-head review adjudication;
 - unresolved review threads = `0`.
 
-Only after those post-ledger gates pass may PR #45 be marked Ready for review.
+Post-ledger certification is represented by those external exact-head results and must not be written back into this ledger, because doing so would create another repository head requiring another certification cycle.
+
+Only after those gates pass may PR #45 be marked Ready for review.
 
 This ledger grants no merge authority.
