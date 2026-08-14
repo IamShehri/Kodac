@@ -39,6 +39,9 @@ export const KDO_H2_R2_HISTORY_SOURCES = Object.freeze([
   "recovery_system",
 ] as const)
 
+export const KDO_H2_R2_RECOVERY_MESSAGE_CONTENT =
+  "The previous model/tool turn failed. Reconsider the task and continue without repeating the same failed action." as const
+
 export type ModelHistoryMessageSource = (typeof KDO_H2_R2_HISTORY_SOURCES)[number]
 
 export const KDO_H2_R2_LIMITS = Object.freeze({
@@ -157,6 +160,28 @@ function requirePositiveSafeInteger(value: unknown, label: string): number {
   return value as number
 }
 
+function requireSourceMessageSemantics(source: ModelHistoryMessageSource, message: ModelVisibleMessage): void {
+  if (source === "assistant_response") {
+    if (message.role !== "assistant") throw new TypeError("assistant_response history records require role=assistant")
+    if (message.toolCallId !== undefined) throw new TypeError("assistant_response history records cannot carry toolCallId")
+    return
+  }
+  if (source === "tool_result") {
+    if (message.role !== "tool") throw new TypeError("tool_result history records require role=tool")
+    if (message.name === undefined) throw new TypeError("tool_result history records require tool name")
+    if (message.toolCallId === undefined) throw new TypeError("tool_result history records require toolCallId")
+    if (message.toolCalls !== undefined) throw new TypeError("tool_result history records cannot carry toolCalls")
+    return
+  }
+  if (message.role !== "system") throw new TypeError("recovery_system history records require role=system")
+  if (message.content !== KDO_H2_R2_RECOVERY_MESSAGE_CONTENT) {
+    throw new TypeError("recovery_system history records require the canonical recovery message")
+  }
+  if (message.name !== undefined || message.toolCallId !== undefined || message.toolCalls !== undefined) {
+    throw new TypeError("recovery_system history records cannot carry name, toolCallId, or toolCalls")
+  }
+}
+
 function canonicalRecordPreimage(input: {
   afterRequestIdentity: string
   source: ModelHistoryMessageSource
@@ -175,6 +200,7 @@ export function createModelHistoryMessageRecord(input: ModelHistoryMessageRecord
   const afterRequestIdentity = requireSha256(inputRecord.afterRequestIdentity, "modelHistoryMessage.afterRequestIdentity")
   const source = requireSource(inputRecord.source)
   const message = validateModelVisibleMessage(inputRecord.message)
+  requireSourceMessageSemantics(source, message)
   const messageCanonical = canonicalModelVisibleMessage(message)
   const messageBytes = Buffer.byteLength(messageCanonical, "utf8")
   const messageIdentity = sha256(messageCanonical)
