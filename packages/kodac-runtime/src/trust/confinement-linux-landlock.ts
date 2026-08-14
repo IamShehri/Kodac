@@ -246,21 +246,24 @@ export function classifyLinuxLandlockProbe(input: {
 }): LinuxLandlockProbeClassification {
   const record = asPlainRecord(input, "Linux Landlock probe result")
   exactKeys(record, ["exitCode", "stdout", "stderr"], "Linux Landlock probe result")
-  if (!Number.isInteger(record.exitCode) || (record.exitCode as number) < 0 || (record.exitCode as number) > 255) {
+
+  const exitCodeValue = record.exitCode
+  const stdoutValue = record.stdout
+  const stderrValue = record.stderr
+  if (typeof exitCodeValue !== "number" || !Number.isInteger(exitCodeValue) || exitCodeValue < 0 || exitCodeValue > 255) {
     throw new TypeError("probe exitCode must be an integer from 0 to 255")
   }
-  if (typeof record.stdout !== "string" || typeof record.stderr !== "string") {
+  if (typeof stdoutValue !== "string" || typeof stderrValue !== "string") {
     throw new TypeError("probe stdout and stderr must be strings")
   }
-  if (byteLength(record.stdout) > MAX_PROBE_OUTPUT_BYTES || byteLength(record.stderr) > MAX_PROBE_OUTPUT_BYTES) {
+  if (byteLength(stdoutValue) > MAX_PROBE_OUTPUT_BYTES || byteLength(stderrValue) > MAX_PROBE_OUTPUT_BYTES) {
     return unavailable("probe output exceeded bounded H4-R2B evidence limits")
   }
 
-  const exitCode = record.exitCode as number
-  if (exitCode !== 0) return unavailable(`launcher probe failed with exit code ${exitCode}`)
-  if (record.stderr.length !== 0) return unavailable("successful launcher probe produced unexpected stderr")
+  if (exitCodeValue !== 0) return unavailable(`launcher probe failed with exit code ${exitCodeValue}`)
+  if (stderrValue.length !== 0) return unavailable("successful launcher probe produced unexpected stderr")
 
-  const match = /^kodac-landlock-v1 abi=([1-9][0-9]*) claim-set=kodac-linux-landlock-fs-v1 enforcement=(full|partial)\n?$/.exec(record.stdout)
+  const match = /^kodac-landlock-v1 abi=([1-9][0-9]*) claim-set=kodac-linux-landlock-fs-v1 enforcement=(full|partial)\n?$/.exec(stdoutValue)
   if (match === null) return unavailable("launcher probe output did not match the exact H4-R2B contract")
 
   const observedAbi = Number(match[1])
