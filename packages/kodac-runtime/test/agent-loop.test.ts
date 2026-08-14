@@ -165,23 +165,35 @@ test("history sink failure blocks a later provider invocation and does not enter
   assert.equal(next.sequence, priorSequence + 1)
 })
 
-test("anchored session history cannot be silently replaced by new caller messages", async () => {
-  let calls = 0
-  const provider: ModelProvider = {
-    name: "anchored",
-    async generate() {
-      calls += 1
-      return { assistant: "done", finishReason: "stop", toolCalls: [] }
-    },
-  }
-  const { loop } = harness(provider)
-  await loop.run({ provider: "anchored", model: "fixture/model", messages: [{ role: "user", content: "first" }] })
-  assert.equal(calls, 1)
-  await assert.rejects(
-    () => loop.run({ provider: "anchored", model: "fixture/model", messages: [{ role: "user", content: "replacement" }] }),
-    /caller messages do not match the canonical projection/,
-  )
-  assert.equal(calls, 1)
+test("separate loop.run invocations use independent canonical projection windows", async () => {
+  const provider = new RecordingProvider([
+    { assistant: "first done", finishReason: "stop", toolCalls: [] },
+    { assistant: "second done", finishReason: "stop", toolCalls: [] },
+  ])
+  const { loop, sink } = harness(provider)
+
+  const first = await loop.run({
+    provider: "recording",
+    model: "fixture/model",
+    messages: [{ role: "user", content: "first probe" }],
+  })
+  const boundary = sink.events.length
+  const second = await loop.run({
+    provider: "recording",
+    model: "fixture/model",
+    messages: [{ role: "user", content: "second probe" }],
+  })
+
+  assert.equal(first.status, "completed")
+  assert.equal(second.status, "completed")
+  assert.equal(provider.requests.length, 2)
+  assert.deepEqual(provider.requests[0].messages, [{ role: "user", content: "first probe" }])
+  assert.deepEqual(provider.requests[1].messages, [{ role: "user", content: "second probe" }])
+
+  const secondWindow = sink.events.slice(boundary)
+  const projection = projectModelVisibleHistory(secondWindow)
+  assert.equal(projection.messages[0]?.content, "second probe")
+  assert.equal(projection.messages.at(-1)?.content, "second done")
 })
 
 test("blocks an identical tool call before a second execution", async () => {
