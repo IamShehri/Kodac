@@ -17,6 +17,7 @@ import {
   KDO_H2_R2_HISTORY_VERSION,
   KDO_H2_R2_LIMITS,
   KDO_H2_R2_PREDECESSOR_PROVENANCE,
+  KDO_H2_R2_RECOVERY_MESSAGE_CONTENT,
   createModelHistoryMessageRecord,
   modelVisibleMessagesEqual,
   projectModelVisibleHistory,
@@ -63,6 +64,10 @@ function gitTextBlobSha1(raw: Buffer): string {
 test("H2-R2 provenance and predecessor identities are pinned exactly", () => {
   assert.equal(KDO_H2_R2_HISTORY_VERSION, "kodac-model-visible-history-v1")
   assert.deepEqual(KDO_H2_R2_HISTORY_SOURCES, ["assistant_response", "tool_result", "recovery_system"])
+  assert.equal(
+    KDO_H2_R2_RECOVERY_MESSAGE_CONTENT,
+    "The previous model/tool turn failed. Reconsider the task and continue without repeating the same failed action.",
+  )
   assert.deepEqual(KDO_H2_R2_DEEPSEEK_HARNESS_DONOR_PROVENANCE, {
     repository: "deepseek-ai/deepseek-harness",
     sourceCommit: "47f943859bef60e4160492346772ded9b24f765a",
@@ -90,12 +95,65 @@ test("history record identity is deterministic and structural", () => {
   assert.equal(first.messageIdentity, second.messageIdentity)
   assert.notEqual(
     first.recordIdentity,
-    createModelHistoryMessageRecord({ ...input, source: "recovery_system" }).recordIdentity,
+    createModelHistoryMessageRecord({
+      afterRequestIdentity: anchor,
+      source: "recovery_system",
+      message: { role: "system", content: KDO_H2_R2_RECOVERY_MESSAGE_CONTENT },
+    }).recordIdentity,
   )
   assert.notEqual(
     first.recordIdentity,
     createModelHistoryMessageRecord({ ...input, message: { role: "assistant", content: "changed" } }).recordIdentity,
   )
+})
+
+test("history record sources are bound to exact message semantics", () => {
+  const anchor = request([{ role: "user", content: "hello" }]).requestIdentity
+  assert.throws(
+    () => createModelHistoryMessageRecord({
+      afterRequestIdentity: anchor,
+      source: "assistant_response",
+      message: { role: "user", content: "not assistant" },
+    }),
+    /require role=assistant/,
+  )
+  assert.throws(
+    () => createModelHistoryMessageRecord({
+      afterRequestIdentity: anchor,
+      source: "tool_result",
+      message: { role: "assistant", content: "not tool" },
+    }),
+    /require role=tool/,
+  )
+  assert.throws(
+    () => createModelHistoryMessageRecord({
+      afterRequestIdentity: anchor,
+      source: "tool_result",
+      message: { role: "tool", content: "missing bindings" },
+    }),
+    /require tool name|require toolCallId/,
+  )
+  assert.throws(
+    () => createModelHistoryMessageRecord({
+      afterRequestIdentity: anchor,
+      source: "recovery_system",
+      message: { role: "system", content: "different recovery" },
+    }),
+    /canonical recovery message/,
+  )
+  assert.throws(
+    () => createModelHistoryMessageRecord({
+      afterRequestIdentity: anchor,
+      source: "not-a-source" as never,
+      message: { role: "assistant", content: "x" },
+    }),
+    /source is unsupported/,
+  )
+  assert.doesNotThrow(() => createModelHistoryMessageRecord({
+    afterRequestIdentity: anchor,
+    source: "recovery_system",
+    message: { role: "system", content: KDO_H2_R2_RECOVERY_MESSAGE_CONTENT },
+  }))
 })
 
 test("history records reuse strict H2-R1 message validation and reject tampering", () => {
