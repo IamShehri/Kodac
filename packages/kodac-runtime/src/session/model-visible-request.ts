@@ -156,6 +156,15 @@ function boundedString(value: unknown, label: string, maxBytes: number, allowEmp
   return value
 }
 
+function defineJsonOwnProperty(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  })
+}
+
 function cloneJson(value: unknown, label: string, seen = new Set<object>(), depth = 0): unknown {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value
   if (typeof value === "number") {
@@ -177,7 +186,7 @@ function cloneJson(value: unknown, label: string, seen = new Set<object>(), dept
     const output: Record<string, unknown> = {}
     for (const [key, item] of ownDataEntries(input, label).sort(([a], [b]) => compareStrings(a, b))) {
       if (item === undefined) throw new TypeError(`${label} contains undefined field: ${key}`)
-      output[key] = cloneJson(item, `${label}.${key}`, seen, depth + 1)
+      defineJsonOwnProperty(output, key, cloneJson(item, `${label}.${key}`, seen, depth + 1))
     }
     return Object.freeze(output)
   } finally {
@@ -197,7 +206,7 @@ function cloneMutableJson(value: unknown, label: string, depth = 0): unknown {
   const input = asRecord(value, label)
   const output: Record<string, unknown> = {}
   for (const [key, item] of ownDataEntries(input, label)) {
-    output[key] = cloneMutableJson(item, `${label}.${key}`, depth + 1)
+    defineJsonOwnProperty(output, key, cloneMutableJson(item, `${label}.${key}`, depth + 1))
   }
   return output
 }
