@@ -22,7 +22,7 @@ function harness(provider: ModelProvider, tool?: RuntimeTool): {
   return { runner: new AgentTurnRunner(providers, tools, orchestrator, session), sink }
 }
 
-test("runs a deterministic model turn and records model evidence without raw content", async () => {
+test("runs a deterministic model turn with reconstructable request evidence and coarse response evidence", async () => {
   const { runner, sink } = harness(
     new FixtureModelProvider([{ assistant: "hello", toolCalls: [], finishReason: "stop" }]),
   )
@@ -34,9 +34,18 @@ test("runs a deterministic model turn and records model evidence without raw con
 
   assert.equal(result.assistant, "hello")
   assert.deepEqual(result.toolResults, [])
-  assert.deepEqual(sink.events.map((event) => event.type), ["model.requested", "model.responded", "assistant.message"])
-  assert.equal(JSON.stringify(sink.events).includes("secret prompt"), false)
-  assert.equal(JSON.stringify(sink.events).includes("hello"), false)
+  assert.deepEqual(sink.events.map((event) => event.type), [
+    "model.request.snapshot",
+    "model.requested",
+    "model.responded",
+    "assistant.message",
+  ])
+  const snapshot = sink.events[0]
+  assert.equal(snapshot?.type, "model.request.snapshot")
+  assert.deepEqual((snapshot?.payload as { messages: unknown }).messages, [{ role: "user", content: "secret prompt" }])
+  const coarseEvents = sink.events.slice(1)
+  assert.equal(JSON.stringify(coarseEvents).includes("secret prompt"), false)
+  assert.equal(JSON.stringify(coarseEvents).includes("hello"), false)
 })
 
 test("routes provider tool calls through the canonical RuntimeOrchestrator", async () => {
@@ -69,6 +78,7 @@ test("routes provider tool calls through the canonical RuntimeOrchestrator", asy
   assert.equal(executions, 1)
   assert.deepEqual(result.toolResults, [{ id: "call-1", name: "test.echo", output: { echoed: "verified" } }])
   assert.deepEqual(sink.events.map((event) => event.type), [
+    "model.request.snapshot",
     "model.requested",
     "model.responded",
     "model.tool_call.requested",
@@ -77,7 +87,7 @@ test("routes provider tool calls through the canonical RuntimeOrchestrator", asy
   ])
 })
 
-test("provider failures are recorded and propagated", async () => {
+test("provider failures are recorded and propagated after request snapshot evidence", async () => {
   const failing: ModelProvider = {
     name: "failing",
     async generate() {
@@ -89,7 +99,7 @@ test("provider failures are recorded and propagated", async () => {
     runner.run({ provider: "failing", model: "fixture/model", messages: [{ role: "user", content: "x" }] }),
     /provider unavailable/,
   )
-  assert.deepEqual(sink.events.map((event) => event.type), ["model.requested", "model.failed"])
+  assert.deepEqual(sink.events.map((event) => event.type), ["model.request.snapshot", "model.requested", "model.failed"])
 })
 
 test("provider registry rejects duplicate provider names", () => {
