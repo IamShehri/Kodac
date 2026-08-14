@@ -539,6 +539,65 @@ test("repo.apply_patch propagates cancellation during pending approval and late 
   }
 })
 
+test("applyPatch rechecks cancellation after approval resolution and before mutation", async () => {
+  const dir = await root()
+  const controller = new AbortController()
+  const evidence: ApprovalEvidence[] = []
+  let scheduledAbort = false
+  try {
+    const fs = new NodeWorkspaceFileSystem(dir)
+    const runtime: ApprovalRuntime = {
+      evidence: {
+        commit(record) {
+          evidence.push(record)
+          if (record.phase === "asked") return durableCommit(record)
+          const acknowledgment: Record<string, unknown> = {
+            version: KDO_H4_R1_EVIDENCE_COMMIT_VERSION,
+            evidenceIdentity: record.evidenceIdentity,
+          }
+          Object.defineProperty(acknowledgment, "durability", {
+            enumerable: true,
+            get() {
+              if (!scheduledAbort) {
+                scheduledAbort = true
+                queueMicrotask(() => controller.abort(new Error("cancelled before patch mutation")))
+              }
+              return "durable"
+            },
+          })
+          return acknowledgment
+        },
+      },
+      service: {
+        decide(request) {
+          return {
+            version: KDO_H4_R1_APPROVAL_VERSION,
+            requestIdentity: request.requestIdentity,
+            requestInstanceId: request.requestInstanceId,
+            outcome: "allowed-once",
+          }
+        },
+      },
+    }
+    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
+
+    await assert.rejects(
+      () => gateway.applyPatch(patch, undefined, { signal: controller.signal }),
+      ExecutionBlockedError,
+    )
+
+    assert.equal(scheduledAbort, true)
+    assert.equal(controller.signal.aborted, true)
+    assert.deepEqual(evidence.map((record) => [record.phase, record.outcome]), [
+      ["asked", undefined],
+      ["decided", "allowed-once"],
+    ])
+    assert.equal(await fs.exists("proof.txt"), false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test("K2 execution receipt persistence failure remains ExecutionUnprovenError after allowed-once", async () => {
   const dir = await root()
   const evidence: ApprovalEvidence[] = []

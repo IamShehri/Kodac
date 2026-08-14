@@ -326,6 +326,16 @@ export class ExecutionGateway {
     const policy = await this.policy.evaluate(intent)
     await observer?.onPolicy?.(intent, policy)
     const approval = await this.authorize(intent, policy, startedAt, observer, options.signal)
+    if (options.signal?.aborted) {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        "operation aborted before patch execution",
+        "Execution blocked: operation aborted before patch execution",
+      )
+    }
 
     let affected: Awaited<ReturnType<typeof applyHunks>>
     try {
