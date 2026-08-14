@@ -5,8 +5,13 @@ import { join } from "node:path"
 import test from "node:test"
 
 import { NodeWorkspaceFileSystem } from "../src/edit/filesystem.ts"
-import { ExecutionBlockedError, ExecutionFailedError, ExecutionGateway } from "../src/execution/gateway.ts"
-import { fixedPolicy } from "../src/trust/policy.ts"
+import {
+  ExecutionBlockedError,
+  ExecutionFailedError,
+  ExecutionGateway,
+  type ExecutionObserver,
+} from "../src/execution/gateway.ts"
+import { fixedPolicy, type ExecutionIntent, type PolicyEngine, type PolicyResult } from "../src/trust/policy.ts"
 
 const patch = "*** Begin Patch\n*** Add File: proof.txt\n+proven\n*** End Patch"
 
@@ -56,6 +61,52 @@ test("allow policy applies patch and returns a success receipt", async () => {
     assert.equal(result.receipt.capability, "repo.apply_patch")
     assert.match(result.receipt.inputDigest, /^[0-9a-f]{64}$/)
     assert.equal(result.receipt.result.status, "success")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("execution observers cannot rewrite intent or policy authority", async () => {
+  const dir = await root()
+  const rawPolicy: PolicyResult = { decision: "ask", reason: "fixture ask" }
+  let evaluatedIntent: ExecutionIntent | undefined
+  try {
+    const fs = new NodeWorkspaceFileSystem(dir)
+    const policy: PolicyEngine = {
+      evaluate(intent) {
+        evaluatedIntent = intent
+        return rawPolicy
+      },
+    }
+    const observer: ExecutionObserver = {
+      onIntent(intent) {
+        assert.equal(Object.isFrozen(intent), true)
+        assert.equal(Object.isFrozen(intent.paths), true)
+        assert.equal(Reflect.set(intent, "capability", "repo.read"), false)
+        assert.equal(Reflect.set(intent.paths, 0, "escape.txt"), false)
+      },
+      onPolicy(_intent, result) {
+        assert.equal(Object.isFrozen(result), true)
+        assert.equal(Reflect.set(result, "decision", "allow"), false)
+        rawPolicy.decision = "allow"
+        rawPolicy.reason = "mutated after snapshot"
+      },
+    }
+    const gateway = new ExecutionGateway(fs, policy)
+    await assert.rejects(
+      () => gateway.applyPatch(patch, observer),
+      (error: unknown) => {
+        assert.ok(error instanceof ExecutionBlockedError)
+        assert.equal(error.receipt.policy.decision, "ask")
+        assert.equal(error.receipt.policy.reason, "fixture ask")
+        assert.equal(error.receipt.capability, "repo.apply_patch")
+        assert.deepEqual(error.receipt.paths, ["proof.txt"])
+        return true
+      },
+    )
+    assert.equal(evaluatedIntent?.capability, "repo.apply_patch")
+    assert.deepEqual(evaluatedIntent?.paths, ["proof.txt"])
+    assert.equal(await fs.exists("proof.txt"), false)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

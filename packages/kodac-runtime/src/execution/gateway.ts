@@ -60,6 +60,25 @@ function uniquePaths(paths: string[]): string[] {
   return [...new Set(paths)].sort()
 }
 
+function immutableExecutionIntent(intent: ExecutionIntent): ExecutionIntent {
+  const paths = Object.freeze([...intent.paths]) as unknown as string[]
+  return Object.freeze({
+    capability: intent.capability,
+    paths,
+    inputDigest: intent.inputDigest,
+  })
+}
+
+function immutablePolicyResult(value: PolicyResult): PolicyResult {
+  const decision = value.decision
+  const reason = value.reason
+  if (decision !== "allow" && decision !== "ask" && decision !== "deny") {
+    throw new TypeError("policy decision is invalid")
+  }
+  if (typeof reason !== "string") throw new TypeError("policy reason must be a string")
+  return Object.freeze({ decision, reason })
+}
+
 function portablePath(path: string): string {
   return path.split(sep).join("/")
 }
@@ -316,14 +335,14 @@ export class ExecutionGateway {
         hunk.type === "update" && hunk.movePath ? [hunk.path, hunk.movePath] : [hunk.path],
       ),
     )
-    const intent: ExecutionIntent = {
+    const intent = immutableExecutionIntent({
       capability: "repo.apply_patch",
       paths,
       inputDigest: sha256(patchText),
-    }
+    })
     await observer?.onIntent?.(intent)
 
-    const policy = await this.policy.evaluate(intent)
+    const policy = immutablePolicyResult(await this.policy.evaluate(intent))
     await observer?.onPolicy?.(intent, policy)
     const approval = await this.authorize(intent, policy, startedAt, observer, options.signal)
     if (options.signal?.aborted) {
@@ -520,7 +539,7 @@ export class ExecutionGateway {
     if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) throw new Error("maxOutputBytes must be a positive integer")
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive integer")
 
-    const intent: ExecutionIntent = {
+    const intent = immutableExecutionIntent({
       capability,
       paths,
       inputDigest: sha256(JSON.stringify({
@@ -531,9 +550,9 @@ export class ExecutionGateway {
         timeoutMs,
         env: environment,
       })),
-    }
+    })
     await observer?.onIntent?.(intent)
-    const policy = await this.policy.evaluate(intent)
+    const policy = immutablePolicyResult(await this.policy.evaluate(intent))
     await observer?.onPolicy?.(intent, policy)
 
     // H4-R1 cannot prove executable-byte identity through path-based execFile.
