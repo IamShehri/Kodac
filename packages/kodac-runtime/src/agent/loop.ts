@@ -227,7 +227,7 @@ export class BoundedAgentLoop {
   private async runExclusive(input: AgentLoopInput): Promise<AgentLoopResult> {
     const limits = resolveLimits(input.limits)
     const startedAt = this.clock()
-    const runJournalOffset = this.session.eventsSnapshot().length
+    const runStartSequence = this.session.eventsSnapshot().at(-1)?.sequence ?? 0
     let turnsUsed = 0
     let toolCallsUsed = 0
     let failuresUsed = 0
@@ -236,7 +236,7 @@ export class BoundedAgentLoop {
     const toolCounts = new Map<string, number>()
     const turnCounts = new Map<string, number>()
 
-    const runEvents = () => this.session.eventsSnapshot().slice(runJournalOffset)
+    const runEvents = () => this.session.eventsSnapshot(runStartSequence)
 
     const budget = (): AgentLoopBudget => ({
       turnsUsed,
