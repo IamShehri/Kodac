@@ -5,7 +5,11 @@ import { ProviderRegistry, type ModelProvider } from "../src/model/provider.ts"
 import { AgentTurnRunner } from "../src/model/turn.ts"
 import { InMemoryEventSink } from "../src/protocol/event.ts"
 import { RuntimeOrchestrator } from "../src/runtime/orchestrator.ts"
-import { KDO_H2_R1_LIMITS } from "../src/session/model-visible-request.ts"
+import {
+  KDO_H2_R1_LIMITS,
+  createModelVisibleRequestSnapshot,
+  materializeModelVisibleRequest,
+} from "../src/session/model-visible-request.ts"
 import { RuntimeSession } from "../src/session/session.ts"
 import { ToolRegistry, type RuntimeTool } from "../src/tools/registry.ts"
 
@@ -21,6 +25,17 @@ function harness(provider: ModelProvider, tool?: RuntimeTool): {
   const providers = new ProviderRegistry()
   providers.register(provider)
   return { runner: new AgentTurnRunner(providers, tools, orchestrator, session), sink }
+}
+
+function withProtoMember(value: unknown): Record<string, unknown> {
+  const record: Record<string, unknown> = {}
+  Object.defineProperty(record, "__proto__", {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  })
+  return record
 }
 
 test("runs a deterministic model turn with reconstructable request evidence and coarse response evidence", async () => {
@@ -76,6 +91,45 @@ test("snapshot construction rejection records coarse failure evidence and never 
   })
   assert.equal(JSON.stringify(sink.events).includes(secretMarker), false)
   assert.equal(JSON.stringify(sink.events).includes("exceeds"), false)
+})
+
+test("preserves own __proto__ JSON members through snapshot and provider materialization", () => {
+  for (const value of ["primitive", null, { nested: true }]) {
+    const input = withProtoMember(value)
+    const schema = withProtoMember(value)
+    const snapshot = createModelVisibleRequestSnapshot({
+      provider: "fixture",
+      model: "fixture/model",
+      messages: [{
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "call-1", name: "test.tool", input }],
+      }],
+      tools: [{
+        name: "test.tool",
+        capability: "test.tool",
+        description: "test",
+        inputSchema: schema,
+      }],
+    })
+
+    const snapshotInput = snapshot.messages[0]?.toolCalls?.[0]?.input as Record<string, unknown>
+    const snapshotSchema = snapshot.tools[0]?.inputSchema as Record<string, unknown>
+    assert.equal(Object.prototype.hasOwnProperty.call(snapshotInput, "__proto__"), true)
+    assert.equal(Object.prototype.hasOwnProperty.call(snapshotSchema, "__proto__"), true)
+    assert.deepEqual(Object.getOwnPropertyDescriptor(snapshotInput, "__proto__")?.value, value)
+    assert.deepEqual(Object.getOwnPropertyDescriptor(snapshotSchema, "__proto__")?.value, value)
+
+    const materialized = materializeModelVisibleRequest(snapshot)
+    const materializedInput = materialized.messages[0]?.toolCalls?.[0]?.input as Record<string, unknown>
+    const materializedSchema = materialized.tools[0]?.inputSchema as Record<string, unknown>
+    assert.equal(Object.prototype.hasOwnProperty.call(materializedInput, "__proto__"), true)
+    assert.equal(Object.prototype.hasOwnProperty.call(materializedSchema, "__proto__"), true)
+    assert.deepEqual(Object.getOwnPropertyDescriptor(materializedInput, "__proto__")?.value, value)
+    assert.deepEqual(Object.getOwnPropertyDescriptor(materializedSchema, "__proto__")?.value, value)
+    assert.equal(Object.getPrototypeOf(materializedInput), Object.prototype)
+    assert.equal(Object.getPrototypeOf(materializedSchema), Object.prototype)
+  }
 })
 
 test("routes provider tool calls through the canonical RuntimeOrchestrator", async () => {
