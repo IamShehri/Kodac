@@ -17,7 +17,9 @@ Supplemental legacy-test authorization merge: `4a070a3258521bd34ab9dd4476739091e
 
 Certified pre-ledger head: `2e0cab36288b5b1177396a25bedb69349a25d336`
 
-Review-reconciliation candidate before this ledger update: `64dbb6add16b058e2324f00542bda87a4579e591`
+Review-reconciliation candidate before the first post-ledger evidence update: `64dbb6add16b058e2324f00542bda87a4579e591`
+
+Final-review follow-up candidate before this ledger update: `528e9446483ce26ea60d23e00243c82a98d6374a`
 
 This file records H2-R1 evidence only. It does not self-certify the commit that contains this ledger. Final certification is established externally by exact-head GitHub Actions and review state so that recording certification does not recursively create another uncertified repository head.
 
@@ -38,6 +40,8 @@ The request identity is deterministic SHA-256 over the structural request preima
 The implementation fails closed for malformed model-visible structures, including unknown fields, explicit undefined values, non-JSON primitives, non-finite numbers, cycles, sparse arrays, duplicate tool-call ids, duplicate tool names, non-plain objects, object accessors, array accessors, extra array fields, symbol-keyed array fields, and array subclasses.
 
 Object and array descriptor inspection does not invoke getters or serialization hooks while validating these structures.
+
+Arbitrary valid JSON member names are preserved as own data properties during both immutable snapshot cloning and mutable provider materialization. In particular, a JSON member named `__proto__` is defined as an own enumerable property rather than invoking the inherited prototype setter, preserving primitive, `null`, and object-valued members exactly.
 
 JSON nesting is explicitly bounded by `maxJsonDepth`; deeply nested caller data is rejected with an attributable typed validation error before unbounded recursive traversal can reach provider execution.
 
@@ -158,7 +162,31 @@ At that candidate:
   - Ubuntu `94642494000`: typecheck, tests, benchmark PASS;
   - K2 runtime gate `94642603744`: PASS.
 
-All five review threads were adjudicated and resolved before this ledger update. These results are historical evidence for the parent review-reconciliation candidate, not self-certification of the commit containing this ledger update.
+All five review threads were adjudicated and resolved before the next ledger update. These results are historical evidence for the parent review-reconciliation candidate, not self-certification of the commit containing this ledger.
+
+## Final exact-head review follow-up
+
+The subsequent exact-head CodeRabbit review completed against head `0358e41d2c7b553e4a52c6a8349c91488122da63` and surfaced one additional valid reconstruction finding: assigning arbitrary JSON keys into ordinary `{}` objects caused the special key `__proto__` to invoke the inherited prototype setter instead of being preserved as an own JSON data member.
+
+The correction replaced arbitrary-key assignment in both immutable snapshot cloning and mutable provider materialization with own-property definition semantics. Regression coverage proves preservation of primitive, `null`, and object-valued `__proto__` members in both the durable snapshot and materialized provider request while retaining ordinary `Object.prototype` for the copied objects.
+
+Final-review follow-up candidate:
+
+`528e9446483ce26ea60d23e00243c82a98d6374a`
+
+At that candidate:
+
+- governance run `31760199283`: SUCCESS;
+- K3-R4 run `31760199278`: SUCCESS;
+- K3-R5 run `31760199345`: SUCCESS;
+- K2 runtime run `31760199400`: SUCCESS;
+  - runtime classifier `94644718025`: PASS;
+  - Windows `94644741201`: typecheck, tests, benchmark PASS;
+  - Ubuntu `94644741241`: typecheck, tests, benchmark PASS;
+  - macOS `94644741282`: typecheck, tests, benchmark PASS;
+  - K2 runtime gate `94644890190`: PASS.
+
+The `__proto__` review thread was resolved only after those exact-head gates passed. These results are historical evidence for the parent follow-up candidate and do not self-certify the commit containing this ledger update.
 
 ## Completion claim
 
