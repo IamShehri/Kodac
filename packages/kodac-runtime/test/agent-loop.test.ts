@@ -196,6 +196,111 @@ test("separate loop.run invocations use independent canonical projection windows
   assert.equal(projection.messages.at(-1)?.content, "second done")
 })
 
+test("RuntimeSession serializes concurrent sink appends before assigning sequence", async () => {
+  let appendCalls = 0
+  let signalFirstStarted!: () => void
+  let releaseFirst!: () => void
+  const firstStarted = new Promise<void>((resolve) => { signalFirstStarted = resolve })
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+
+  class DelayedSink implements EventSink {
+    readonly events: KodacEvent[] = []
+
+    async append(event: KodacEvent): Promise<void> {
+      appendCalls += 1
+      if (appendCalls === 1) {
+        signalFirstStarted()
+        await firstGate
+      }
+      this.events.push(event)
+    }
+  }
+
+  const sink = new DelayedSink()
+  const session = new RuntimeSession(sink, "session-concurrent-emits")
+  const first = session.emit("agent.turn.started", { turn: 1 })
+  await firstStarted
+  const second = session.emit("agent.turn.completed", { turn: 1 })
+  await Promise.resolve()
+
+  assert.equal(appendCalls, 1)
+  assert.equal(sink.events.length, 0)
+  releaseFirst()
+
+  const [firstEvent, secondEvent] = await Promise.all([first, second])
+  assert.deepEqual([firstEvent.sequence, secondEvent.sequence], [1, 2])
+  assert.deepEqual(sink.events.map((event) => event.sequence), [1, 2])
+  assert.deepEqual(session.eventsSnapshot().map((event) => event.sequence), [1, 2])
+})
+
+test("concurrent loop runs sharing one RuntimeSession are serialized into exclusive projection windows", async () => {
+  let calls = 0
+  let signalFirstStarted!: () => void
+  let releaseFirst!: () => void
+  const firstStarted = new Promise<void>((resolve) => { signalFirstStarted = resolve })
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+  const requests: ModelProviderRequest[] = []
+
+  const provider: ModelProvider = {
+    name: "concurrent",
+    async generate(request) {
+      calls += 1
+      requests.push({
+        ...request,
+        messages: request.messages.map((message) => ({ ...message })),
+        tools: [...request.tools],
+      })
+      if (calls === 1) {
+        signalFirstStarted()
+        await firstGate
+        return { assistant: "first done", finishReason: "stop", toolCalls: [] }
+      }
+      return { assistant: "second done", finishReason: "stop", toolCalls: [] }
+    },
+  }
+
+  const sink = new InMemoryEventSink()
+  const session = new RuntimeSession(sink, "session-concurrent-loops")
+  const registry = new ToolRegistry()
+  const orchestrator = new RuntimeOrchestrator(registry, session)
+  const providers = new ProviderRegistry()
+  providers.register(provider)
+  const runner = new AgentTurnRunner(providers, registry, orchestrator, session)
+  const firstLoop = new BoundedAgentLoop(runner, session)
+  const secondLoop = new BoundedAgentLoop(runner, session)
+
+  const firstRun = firstLoop.run({
+    provider: "concurrent",
+    model: "fixture/model",
+    messages: [{ role: "user", content: "first concurrent run" }],
+  })
+  await firstStarted
+  const secondRun = secondLoop.run({
+    provider: "concurrent",
+    model: "fixture/model",
+    messages: [{ role: "user", content: "second concurrent run" }],
+  })
+  await Promise.resolve()
+
+  assert.equal(calls, 1)
+  releaseFirst()
+  const [firstResult, secondResult] = await Promise.all([firstRun, secondRun])
+
+  assert.equal(firstResult.status, "completed")
+  assert.equal(secondResult.status, "completed")
+  assert.equal(calls, 2)
+  assert.deepEqual(requests[0]?.messages, [{ role: "user", content: "first concurrent run" }])
+  assert.deepEqual(requests[1]?.messages, [{ role: "user", content: "second concurrent run" }])
+
+  const startIndexes = sink.events
+    .map((event, index) => event.type === "agent.loop.started" ? index : -1)
+    .filter((index) => index >= 0)
+  assert.equal(startIndexes.length, 2)
+  const firstCompletedIndex = sink.events.findIndex((event) => event.type === "agent.loop.completed")
+  assert.ok(firstCompletedIndex >= 0)
+  assert.ok((startIndexes[1] ?? 0) > firstCompletedIndex)
+})
+
 test("blocks an identical tool call before a second execution", async () => {
   let executions = 0
   const countingTool: RuntimeTool<{ value: string }, { echoed: string }> = {
