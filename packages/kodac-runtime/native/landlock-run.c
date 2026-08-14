@@ -373,6 +373,9 @@ int main(int argc, char **argv) {
   if (cli.controlled) {
     code = controlled_ready_and_wait(partial, abi);
     if (code != 0) return code;
+    if (signal(SIGPIPE, SIG_DFL) == SIG_ERR) {
+      return fail("cannot restore SIGPIPE before exec", strerror(errno));
+    }
   } else if (partial) {
     fprintf(stderr,
             "kodac-landlock: claim-set=%s enforcement=partial abi=%ld\n",

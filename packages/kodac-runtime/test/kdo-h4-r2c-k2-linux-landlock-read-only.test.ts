@@ -76,6 +76,18 @@ function compileLauncher(root: string): string {
   return binary
 }
 
+function compileSigpipeProbe(root: string): string {
+  const sourcePath = join(root, "sigpipe-probe.c")
+  const binary = join(root, "sigpipe-probe")
+  writeFileSync(sourcePath, `#include <signal.h>\n#include <stdio.h>\nint main(void) {\n  struct sigaction action;\n  if (sigaction(SIGPIPE, NULL, &action) != 0) return 2;\n  if (action.sa_handler != SIG_DFL) return 3;\n  fputs("SIGPIPE_DEFAULT", stdout);\n  return 0;\n}\n`, "utf8")
+  const compile = spawnSync("cc", ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", sourcePath, "-o", binary], {
+    encoding: "utf8",
+    shell: false,
+  })
+  assert.equal(compile.status, 0, `SIGPIPE probe compile failed: ${compile.stderr}`)
+  return binary
+}
+
 function durableRuntime(launcherPath: string, onCommit?: (record: DurableConfinementEvidenceRecord) => void) {
   return createLinuxLandlockRuntimeConfig({
     launcherPath,
@@ -227,7 +239,7 @@ test("Linux retained open-file bytes survive configured-path replacement", {
   }
 })
 
-test("H4-R2C Linux integration proves full READY durable evidence before GO no-write ASK blocking cancellation and FD cleanup", {
+test("H4-R2C Linux integration proves full READY durable evidence before GO no-write ASK blocking cancellation FD cleanup and target SIGPIPE defaults", {
   skip: process.platform !== "linux",
 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "kodac-h4-r2c-"))
@@ -282,6 +294,16 @@ test("H4-R2C Linux integration proves full READY durable evidence before GO no-w
       { timeoutMs: 10_000 },
     )
     assert.equal(fdClean.stdout, "FD_CLEAN")
+
+    const sigpipeProbe = compileSigpipeProbe(root)
+    const sigpipe = await gateway.runConfinedReadOnlyCommand(
+      "fixture.landlock-sigpipe-default",
+      sigpipeProbe,
+      [],
+      undefined,
+      { timeoutMs: 10_000 },
+    )
+    assert.equal(sigpipe.stdout, "SIGPIPE_DEFAULT")
 
     const commitMarker = join(root, "durable-before-go.txt")
     const orderingRuntime = durableRuntime(binary, () => writeFileSync(commitMarker, "COMMITTED", "utf8"))
