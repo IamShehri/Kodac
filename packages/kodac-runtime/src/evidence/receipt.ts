@@ -8,12 +8,21 @@ export type ReceiptResult =
   | { status: "blocked"; reason: string }
   | { status: "failure"; error: string }
 
+export interface ApprovalReceiptBinding {
+  version: "kodac-h4-r1-one-shot-approval-v1"
+  requestIdentity: string
+  requestInstanceId: string
+  decisionEvidenceIdentity: string
+  outcome: "allowed-once"
+}
+
 export interface ExecutionReceipt {
   receiptId: string
   capability: string
   inputDigest: string
   paths: string[]
   policy: PolicyResult
+  approval?: ApprovalReceiptBinding
   startedAt: string
   completedAt: string
   result: ReceiptResult
