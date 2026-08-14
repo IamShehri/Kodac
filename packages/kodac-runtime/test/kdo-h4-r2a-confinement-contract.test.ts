@@ -259,8 +259,8 @@ test("H4-R2A production module is pure and protected authority surfaces remain b
   assert.match(confinementSource, /from "node:util"/)
   assert.doesNotMatch(confinementSource, /child_process|execFile|spawn\(|fetch\(|http|https|readFile|writeFile|appendFile|process\.env|Deno|Bun/)
 
-  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "8b481c226276d0b06fabc8d614c1295cd0881a6a")
+  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "411c2ce42fa9bbf0abd24d4d2a3c8ec97e5db0be")
   assert.equal(gitBlobSha1(source("../src/trust/policy.ts")), "b4134e430204123bebe053ffc9105f05fca611c9")
   assert.equal(gitBlobSha1(source("../src/trust/approval.ts")), "d36a604cb1957bc65dac3978c626ba48a9b299fb")
-  assert.equal(gitBlobSha1(source("../src/evidence/receipt.ts")), "bc11267496f8c8a2ca1dac713baccf88ec962b19")
+  assert.equal(gitBlobSha1(source("../src/evidence/receipt.ts")), "3f84753e4864b0a6df3e60baa1aad370c40a802b")
 })

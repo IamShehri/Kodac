@@ -277,11 +277,11 @@ test("TypeScript adapter remains pure and protected authority surfaces stay byte
   assert.deepEqual(importSpecifiers, ["./confinement.ts", "node:crypto", "node:path", "node:util"])
   assert.doesNotMatch(adapter, /process\.env|\bspawnSync\s*\(|\bspawn\s*\(|\bexecFile\s*\(|\bBun\.spawn\b|\bDeno\.Command\b|import\s*\(/)
 
-  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "8b481c226276d0b06fabc8d614c1295cd0881a6a")
+  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "411c2ce42fa9bbf0abd24d4d2a3c8ec97e5db0be")
   assert.equal(gitBlobSha1(source("../src/trust/confinement.ts")), "873f235120645c0a12f10a5bff7e9591db6bb341")
   assert.equal(gitBlobSha1(source("../src/trust/policy.ts")), "b4134e430204123bebe053ffc9105f05fca611c9")
   assert.equal(gitBlobSha1(source("../src/trust/approval.ts")), "d36a604cb1957bc65dac3978c626ba48a9b299fb")
-  assert.equal(gitBlobSha1(source("../src/evidence/receipt.ts")), "bc11267496f8c8a2ca1dac713baccf88ec962b19")
+  assert.equal(gitBlobSha1(source("../src/evidence/receipt.ts")), "3f84753e4864b0a6df3e60baa1aad370c40a802b")
   assert.equal(gitBlobSha1(source("../src/verification/done-gate.ts")), "067e147569fa52cc2b04c5df26fbe20a01e958e9")
   assert.equal(gitBlobSha1(source("../src/agent/loop.ts")), "a5b7c2bbb2a5f7658f683e7baf45655b41b775f8")
   assert.equal(gitBlobSha1(source("../src/tools/registry.ts")), "0bdf5cfd02efda7cab0c81976c7735bc7b46081b")

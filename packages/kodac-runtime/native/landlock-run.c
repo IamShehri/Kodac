@@ -1,7 +1,8 @@
 /*
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * Kodac H4-R2B Linux Landlock launcher primitive.
+ * Kodac H4-R2B Linux Landlock launcher primitive, extended by H4-R2C with an
+ * optional K2-controlled pre-exec READY/GO handshake.
  * Adapted from deepseek-ai/deepseek-harness at
  * 47f943859bef60e4160492346772ded9b24f765a:
  * native/landlock-run/packages/entry/src/main.c
@@ -9,16 +10,18 @@
  *
  * The donor subproject is BSD-3-Clause. See ../THIRD_PARTY_NOTICES.md.
  *
- * This source is intentionally not wired into Kodac production execution in
- * H4-R2B. Focused tests compile it into a temporary artifact and exercise the
- * intrinsic restrict-self-then-exec primitive only.
- *
  * CLI:
  *   kodac-landlock-run [--ro <path>]... [--rw <path>]... -- <argv>...
+ *   kodac-landlock-run --controlled [--ro <path>]... [--rw <path>]... -- <argv>...
  *   kodac-landlock-run --probe
  *
  * Probe stdout (exactly one line on success):
  *   kodac-landlock-v1 abi=<N> claim-set=kodac-linux-landlock-fs-v1 enforcement=<full|partial>
+ *
+ * Controlled mode uses fixed inherited descriptors:
+ *   3 = already-verified launcher artifact descriptor used by K2 for exec
+ *   4 = launcher -> K2 READY channel
+ *   5 = K2 -> launcher GO permit channel
  *
  * `full` is deliberately local to the Kodac fs-v1 claim set (Landlock
  * filesystem rights introduced through ABI 5). It does not mean all modern
@@ -28,6 +31,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +81,11 @@ struct landlock_path_beneath_attr {
 #endif
 
 #define EXIT_LAUNCHER_FAILURE 125
+#define KODAC_LAUNCHER_FD 3
+#define KODAC_READY_FD 4
+#define KODAC_PERMIT_FD 5
+#define KODAC_READY_MAX_BYTES 128
+#define KODAC_PERMIT_MAX_BYTES 4
 
 static const char NOT_ENFORCED_MESSAGE[] =
   "landlock is not enforced by this kernel (ABI unsupported or disabled)";
@@ -98,6 +107,7 @@ static int fail_usage(const char *message, const char *detail) {
 
 struct cli {
   int probe;
+  int controlled;
   const char **ro;
   size_t ro_count;
   const char **rw;
@@ -116,6 +126,10 @@ static int parse(int argc, char **argv, struct cli *cli) {
     if (strcmp(arg, "--probe") == 0) {
       if (argc != 2) return fail_usage("--probe takes no other arguments", NULL);
       cli->probe = 1;
+      index += 1;
+    } else if (strcmp(arg, "--controlled") == 0) {
+      if (cli->controlled) return fail_usage("--controlled may be supplied only once", NULL);
+      cli->controlled = 1;
       index += 1;
     } else if (strcmp(arg, "--ro") == 0 || strcmp(arg, "--rw") == 0) {
       if (index + 1 >= argc) return fail_usage(arg, " requires a path");
@@ -238,6 +252,98 @@ static int restrict_self(const struct cli *cli, int *partial,
   return 0;
 }
 
+static int require_fd_direction(int fd, int need_write, const char *label) {
+  int descriptor_flags = fcntl(fd, F_GETFD);
+  if (descriptor_flags < 0) return fail(label, "descriptor is not open");
+
+  int status_flags = fcntl(fd, F_GETFL);
+  if (status_flags < 0) return fail(label, "cannot inspect descriptor flags");
+  int access = status_flags & O_ACCMODE;
+  if (need_write && access == O_RDONLY) return fail(label, "descriptor is not writable");
+  if (!need_write && access == O_WRONLY) return fail(label, "descriptor is not readable");
+  return 0;
+}
+
+static int set_cloexec(int fd, const char *label) {
+  int flags = fcntl(fd, F_GETFD);
+  if (flags < 0) return fail(label, "descriptor is not open");
+  if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) != 0) {
+    return fail(label, "cannot set FD_CLOEXEC");
+  }
+  return 0;
+}
+
+static int write_all(int fd, const char *buffer, size_t length) {
+  size_t offset = 0;
+  while (offset < length) {
+    ssize_t written = write(fd, buffer + offset, length - offset);
+    if (written < 0) {
+      if (errno == EINTR) continue;
+      return fail("READY channel write failed", strerror(errno));
+    }
+    if (written == 0) return fail("READY channel write returned zero", NULL);
+    offset += (size_t)written;
+  }
+  return 0;
+}
+
+static int controlled_ready_and_wait(int partial, long abi) {
+  if (fcntl(KODAC_LAUNCHER_FD, F_GETFD) < 0) {
+    return fail("controlled launcher fd 3", "descriptor is not open");
+  }
+  int code = require_fd_direction(KODAC_READY_FD, 1, "controlled READY fd 4");
+  if (code != 0) return code;
+  code = require_fd_direction(KODAC_PERMIT_FD, 0, "controlled permit fd 5");
+  if (code != 0) return code;
+
+  if (KODAC_READY_FD == KODAC_PERMIT_FD ||
+      KODAC_LAUNCHER_FD == KODAC_READY_FD ||
+      KODAC_LAUNCHER_FD == KODAC_PERMIT_FD) {
+    return fail("controlled descriptor map is aliased", NULL);
+  }
+
+  if (close(KODAC_LAUNCHER_FD) != 0) {
+    return fail("controlled launcher fd 3", "cannot close descriptor after launcher exec");
+  }
+  code = set_cloexec(KODAC_READY_FD, "controlled READY fd 4");
+  if (code != 0) return code;
+  code = set_cloexec(KODAC_PERMIT_FD, "controlled permit fd 5");
+  if (code != 0) return code;
+
+  char ready[KODAC_READY_MAX_BYTES + 1];
+  int ready_length = snprintf(
+      ready, sizeof ready,
+      "kodac-landlock-ready-v1 abi=%ld claim-set=%s enforcement=%s\n",
+      abi, KODAC_FS_CLAIM_SET, partial ? "partial" : "full");
+  if (ready_length <= 0 || ready_length > KODAC_READY_MAX_BYTES) {
+    return fail("READY record exceeds protocol bound", NULL);
+  }
+  code = write_all(KODAC_READY_FD, ready, (size_t)ready_length);
+  if (code != 0) return code;
+  if (close(KODAC_READY_FD) != 0) return fail("READY channel close failed", strerror(errno));
+
+  char permit[KODAC_PERMIT_MAX_BYTES];
+  size_t used = 0;
+  for (;;) {
+    if (used == sizeof permit) {
+      return fail("permit protocol contains extra bytes", NULL);
+    }
+    ssize_t count = read(KODAC_PERMIT_FD, permit + used, sizeof permit - used);
+    if (count < 0) {
+      if (errno == EINTR) continue;
+      return fail("permit channel read failed", strerror(errno));
+    }
+    if (count == 0) break;
+    used += (size_t)count;
+  }
+  if (close(KODAC_PERMIT_FD) != 0) return fail("permit channel close failed", strerror(errno));
+
+  if (used != 3 || memcmp(permit, "GO\n", 3) != 0) {
+    return fail("permit protocol requires exact GO\\n followed by EOF", NULL);
+  }
+  return 0;
+}
+
 int main(int argc, char **argv) {
   struct cli cli = { 0 };
   int code = parse(argc, argv, &cli);
@@ -255,12 +361,19 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  if (cli.controlled && signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+    return fail("cannot ignore SIGPIPE for controlled protocol", strerror(errno));
+  }
+
   int partial = 0;
   long abi = 0;
   code = restrict_self(&cli, &partial, &abi);
   if (code != 0) return code;
 
-  if (partial) {
+  if (cli.controlled) {
+    code = controlled_ready_and_wait(partial, abi);
+    if (code != 0) return code;
+  } else if (partial) {
     fprintf(stderr,
             "kodac-landlock: claim-set=%s enforcement=partial abi=%ld\n",
             KODAC_FS_CLAIM_SET, abi);

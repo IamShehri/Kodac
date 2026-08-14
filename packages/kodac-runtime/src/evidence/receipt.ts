@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto"
 import type { PolicyResult } from "../trust/policy.ts"
 import type { AffectedPaths } from "../edit/patch.ts"
+import {
+  validateConfinementReceiptBinding,
+  type ConfinementReceiptBinding,
+} from "../trust/confinement-runtime.ts"
 
 export type ReceiptResult =
   | { status: "success"; affected: AffectedPaths; postStateDigest: string }
@@ -23,6 +27,7 @@ export interface ExecutionReceipt {
   paths: string[]
   policy: PolicyResult
   approval?: ApprovalReceiptBinding
+  confinement?: ConfinementReceiptBinding
   startedAt: string
   completedAt: string
   result: ReceiptResult
@@ -44,6 +49,10 @@ function immutableApproval(approval: ApprovalReceiptBinding): ApprovalReceiptBin
     decisionEvidenceIdentity: approval.decisionEvidenceIdentity,
     outcome: approval.outcome,
   })
+}
+
+function immutableConfinement(confinement: ConfinementReceiptBinding): ConfinementReceiptBinding {
+  return validateConfinementReceiptBinding(confinement)
 }
 
 function immutableAffected(affected: AffectedPaths): AffectedPaths {
@@ -84,6 +93,7 @@ export function createReceipt(input: Omit<ExecutionReceipt, "receiptId">): Execu
     paths: immutableStrings(input.paths),
     policy: immutablePolicy(input.policy),
     ...(input.approval === undefined ? {} : { approval: immutableApproval(input.approval) }),
+    ...(input.confinement === undefined ? {} : { confinement: immutableConfinement(input.confinement) }),
     startedAt: input.startedAt,
     completedAt: input.completedAt,
     result: immutableResult(input.result),
