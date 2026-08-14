@@ -6,6 +6,7 @@ export class RuntimeSession {
   private readonly sink: EventSink
   private sequence = 0
   private readonly journal: KodacEvent[] = []
+  private emitTail: Promise<void> = Promise.resolve()
 
   constructor(sink: EventSink, sessionId: string = randomUUID()) {
     this.sink = sink
@@ -13,17 +14,26 @@ export class RuntimeSession {
   }
 
   async emit<TPayload>(type: KodacEventType, payload: TPayload): Promise<KodacEvent<TPayload>> {
-    const nextSequence = this.sequence + 1
-    const event = createEvent({
-      sessionId: this.sessionId,
-      sequence: nextSequence,
-      type,
-      payload,
-    })
-    await this.sink.append(event)
-    this.journal.push(event)
-    this.sequence = nextSequence
-    return event
+    const previous = this.emitTail.catch(() => undefined)
+    let release!: () => void
+    const slot = new Promise<void>((resolve) => { release = resolve })
+    this.emitTail = previous.then(() => slot)
+    await previous
+    try {
+      const nextSequence = this.sequence + 1
+      const event = createEvent({
+        sessionId: this.sessionId,
+        sequence: nextSequence,
+        type,
+        payload,
+      })
+      await this.sink.append(event)
+      this.journal.push(event)
+      this.sequence = nextSequence
+      return event
+    } finally {
+      release()
+    }
   }
 
   eventsSnapshot(): readonly KodacEvent[] {
