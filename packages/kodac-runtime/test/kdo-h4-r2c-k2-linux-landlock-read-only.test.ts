@@ -191,6 +191,7 @@ test("H4-R2C authority boundaries preserve ASK blocker protected surfaces and ke
   assert.match(gatewaySource, /\/proc\/self\/fd\//)
   assert.match(gatewaySource, /artifact\.handle\.fd/)
   assert.match(gatewaySource, /KDO_H4_R2C_CONTROL_FLAG/)
+  assert.match(gatewaySource, /awaitEvidenceCommit/)
   assert.doesNotMatch(gatewaySource, /workspace-write/)
 
   assert.equal(existsSync(new URL("../../../docs/planning/KODAC_KDO_H4_R2C_K2_LINUX_LANDLOCK_READ_ONLY_EVIDENCE_2026-08-14.md", import.meta.url)), false)
@@ -347,6 +348,32 @@ test("H4-R2C Linux integration proves full READY durable evidence before GO no-w
       ExecutionFailedError,
     )
     assert.equal(existsSync(noCommitTarget), false)
+
+    let neverCommitStartedResolve: (() => void) | undefined
+    const neverCommitStarted = new Promise<void>((resolve) => { neverCommitStartedResolve = resolve })
+    const neverCommitTarget = join(root, "must-not-run-on-never-commit.txt")
+    const neverCommitRuntime = createLinuxLandlockRuntimeConfig({
+      launcherPath: binary,
+      expectedLauncherSha256: sha256File(binary),
+      evidence: {
+        commit() {
+          neverCommitStartedResolve?.()
+          return new Promise<never>(() => {})
+        },
+      },
+      requiredEnforcement: "full",
+    })
+    const neverCommitGateway = new ExecutionGateway(fs, fixedPolicy("allow", "fixture allow"), undefined, neverCommitRuntime)
+    const neverCommitRun = neverCommitGateway.runConfinedReadOnlyCommand(
+      "fixture.landlock-never-commit",
+      process.execPath,
+      ["-e", `require('node:fs').writeFileSync(${JSON.stringify(neverCommitTarget)}, 'BAD')`],
+      undefined,
+      { timeoutMs: 250 },
+    )
+    await neverCommitStarted
+    await assert.rejects(() => neverCommitRun, ExecutionFailedError)
+    assert.equal(existsSync(neverCommitTarget), false)
 
     let releaseCommit: (() => void) | undefined
     let commitStartedResolve: (() => void) | undefined

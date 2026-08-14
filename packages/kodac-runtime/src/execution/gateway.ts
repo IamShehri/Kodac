@@ -285,6 +285,20 @@ function waitForChild(child: ChildProcess): Promise<{ exitCode: number | null; s
   })
 }
 
+function awaitEvidenceCommit<T>(
+  commit: () => Promise<T> | T,
+  exitPromise: Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>,
+): Promise<T> {
+  const commitPromise = Promise.resolve().then(commit)
+  const exitBeforeCommit = exitPromise.then(({ exitCode, signal }) => {
+    throw new Error(
+      `controlled Landlock launcher exited before durable confinement evidence committed: code=${String(exitCode)} signal=${String(signal)}`,
+    )
+  })
+  void exitBeforeCommit.catch(() => {})
+  return Promise.race([commitPromise, exitBeforeCommit])
+}
+
 function endWritable(stream: Writable | undefined): void {
   if (!stream || stream.destroyed || stream.writableEnded) return
   try {
@@ -846,7 +860,10 @@ export class ExecutionGateway {
         enforcementEvidence,
         launcherArtifact: artifact.observation,
       })
-      const rawCommit = await confinementRuntime.evidence.commit(evidenceRecord)
+      const rawCommit = await awaitEvidenceCommit(
+        () => confinementRuntime.evidence.commit(evidenceRecord),
+        exitPromise,
+      )
       const durableCommit = validateDurableConfinementEvidenceCommit(rawCommit, evidenceRecord)
       confinementBinding = createConfinementReceiptBinding({ record: evidenceRecord, commit: durableCommit })
 

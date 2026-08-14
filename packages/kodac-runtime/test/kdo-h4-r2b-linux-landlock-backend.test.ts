@@ -277,7 +277,7 @@ test("TypeScript adapter remains pure and protected authority surfaces stay byte
   assert.deepEqual(importSpecifiers, ["./confinement.ts", "node:crypto", "node:path", "node:util"])
   assert.doesNotMatch(adapter, /process\.env|\bspawnSync\s*\(|\bspawn\s*\(|\bexecFile\s*\(|\bBun\.spawn\b|\bDeno\.Command\b|import\s*\(/)
 
-  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "411c2ce42fa9bbf0abd24d4d2a3c8ec97e5db0be")
+  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "f0e4daaa21f6faca68d9b98845d74f7d01050fe7")
   assert.equal(gitBlobSha1(source("../src/trust/confinement.ts")), "873f235120645c0a12f10a5bff7e9591db6bb341")
   assert.equal(gitBlobSha1(source("../src/trust/policy.ts")), "b4134e430204123bebe053ffc9105f05fca611c9")
   assert.equal(gitBlobSha1(source("../src/trust/approval.ts")), "d36a604cb1957bc65dac3978c626ba48a9b299fb")
