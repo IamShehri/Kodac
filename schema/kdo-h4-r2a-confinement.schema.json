@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kodac.dev/schema/kdo-h4-r2a-confinement.schema.json",
+  "title": "Kodac H4-R2A Provider-Neutral Confinement Contracts",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["read-only", "workspace-write", "danger-full-access"]
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["linux", "macos", "windows", "other"]
+    },
+    "enforcement": {
+      "type": "string",
+      "enum": ["full", "partial", "unavailable"]
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readPaths", "writePaths"],
+      "properties": {
+        "readPaths": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "writePaths": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "requestIdentity", "mode", "workspaceIdentity", "executionIntentIdentity", "scope"],
+      "properties": {
+        "version": { "const": "kodac-h4-r2a-confinement-v1" },
+        "requestIdentity": { "$ref": "#/$defs/sha256" },
+        "mode": { "$ref": "#/$defs/mode" },
+        "workspaceIdentity": { "$ref": "#/$defs/sha256" },
+        "executionIntentIdentity": { "$ref": "#/$defs/sha256" },
+        "scope": { "$ref": "#/$defs/scope" }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "backendIdentity", "name", "revision", "platform", "supportedModes"],
+      "properties": {
+        "version": { "const": "kodac-h4-r2a-confinement-v1" },
+        "backendIdentity": { "$ref": "#/$defs/sha256" },
+        "name": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "platform": { "$ref": "#/$defs/platform" },
+        "supportedModes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/mode" }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "evidenceIdentity", "requestIdentity", "executionAttemptIdentity", "backend", "enforcement", "reason"],
+      "properties": {
+        "version": { "const": "kodac-h4-r2a-enforcement-evidence-v1" },
+        "evidenceIdentity": { "$ref": "#/$defs/sha256" },
+        "requestIdentity": { "$ref": "#/$defs/sha256" },
+        "executionAttemptIdentity": { "$ref": "#/$defs/sha256" },
+        "backend": { "$ref": "#/$defs/backend" },
+        "enforcement": { "$ref": "#/$defs/enforcement" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/backend" },
+    { "$ref": "#/$defs/evidence" }
+  ]
+}
