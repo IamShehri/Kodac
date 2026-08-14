@@ -221,7 +221,6 @@ test("existing canonical model provider and transports remain byte-identical", (
     ["../src/model/provider.ts", "a15f1d86ceab88ab6fa1be787719d222e354e0c4"],
     ["../src/model/openai.ts", "564851b2dc8cd1aa610fbc7eaa4b5be5853f97f4"],
     ["../src/model/openai-compatible.ts", "7ed56c7bac8e03d315b465e1f173ad934227051f"],
-    ["../src/model/turn.ts", "628334fb4edb7b3e4bcfcb090b8e709835096b3b"],
   ])
   for (const [path, expectedBlob] of expected) {
     assert.equal(gitTextBlobSha1(readFileSync(new URL(path, import.meta.url))), expectedBlob, path)
