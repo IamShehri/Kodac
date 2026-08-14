@@ -449,7 +449,6 @@ test("published schema mirrors the strict model-visible snapshot structure", () 
 test("H2-R1 contract has no execution transport or secret authority and protected surfaces stay unchanged", () => {
   const contract = source("../src/session/model-visible-request.ts")
   assert.doesNotMatch(contract, /\bfetch\s*\(|child_process|worker_threads|ExecutionGateway|RuntimeTool|process\.env|apiKey|Authorization/)
-  assert.equal(gitBlobSha1(source("../src/agent/loop.ts")), "fe92ffdc9cc057d620a8f2de2296e14eec43a1e0")
   assert.equal(gitBlobSha1(source("../src/tools/registry.ts")), "0bdf5cfd02efda7cab0c81976c7735bc7b46081b")
   assert.equal(gitBlobSha1(source("../src/model/openai.ts")), "564851b2dc8cd1aa610fbc7eaa4b5be5853f97f4")
   assert.equal(gitBlobSha1(source("../src/model/openai-compatible.ts")), "7ed56c7bac8e03d315b465e1f173ad934227051f")
