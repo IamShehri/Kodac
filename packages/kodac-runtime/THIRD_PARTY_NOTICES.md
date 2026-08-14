@@ -34,3 +34,50 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## DeepSeek Harness Landlock launcher adaptation
+
+Portions of `native/landlock-run.c` are adapted from:
+
+- Project: DeepSeek Harness / node-addon-landlock-run
+- Repository: https://github.com/deepseek-ai/deepseek-harness
+- Pinned commit: `47f943859bef60e4160492346772ded9b24f765a`
+- Source path: `native/landlock-run/packages/entry/src/main.c`
+- Source blob: `af0cc2a988b219a699f35aeb911dbd66f1946fd9`
+- Profile reference path: `packages/sandbox/sandbox-local/src/profiles.ts`
+- Profile reference blob: `5b76390319c9b0729cb64f3213e714ff2df702d7`
+- License path: `native/landlock-run/LICENSE`
+- License blob: `8187059c9a2f14902c3eb5ab18d207906794f3b3`
+- License: BSD 3-Clause
+- Upstream copyright: Copyright (c) 2026, node-addon-landlock-run contributors
+
+Kodac modifications include an explicit `kodac-linux-landlock-fs-v1` claim-set boundary, machine-readable functional probe output with observed ABI, Kodac-specific failure prefixes, and separation between the isolated native primitive and the non-executing TypeScript adapter. H4-R2B does not wire this launcher into Kodac production execution.
+
+### BSD 3-Clause License
+
+Copyright (c) 2026, node-addon-landlock-run contributors
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
