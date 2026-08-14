@@ -41,6 +41,10 @@ class RejectSnapshotSink implements EventSink {
   }
 }
 
+class CustomPayload {
+  readonly value = 1
+}
+
 function toolRegistry(): ToolRegistry {
   const tools = new ToolRegistry()
   tools.register({
@@ -95,16 +99,28 @@ test("H2-R1 donor provenance pins the DeepSeek session source exactly", () => {
   ])
 })
 
-test("request identity is deterministic, preserves message order, and canonicalizes tools", () => {
+test("request identity is deterministic and preserves message and canonical projection tool order", () => {
   const input = baseInput()
   const first = createModelVisibleRequestSnapshot(input)
-  const second = createModelVisibleRequestSnapshot({ ...input, tools: [...input.tools].reverse() })
-  assert.deepEqual(first, second)
+  const repeated = createModelVisibleRequestSnapshot(input)
+  assert.deepEqual(first, repeated)
   assert.deepEqual(first.tools.map((tool) => tool.name), ["alpha.search", "zeta.read"])
+
+  const reversedTools = createModelVisibleRequestSnapshot({ ...input, tools: [...input.tools].reverse() })
+  assert.deepEqual(reversedTools.tools.map((tool) => tool.name), ["zeta.read", "alpha.search"])
+  assert.notEqual(reversedTools.requestIdentity, first.requestIdentity)
 
   const reorderedMessages = createModelVisibleRequestSnapshot({ ...input, messages: [...input.messages].reverse() })
   assert.notEqual(reorderedMessages.requestIdentity, first.requestIdentity)
   assert.deepEqual(validateModelVisibleRequestSnapshot(first), first)
+})
+
+test("duplicate tool names fail closed without relying on sorting", () => {
+  const input = baseInput()
+  assert.throws(() => createModelVisibleRequestSnapshot({
+    ...input,
+    tools: [input.tools[0], input.tools[1], { ...input.tools[0], description: "duplicate" }],
+  }), /duplicate tool/)
 })
 
 test("message tool-call and schema mutations change structural identity", () => {
@@ -124,10 +140,10 @@ test("serialized validation rejects unknown fields tampering and explicit undefi
   assert.throws(() => validateModelVisibleRequestSnapshot({ ...snapshot, messageCount: snapshot.messageCount + 1 }), /derived fields mismatch/)
   assert.throws(() => validateModelVisibleRequestSnapshot({ ...snapshot, requestIdentity: "0".repeat(64) }), /derived fields mismatch/)
   const messages = snapshot.messages.map((message, index) => index === 0 ? { ...message, name: undefined } : message)
-  assert.throws(() => validateModelVisibleRequestSnapshot({ ...snapshot, messages }), /undefined|derived fields/)
+  assert.throws(() => validateModelVisibleRequestSnapshot({ ...snapshot, messages }), /undefined/)
 })
 
-test("non-JSON cyclic sparse duplicate and malformed request data fails closed", () => {
+test("non-JSON primitives cyclic sparse duplicate and malformed request data fails closed", () => {
   const cycle: Record<string, unknown> = {}
   cycle.self = cycle
   assert.throws(() => createModelVisibleRequestSnapshot({
@@ -159,7 +175,52 @@ test("non-JSON cyclic sparse duplicate and malformed request data fails closed",
     messages: [{ role: "assistant", content: "", toolCalls: [{ id: "x", name: "tool", input: { score: Number.NaN } }] }],
     tools: [],
   }), /non-finite/)
+  for (const bad of [undefined, () => true, Symbol("x"), 1n]) {
+    assert.throws(() => createModelVisibleRequestSnapshot({
+      provider: "fixture",
+      model: "model",
+      messages: [{ role: "assistant", content: "", toolCalls: [{ id: "x", name: "tool", input: bad }] }],
+      tools: [],
+    }), /undefined|JSON-compatible/)
+  }
   assert.throws(() => createModelVisibleRequestSnapshot({ provider: "", model: "model", messages: [], tools: [] }), /provider/)
+})
+
+test("non-plain JavaScript objects fail closed and toJSON hooks are never executed", () => {
+  for (const bad of [new Date(0), new Map([["x", 1]]), new Set([1]), new CustomPayload(), new Uint8Array([1, 2])]) {
+    assert.throws(() => createModelVisibleRequestSnapshot({
+      provider: "fixture",
+      model: "model",
+      messages: [{ role: "assistant", content: "", toolCalls: [{ id: "x", name: "tool", input: bad }] }],
+      tools: [],
+    }), /plain JSON object/)
+  }
+
+  let toJsonCalled = false
+  const payload = {
+    value: 1,
+    toJSON() {
+      toJsonCalled = true
+      return { value: 1 }
+    },
+  }
+  assert.throws(() => createModelVisibleRequestSnapshot({
+    provider: "fixture",
+    model: "model",
+    messages: [{ role: "assistant", content: "", toolCalls: [{ id: "x", name: "tool", input: payload }] }],
+    tools: [],
+  }), /JSON-compatible/)
+  assert.equal(toJsonCalled, false)
+
+  const dictionary = Object.create(null) as Record<string, unknown>
+  dictionary.value = 1
+  const accepted = createModelVisibleRequestSnapshot({
+    provider: "fixture",
+    model: "model",
+    messages: [{ role: "assistant", content: "", toolCalls: [{ id: "x", name: "tool", input: dictionary }] }],
+    tools: [],
+  })
+  assert.deepEqual(accepted.messages[0]?.toolCalls?.[0]?.input, { value: 1 })
 })
 
 test("all authorized item and byte bounds fail closed without truncation", () => {
@@ -179,8 +240,23 @@ test("all authorized item and byte bounds fail closed without truncation", () =>
   assert.throws(() => createModelVisibleRequestSnapshot({ provider: "p", model: "m", messages: [], tools: [{ ...tool, capability: "c".repeat(L.maxCapabilityBytes + 1) }] }), /capability/)
   assert.throws(() => createModelVisibleRequestSnapshot({ provider: "p", model: "m", messages: [], tools: [{ ...tool, description: "d".repeat(L.maxToolDescriptionBytes + 1) }] }), /description/)
   assert.throws(() => createModelVisibleRequestSnapshot({ provider: "p", model: "m", messages: [], tools: [{ ...tool, inputSchema: { payload: "x".repeat(L.maxToolSchemaBytes) } }] }), /inputSchema/)
-  const largeTools = Array.from({ length: 18 }, (_, index) => ({ name: `tool${index}`, capability: "repo.read", description: "d", inputSchema: { payload: "x".repeat(500_000) } }))
-  assert.throws(() => createModelVisibleRequestSnapshot({ provider: "p", model: "m", messages: [], tools: largeTools }), /modelVisibleRequest exceeds/)
+
+  const nearTools = Array.from({ length: 16 }, (_, index) => ({
+    name: `tool${index}`,
+    capability: "repo.read",
+    description: "d",
+    inputSchema: { payload: "x".repeat(524_181) },
+  }))
+  const near = createModelVisibleRequestSnapshot({ provider: "p", model: "m", messages: [], tools: nearTools })
+  assert.ok(near.modelVisibleBytes + 16 < L.maxSnapshotBytes)
+
+  const overTools = Array.from({ length: 16 }, (_, index) => ({
+    name: `tool${index}`,
+    capability: "repo.read",
+    description: "d",
+    inputSchema: { payload: "x".repeat(524_182) },
+  }))
+  assert.throws(() => createModelVisibleRequestSnapshot({ provider: "p", model: "m", messages: [], tools: overTools }), /snapshot exceeds/)
 })
 
 test("snapshots are deeply immutable and materialization returns independent data", () => {
