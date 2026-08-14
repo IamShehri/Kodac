@@ -5,7 +5,7 @@ import { join } from "node:path"
 import test from "node:test"
 import { runCli } from "../src/cli.ts"
 
-test("kodac ask runs through the fixture provider and persists model events", async () => {
+test("kodac ask persists the exact model-visible request snapshot and keeps response evidence coarse", async () => {
   const root = await mkdtemp(join(tmpdir(), "kodac-ask-"))
   const evidence = join(root, "evidence")
   const stdout: string[] = []
@@ -25,14 +25,28 @@ test("kodac ask runs through the fixture provider and persists model events", as
   }
   assert.equal(payload.status, "COMPLETE")
   assert.equal(payload.assistant, "[fixture:fixture/deterministic-v1] hello kodac")
-  const events = await readFile(payload.evidence.events, "utf8")
-  assert.match(events, /model.requested/)
-  assert.match(events, /model.responded/)
-  assert.match(events, /assistant.message/)
-  assert.equal(events.includes("hello kodac"), false)
+
+  const eventsText = await readFile(payload.evidence.events, "utf8")
+  const events = eventsText.trim().split("\n").map((line) => JSON.parse(line)) as Array<{
+    type: string
+    payload: Record<string, unknown>
+  }>
+  const snapshot = events.find((event) => event.type === "model.request.snapshot")
+  assert.ok(snapshot)
+  assert.equal(snapshot.payload.provider, "fixture")
+  assert.equal(snapshot.payload.model, "fixture/deterministic-v1")
+  assert.deepEqual(snapshot.payload.messages, [{ role: "user", content: "hello kodac" }])
+  assert.deepEqual(snapshot.payload.tools, [])
+  assert.ok(events.some((event) => event.type === "model.requested"))
+  assert.ok(events.some((event) => event.type === "model.responded"))
+  assert.ok(events.some((event) => event.type === "assistant.message"))
+
+  const coarseEvents = events.filter((event) => event.type !== "model.request.snapshot")
+  assert.equal(JSON.stringify(coarseEvents).includes("hello kodac"), false)
+  assert.equal(JSON.stringify(coarseEvents).includes("[fixture:fixture/deterministic-v1] hello kodac"), false)
 })
 
-test("kodac ask records session.failed when provider selection fails", async () => {
+test("kodac ask records session.failed without persisting an undispatched private prompt", async () => {
   const root = await mkdtemp(join(tmpdir(), "kodac-ask-fail-"))
   const evidence = join(root, "evidence")
   const stdout: string[] = []
@@ -51,5 +65,6 @@ test("kodac ask records session.failed when provider selection fails", async () 
   const events = await readFile(join(evidence, sessionDirs[0], "events.jsonl"), "utf8")
   assert.match(events, /session.started/)
   assert.match(events, /session.failed/)
+  assert.equal(events.includes("model.request.snapshot"), false)
   assert.equal(events.includes("private prompt"), false)
 })
