@@ -111,7 +111,7 @@ function compileProtocolFixture(root: string): string {
 function compilePreloadFixture(root: string): string {
   const sourcePath = join(root, "preload-fixture.c")
   const library = join(root, "preload-fixture.so")
-  writeFileSync(sourcePath, `#include <fcntl.h>\n#include <stdlib.h>\n#include <unistd.h>\n__attribute__((constructor)) static void before_main(void) {\n  const char *path = getenv("KODAC_PRELOAD_WITNESS");\n  if (path == NULL) return;\n  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);\n  if (fd < 0) return;\n  (void)write(fd, "PREMAIN", 7);\n  (void)close(fd);\n}\n`, "utf8")
+  writeFileSync(sourcePath, `#include <fcntl.h>\n#include <stdlib.h>\n#include <unistd.h>\n__attribute__((constructor)) static void before_main(void) {\n  const char *path = getenv("KODAC_PRELOAD_WITNESS");\n  if (path == NULL) return;\n  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);\n  if (fd < 0) return;\n  if (write(fd, "PREMAIN", 7) != 7) { (void)close(fd); return; }\n  (void)close(fd);\n}\n`, "utf8")
   const compile = spawnSync("cc", ["-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-Werror", sourcePath, "-o", library], {
     encoding: "utf8",
     shell: false,
