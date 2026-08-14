@@ -64,8 +64,14 @@ function confinementBase(confinement: ConfinementReceiptBinding): ConfinementRec
   return validateConfinementReceiptBinding(confinement)
 }
 
-function immutableConfinement(confinement: ConfinementReceiptBinding): ReceiptConfinementBinding {
+function immutableConfinement(
+  confinement: ConfinementReceiptBinding,
+  inputDigest: string,
+): ReceiptConfinementBinding {
   const base = confinementBase(confinement)
+  if (base.executionIntentIdentity !== inputDigest) {
+    throw new TypeError("receipt confinement execution intent does not match inputDigest")
+  }
   return Object.freeze({
     ...base,
     bindingIdentity: sha256(JSON.stringify(base)),
@@ -103,6 +109,7 @@ export function validateReceiptConfinementBinding(value: unknown): ReceiptConfin
       "bindingIdentity",
       "requestIdentity",
       "executionAttemptIdentity",
+      "executionIntentIdentity",
       "backendIdentity",
       "enforcementEvidenceIdentity",
       "durableRecordIdentity",
@@ -117,6 +124,7 @@ export function validateReceiptConfinementBinding(value: unknown): ReceiptConfin
     version: record.version as ConfinementReceiptBinding["version"],
     requestIdentity: record.requestIdentity as string,
     executionAttemptIdentity: record.executionAttemptIdentity as string,
+    executionIntentIdentity: record.executionIntentIdentity as string,
     backendIdentity: record.backendIdentity as string,
     enforcementEvidenceIdentity: record.enforcementEvidenceIdentity as string,
     durableRecordIdentity: record.durableRecordIdentity as string,
@@ -173,7 +181,7 @@ export function createReceipt(input: Omit<ExecutionReceipt, "receiptId" | "confi
     paths: immutableStrings(input.paths),
     policy: immutablePolicy(input.policy),
     ...(input.approval === undefined ? {} : { approval: immutableApproval(input.approval) }),
-    ...(input.confinement === undefined ? {} : { confinement: immutableConfinement(input.confinement) }),
+    ...(input.confinement === undefined ? {} : { confinement: immutableConfinement(input.confinement, input.inputDigest) }),
     startedAt: input.startedAt,
     completedAt: input.completedAt,
     result: immutableResult(input.result),
