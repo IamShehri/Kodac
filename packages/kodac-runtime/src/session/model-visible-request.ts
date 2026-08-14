@@ -48,11 +48,15 @@ export const KDO_H2_R1_LIMITS: Readonly<{
   maxSnapshotBytes: 8 * 1024 * 1024,
 })
 
+export type ModelVisibleMessage = Omit<Readonly<ModelMessage>, "toolCalls"> & {
+  readonly toolCalls?: readonly Readonly<ModelToolCall>[]
+}
+
 export interface ModelVisibleRequestSnapshot {
   readonly version: typeof KDO_H2_R1_REQUEST_VERSION
   readonly provider: string
   readonly model: string
-  readonly messages: readonly Readonly<ModelMessage>[]
+  readonly messages: readonly ModelVisibleMessage[]
   readonly tools: readonly Readonly<ModelToolDescriptor>[]
   readonly messageCount: number
   readonly toolCount: number
@@ -172,7 +176,7 @@ function normalizeToolCall(value: unknown, label: string): Readonly<ModelToolCal
   })
 }
 
-function normalizeMessage(value: unknown, index: number): Readonly<ModelMessage> {
+function normalizeMessage(value: unknown, index: number): ModelVisibleMessage {
   const label = `modelVisibleRequest.messages[${index}]`
   const record = asRecord(value, label)
   exactKeys(record, MESSAGE_KEYS, label)
@@ -225,7 +229,7 @@ function normalizeTool(value: unknown, index: number): Readonly<ModelToolDescrip
 function requestPreimage(input: {
   provider: string
   model: string
-  messages: readonly Readonly<ModelMessage>[]
+  messages: readonly ModelVisibleMessage[]
   tools: readonly Readonly<ModelToolDescriptor>[]
 }): Readonly<Record<string, unknown>> {
   return Object.freeze({
@@ -309,7 +313,7 @@ function cloneToolCall(call: Readonly<ModelToolCall>): ModelToolCall {
   return { id: call.id, name: call.name, input: cloneJson(call.input, "materialized tool call input") }
 }
 
-function cloneMessage(message: Readonly<ModelMessage>): ModelMessage {
+function cloneMessage(message: ModelVisibleMessage): ModelMessage {
   return {
     role: message.role,
     content: message.content,
