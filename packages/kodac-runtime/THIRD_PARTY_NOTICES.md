@@ -119,3 +119,23 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## HKUDS DeepCode consecutive repeat-call signal adaptation
+
+Portions of `src/agent/repeat-call-signal.ts` are behaviorally ported and adapted from:
+
+- Project: DeepCode
+- Repository: https://github.com/HKUDS/DeepCode
+- Pinned commit: `287510fbf6820147a48adf79f7fd86b0ed1afe92`
+- Pinned tree: `7f44b320f86d04d4315242fabc74f1b325829be8`
+- Primary source path: `core/agent_runtime/repeat_guard.py`
+- Primary source blob: `37c24894cdbe7e647bdcbe45d055a1fd48b30777`
+- Runner integration reference: `core/agent_runtime/runner.py`
+- Runner integration blob: `645ab82f768214cce0794984c4bc9b92b099ce5a`
+- Root license blob: `b3ba37ce442298d5bdec96e2e52a8a812a25f123`
+- License: MIT
+- Upstream copyright: Copyright (c) 2025 Data Intelligence Lab@HKU
+
+Kodac ports only the consecutive same-tool/same-input chain concept. The implementation replaces DeepCode's mutable tracker and permissive argument stringification with an explicit serialized state transition, strict JSON/JCS-compatible canonicalization, bounded UTF-8 inputs, domain-separated SHA-256 structural identities, and evidence-safe structural signals. DeepCode's model-visible reminder text, raw argument preview, runner integration, and hard-stop semantics are not ported.
+
+The MIT license text and upstream copyright notice reproduced in the immediately preceding HKUDS DeepCode section apply to this adaptation as well.
