@@ -14,6 +14,7 @@ export type KodacEventType =
   | "tool.failed"
   | "receipt.recorded"
   | "model.request.snapshot"
+  | "model.history.message.appended"
   | "model.requested"
   | "model.responded"
   | "model.failed"

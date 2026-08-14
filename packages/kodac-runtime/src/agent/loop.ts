@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto"
 import type { ModelMessage, ModelToolCall } from "../model/provider.ts"
 import type { AgentTurnRunner, AgentTurnResult } from "../model/turn.ts"
+import {
+  KDO_H2_R2_LIMITS,
+  createModelHistoryMessageRecord,
+  projectModelVisibleHistory,
+} from "../session/model-visible-history.ts"
 import type { RuntimeSession } from "../session/session.ts"
 
 export interface AgentLoopLimits {
@@ -55,12 +60,41 @@ export const DEFAULT_AGENT_LOOP_LIMITS: AgentLoopLimits = {
   maxToolResultChars: 12_000,
 }
 
+const RECOVERY_MESSAGE: ModelMessage = Object.freeze({
+  role: "system",
+  content: "The previous model/tool turn failed. Reconsider the task and continue without repeating the same failed action.",
+})
+
+const SESSION_LOOP_TAILS = new WeakMap<RuntimeSession, Promise<void>>()
+
+type HistoryAppendSource = "assistant_response" | "tool_result" | "recovery_system"
+
+interface PendingHistoryMessage {
+  source: HistoryAppendSource
+  message: ModelMessage
+}
+
 class AgentLoopStop extends Error {
   readonly reason: Exclude<AgentLoopStopReason, "completed">
 
   constructor(reason: Exclude<AgentLoopStopReason, "completed">) {
     super(`Agent loop stopped: ${reason}`)
     this.reason = reason
+  }
+}
+
+async function runExclusiveForSession<T>(session: RuntimeSession, operation: () => Promise<T>): Promise<T> {
+  const previous = SESSION_LOOP_TAILS.get(session) ?? Promise.resolve()
+  let release!: () => void
+  const slot = new Promise<void>((resolve) => { release = resolve })
+  const queued = previous.catch(() => undefined).then(() => slot)
+  SESSION_LOOP_TAILS.set(session, queued)
+  await previous.catch(() => undefined)
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (SESSION_LOOP_TAILS.get(session) === queued) SESSION_LOOP_TAILS.delete(session)
   }
 }
 
@@ -144,6 +178,37 @@ async function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Prom
   })
 }
 
+function cloneBootstrapMessage(message: ModelMessage): ModelMessage {
+  return {
+    ...message,
+    ...(message.toolCalls === undefined
+      ? {}
+      : { toolCalls: message.toolCalls.map((call) => ({ ...call })) }),
+  }
+}
+
+function assertHistoryBatchAppendable(
+  messages: readonly ModelMessage[],
+  additions: readonly ModelMessage[],
+): void {
+  if (messages.length + additions.length > KDO_H2_R2_LIMITS.maxProjectedMessages) {
+    throw new RangeError(`projected model history exceeds ${KDO_H2_R2_LIMITS.maxProjectedMessages} messages`)
+  }
+  const existingContentBytes = messages.reduce(
+    (total, current) => total + Buffer.byteLength(current.content, "utf8"),
+    0,
+  )
+  const addedContentBytes = additions.reduce(
+    (total, current) => total + Buffer.byteLength(current.content, "utf8"),
+    0,
+  )
+  if (existingContentBytes + addedContentBytes > KDO_H2_R2_LIMITS.maxTotalMessageContentBytes) {
+    throw new RangeError(
+      `projected model history content exceeds ${KDO_H2_R2_LIMITS.maxTotalMessageContentBytes} UTF-8 bytes`,
+    )
+  }
+}
+
 export class BoundedAgentLoop {
   private readonly runner: AgentTurnRunner
   private readonly session: RuntimeSession
@@ -156,15 +221,22 @@ export class BoundedAgentLoop {
   }
 
   async run(input: AgentLoopInput): Promise<AgentLoopResult> {
+    return runExclusiveForSession(this.session, () => this.runExclusive(input))
+  }
+
+  private async runExclusive(input: AgentLoopInput): Promise<AgentLoopResult> {
     const limits = resolveLimits(input.limits)
     const startedAt = this.clock()
+    const runStartSequence = this.session.eventsSnapshot().at(-1)?.sequence ?? 0
     let turnsUsed = 0
     let toolCallsUsed = 0
     let failuresUsed = 0
     let assistant = ""
-    const messages = input.messages.map((message) => ({ ...message }))
+    const bootstrapMessages = input.messages.map(cloneBootstrapMessage)
     const toolCounts = new Map<string, number>()
     const turnCounts = new Map<string, number>()
+
+    const runEvents = () => this.session.eventsSnapshot(runStartSequence)
 
     const budget = (): AgentLoopBudget => ({
       turnsUsed,
@@ -186,11 +258,38 @@ export class BoundedAgentLoop {
       return remaining
     }
 
+    const messagesForNextTurn = (): ModelMessage[] => {
+      const projection = projectModelVisibleHistory(runEvents())
+      return projection.anchorRequestIdentity === undefined
+        ? bootstrapMessages.map(cloneBootstrapMessage)
+        : projection.messages
+    }
+
+    const appendHistoryBatch = async (pending: readonly PendingHistoryMessage[]): Promise<void> => {
+      if (pending.length === 0) return
+      const projection = projectModelVisibleHistory(runEvents())
+      if (projection.anchorRequestIdentity === undefined) {
+        throw new Error("H2-R2 history append requires an H2-R1 request snapshot anchor")
+      }
+      const records = pending.map(({ source, message }) => createModelHistoryMessageRecord({
+        afterRequestIdentity: projection.anchorRequestIdentity as string,
+        source,
+        message,
+      }))
+      assertHistoryBatchAppendable(
+        projection.messages,
+        records.map((record) => record.message as ModelMessage),
+      )
+      for (const record of records) {
+        await this.session.emit("model.history.message.appended", record)
+      }
+    }
+
     await this.session.emit("agent.loop.started", {
       provider: input.provider,
       model: input.model,
       limits,
-      initialMessageCount: messages.length,
+      initialMessageCount: bootstrapMessages.length,
     })
 
     for (let turn = 1; turn <= limits.maxTurns; turn++) {
@@ -207,6 +306,7 @@ export class BoundedAgentLoop {
       const callFingerprints: string[] = []
       const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remaining)))
       const turnSignal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal
+      const turnMessages = messagesForNextTurn()
 
       let result: AgentTurnResult
       try {
@@ -215,7 +315,7 @@ export class BoundedAgentLoop {
             {
               provider: input.provider,
               model: input.model,
-              messages,
+              messages: turnMessages,
               signal: turnSignal,
             },
             {
@@ -247,29 +347,48 @@ export class BoundedAgentLoop {
           budget: budget(),
         })
         if (failuresUsed >= limits.maxFailures) return stop("max_failures")
-        messages.push({
-          role: "system",
-          content: "The previous model/tool turn failed. Reconsider the task and continue without repeating the same failed action.",
-        })
+
+        const projection = projectModelVisibleHistory(runEvents())
+        if (projection.anchorRequestIdentity === undefined) {
+          bootstrapMessages.push(cloneBootstrapMessage(RECOVERY_MESSAGE))
+        } else {
+          await appendHistoryBatch([{
+            source: "recovery_system",
+            message: cloneBootstrapMessage(RECOVERY_MESSAGE),
+          }])
+        }
         continue
       }
 
       assistant = result.assistant
+      const projection = projectModelVisibleHistory(runEvents())
+      if (projection.anchorRequestIdentity === undefined) {
+        throw new Error("Successful model turn did not establish an H2-R1 request snapshot anchor")
+      }
+
+      const historyBatch: PendingHistoryMessage[] = []
       if (result.assistant || result.toolCalls.length > 0) {
-        messages.push({
-          role: "assistant",
-          content: result.assistant,
-          toolCalls: result.toolCalls.map((call) => ({ ...call })),
+        historyBatch.push({
+          source: "assistant_response",
+          message: {
+            role: "assistant",
+            content: result.assistant,
+            toolCalls: result.toolCalls.map((call) => ({ ...call })),
+          },
         })
       }
       for (const toolResult of result.toolResults) {
-        messages.push({
-          role: "tool",
-          name: toolResult.name,
-          toolCallId: toolResult.id,
-          content: toolMessageContent(toolResult.output, limits.maxToolResultChars),
+        historyBatch.push({
+          source: "tool_result",
+          message: {
+            role: "tool",
+            name: toolResult.name,
+            toolCallId: toolResult.id,
+            content: toolMessageContent(toolResult.output, limits.maxToolResultChars),
+          },
         })
       }
+      await appendHistoryBatch(historyBatch)
 
       const signature = sha256(`${result.finishReason}\n${result.assistant}\n${callFingerprints.join("\n")}`)
       const repeated = (turnCounts.get(signature) ?? 0) + 1

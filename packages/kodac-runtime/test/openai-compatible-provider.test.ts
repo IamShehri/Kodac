@@ -3,9 +3,13 @@ import test from "node:test"
 
 import { BoundedAgentLoop } from "../src/agent/loop.ts"
 import { OpenAICompatibleProvider, type ProviderFetch } from "../src/model/openai-compatible.ts"
-import { ModelProviderError, type ModelProviderRequest } from "../src/model/provider.ts"
-import type { AgentTurnRunner, AgentTurnResult } from "../src/model/turn.ts"
-import type { RuntimeSession } from "../src/session/session.ts"
+import { ModelProviderError, ProviderRegistry, type ModelProviderRequest } from "../src/model/provider.ts"
+import { AgentTurnRunner } from "../src/model/turn.ts"
+import { InMemoryEventSink } from "../src/protocol/event.ts"
+import { RuntimeOrchestrator } from "../src/runtime/orchestrator.ts"
+import { projectModelVisibleHistory } from "../src/session/model-visible-history.ts"
+import { RuntimeSession } from "../src/session/session.ts"
+import { ToolRegistry } from "../src/tools/registry.ts"
 
 function request(overrides: Partial<ModelProviderRequest> = {}): ModelProviderRequest {
   return {
@@ -158,37 +162,85 @@ test("OpenAI-compatible provider fails closed for missing default credentials an
 })
 
 test("bounded agent loop preserves assistant tool calls before tool results for provider continuity", async () => {
-  const requests: ModelProviderRequest[] = []
+  const bodies: Array<Record<string, unknown>> = []
   let turn = 0
-  const runner = {
-    async run(input: ModelProviderRequest): Promise<AgentTurnResult> {
-      requests.push({ ...input, messages: input.messages.map((message) => ({ ...message })) })
-      turn += 1
-      if (turn === 1) {
-        return {
-          assistant: "",
-          finishReason: "tool_calls",
-          toolCalls: [{ id: "call-1", name: "repo.read", input: { path: "note.txt" } }],
-          toolResults: [{ id: "call-1", name: "repo.read", output: { content: "alpha" } }],
-        }
-      }
-      return { assistant: "done", finishReason: "stop", toolCalls: [], toolResults: [] }
+  const fetchImpl: ProviderFetch = async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+    turn += 1
+    if (turn === 1) {
+      return new Response(JSON.stringify({
+        id: "chatcmpl-loop-1",
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call-1",
+              type: "function",
+              function: { name: "repo.read", arguments: "{\"path\":\"note.txt\"}" },
+            }],
+          },
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    }
+    return new Response(JSON.stringify({
+      id: "chatcmpl-loop-2",
+      choices: [{ finish_reason: "stop", message: { role: "assistant", content: "done" } }],
+    }), { status: 200, headers: { "content-type": "application/json" } })
+  }
+
+  const provider = new OpenAICompatibleProvider({ apiKey: "test", fetchImpl, maxAttempts: 1 })
+  const sink = new InMemoryEventSink()
+  const session = new RuntimeSession(sink, "openai-compatible-loop")
+  const tools = new ToolRegistry()
+  tools.register({
+    name: "repo.read",
+    capability: "repo.read",
+    model: {
+      description: "Read one workspace file.",
+      inputSchema: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"],
+        additionalProperties: false,
+      },
     },
-  } as unknown as AgentTurnRunner
-  const session = { async emit() {} } as unknown as RuntimeSession
+    async execute(input: { path: string }) {
+      return { content: input.path === "note.txt" ? "alpha" : "" }
+    },
+  })
+  const providers = new ProviderRegistry()
+  providers.register(provider)
+  const runner = new AgentTurnRunner(providers, tools, new RuntimeOrchestrator(tools, session), session)
   const loop = new BoundedAgentLoop(runner, session)
   const result = await loop.run({
-    provider: "fixture",
-    model: "fixture",
+    provider: provider.name,
+    model: "fixture-model",
     messages: [{ role: "user", content: "read note" }],
     limits: { maxTurns: 2 },
   })
 
   assert.equal(result.status, "completed")
-  assert.equal(requests.length, 2)
-  const second = requests[1].messages
-  const assistant = second.find((message) => message.role === "assistant")
-  const tool = second.find((message) => message.role === "tool")
-  assert.deepEqual(assistant?.toolCalls, [{ id: "call-1", name: "repo.read", input: { path: "note.txt" } }])
-  assert.equal(tool?.toolCallId, "call-1")
+  assert.equal(bodies.length, 2)
+  const secondMessages = bodies[1].messages as Array<Record<string, unknown>>
+  const assistantIndex = secondMessages.findIndex((message) => message.role === "assistant")
+  const toolIndex = secondMessages.findIndex((message) => message.role === "tool")
+  assert.ok(assistantIndex >= 0)
+  assert.ok(toolIndex > assistantIndex)
+  const assistant = secondMessages[assistantIndex]
+  const assistantCalls = assistant.tool_calls as Array<{ id: string; function: { name: string; arguments: string } }>
+  assert.equal(assistantCalls[0]?.id, "call-1")
+  assert.equal(assistantCalls[0]?.function.name, "repo.read")
+  assert.deepEqual(JSON.parse(assistantCalls[0]?.function.arguments ?? "{}"), { path: "note.txt" })
+  assert.equal(secondMessages[toolIndex]?.tool_call_id, "call-1")
+
+  const secondSnapshotIndex = sink.events
+    .map((event, index) => event.type === "model.request.snapshot" ? index : -1)
+    .filter((index) => index >= 0)[1]
+  assert.notEqual(secondSnapshotIndex, undefined)
+  const projection = projectModelVisibleHistory(sink.events.slice(0, (secondSnapshotIndex ?? -1) + 1))
+  assert.deepEqual(projection.messages.map((message) => message.role), ["user", "assistant", "tool"])
+  assert.equal(projection.messages[1]?.toolCalls?.[0]?.id, "call-1")
+  assert.equal(projection.messages[2]?.toolCallId, "call-1")
 })

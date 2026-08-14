@@ -419,6 +419,18 @@ function cloneTool(tool: Readonly<ModelToolDescriptor>): ModelToolDescriptor {
   }
 }
 
+export function validateModelVisibleMessage(value: unknown): ModelVisibleMessage {
+  return normalizeMessage(value, 0)
+}
+
+export function materializeModelVisibleMessage(value: unknown): ModelMessage {
+  return cloneMessage(validateModelVisibleMessage(value))
+}
+
+export function canonicalModelVisibleMessage(value: unknown): string {
+  return canonicalize(validateModelVisibleMessage(value))
+}
+
 export function materializeModelVisibleRequest(value: unknown): MaterializedModelVisibleRequest {
   const snapshot = value !== null && typeof value === "object" && TRUSTED_SNAPSHOTS.has(value)
     ? value as ModelVisibleRequestSnapshot
