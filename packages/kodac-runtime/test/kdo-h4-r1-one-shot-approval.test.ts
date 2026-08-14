@@ -249,6 +249,7 @@ test("concurrent identical asks receive distinct one-shot request instances", as
   const dir = await root()
   const evidence: ApprovalEvidence[] = []
   const instanceIds: string[] = []
+  const requestIdentities: string[] = []
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
@@ -256,28 +257,25 @@ test("concurrent identical asks receive distinct one-shot request instances", as
       service: {
         async decide(request) {
           instanceIds.push(request.requestInstanceId)
+          requestIdentities.push(request.requestIdentity)
           await new Promise((resolve) => setTimeout(resolve, 5))
           return {
             version: KDO_H4_R1_APPROVAL_VERSION,
             requestIdentity: request.requestIdentity,
             requestInstanceId: request.requestInstanceId,
-            outcome: "allowed-once",
+            outcome: "rejected",
           }
         },
       },
     }
     const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
-    const command = () => gateway.runCommand(
-      "fixture.approval-read",
-      process.execPath,
-      ["-e", "process.stdout.write('ok')"],
-    )
-    const [left, right] = await Promise.all([command(), command()])
-    assert.equal(left.stdout, "ok")
-    assert.equal(right.stdout, "ok")
+    await Promise.all([
+      assert.rejects(() => gateway.applyPatch(patch), ExecutionBlockedError),
+      assert.rejects(() => gateway.applyPatch(patch), ExecutionBlockedError),
+    ])
     assert.equal(new Set(instanceIds).size, 2)
-    assert.notEqual(left.receipt.approval?.requestInstanceId, right.receipt.approval?.requestInstanceId)
-    assert.equal(left.receipt.approval?.requestIdentity, right.receipt.approval?.requestIdentity)
+    assert.equal(new Set(requestIdentities).size, 1)
+    assert.equal(await fs.exists("proof.txt"), false)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -428,31 +426,28 @@ test("invalid decided evidence commit acknowledgment blocks allowed-once before 
   }
 })
 
-test("an already-aborted approval is durably recorded as cancelled and never consults the service", async () => {
+test("external executable ask fails closed before approval service or process execution", async () => {
   const dir = await root()
-  const controller = new AbortController()
-  controller.abort(new Error("cancelled by caller"))
   const evidence: ApprovalEvidence[] = []
-  let calls = 0
+  const calls = { count: 0 }
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
-    const runtime: ApprovalRuntime = {
-      evidence: recordingEvidence(evidence),
-      service: { decide: () => { calls += 1; return null } },
-    }
-    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
-    await assert.rejects(
-      () => gateway.runCommand(
+    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), decisionRuntime("allowed-once", evidence, calls))
+    let caught: unknown
+    try {
+      await gateway.runCommand(
         "fixture.approval-read",
         process.execPath,
-        ["-e", "process.stdout.write('should-not-run')"],
-        undefined,
-        { signal: controller.signal },
-      ),
-      ExecutionBlockedError,
-    )
-    assert.equal(calls, 0)
-    assert.equal(evidence[1]?.outcome, "cancelled")
+        ["-e", "require('node:fs').writeFileSync('executed.txt','ran')"],
+      )
+    } catch (error) {
+      caught = error
+    }
+    assert.ok(caught instanceof ExecutionBlockedError)
+    assert.match(caught.message, /H4-R2 confinement/)
+    assert.equal(calls.count, 0)
+    assert.deepEqual(evidence, [])
+    assert.equal(await fs.exists("executed.txt"), false)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -618,79 +613,60 @@ test("K2 execution receipt persistence failure remains ExecutionUnprovenError af
   }
 })
 
-test("approval request identity binds execution environment and bounds", async () => {
+test("generic command K2 input identity binds environment and execution bounds without approval", async () => {
   const dir = await root()
-  const identities: string[] = []
+  const inputDigests: string[] = []
+  const baseEnv = { ...process.env }
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
-    const runtime: ApprovalRuntime = {
-      evidence: {
-        commit(record) {
-          return durableCommit(record)
-        },
-      },
-      service: {
-        decide(request) {
-          identities.push(request.requestIdentity)
-          return {
-            version: KDO_H4_R1_APPROVAL_VERSION,
-            requestIdentity: request.requestIdentity,
-            requestInstanceId: request.requestInstanceId,
-            outcome: "rejected",
-          }
-        },
+    const gateway = new ExecutionGateway(fs, fixedPolicy("allow"))
+    const observer: ExecutionObserver = {
+      onIntent(intent) {
+        inputDigests.push(intent.inputDigest)
       },
     }
-    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
-    for (const envValue of ["A", "B"]) {
-      await assert.rejects(
-        () => gateway.runCommand(
-          "fixture.approval-read",
-          process.execPath,
-          ["-e", "process.stdout.write('ok')"],
-          undefined,
-          { env: { KODAC_APPROVAL_FIXTURE: envValue }, timeoutMs: 1000, maxOutputBytes: 4096 },
-        ),
-        ExecutionBlockedError,
-      )
-    }
-    assert.equal(identities.length, 2)
-    assert.notEqual(identities[0], identities[1])
+    const command = (envValue: string, timeoutMs: number) => gateway.runCommand(
+      "fixture.approval-read",
+      process.execPath,
+      ["-e", "process.stdout.write('ok')"],
+      observer,
+      {
+        env: { ...baseEnv, KODAC_APPROVAL_FIXTURE: envValue },
+        timeoutMs,
+        maxOutputBytes: 4096,
+        allowedExitCodes: [0],
+      },
+    )
+
+    assert.equal((await command("A", 1000)).stdout, "ok")
+    assert.equal((await command("B", 1000)).stdout, "ok")
+    assert.equal((await command("A", 2000)).stdout, "ok")
+    assert.equal(inputDigests.length, 3)
+    assert.notEqual(inputDigests[0], inputDigests[1])
+    assert.notEqual(inputDigests[0], inputDigests[2])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
 })
 
-test("ambient environment is snapshotted before approval and cannot drift before execution", async () => {
+test("ambient environment is snapshotted before K2 allow execution and cannot drift before launch", async () => {
   const dir = await root()
   const key = "KODAC_H4_R1_AMBIENT_FIXTURE"
   const original = process.env[key]
   process.env[key] = "before"
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
-    const runtime: ApprovalRuntime = {
-      evidence: {
-        commit(record) {
-          return durableCommit(record)
-        },
-      },
-      service: {
-        decide(request) {
-          process.env[key] = "after"
-          return {
-            version: KDO_H4_R1_APPROVAL_VERSION,
-            requestIdentity: request.requestIdentity,
-            requestInstanceId: request.requestInstanceId,
-            outcome: "allowed-once",
-          }
-        },
+    const observer: ExecutionObserver = {
+      onPolicy() {
+        process.env[key] = "after"
       },
     }
-    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
+    const gateway = new ExecutionGateway(fs, fixedPolicy("allow"))
     const result = await gateway.runCommand(
       "fixture.approval-read",
       process.execPath,
       ["-e", `process.stdout.write(process.env.${key} ?? '')`],
+      observer,
     )
     assert.equal(result.stdout, "before")
   } finally {
@@ -700,48 +676,31 @@ test("ambient environment is snapshotted before approval and cannot drift before
   }
 })
 
-test("command arguments are snapshotted before approval and cannot drift before execution", async () => {
+test("command arguments are snapshotted before K2 allow execution and cannot drift before launch", async () => {
   const dir = await root()
-  const evidence: ApprovalEvidence[] = []
-  let decisionStartedResolve!: () => void
-  let decisionReleaseResolve!: () => void
-  const decisionStarted = new Promise<void>((resolve) => { decisionStartedResolve = resolve })
-  const decisionRelease = new Promise<void>((resolve) => { decisionReleaseResolve = resolve })
+  let intentDigest = ""
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
-    const runtime: ApprovalRuntime = {
-      evidence: recordingEvidence(evidence),
-      service: {
-        async decide(request) {
-          decisionStartedResolve()
-          await decisionRelease
-          return {
-            version: KDO_H4_R1_APPROVAL_VERSION,
-            requestIdentity: request.requestIdentity,
-            requestInstanceId: request.requestInstanceId,
-            outcome: "allowed-once",
-          }
-        },
+    const args = ["-e", "process.stdout.write(process.argv.slice(1).join('|'))", "approved"]
+    const observer: ExecutionObserver = {
+      onIntent(intent) {
+        intentDigest = intent.inputDigest
+      },
+      onPolicy() {
+        args[2] = "mutated"
+        args.push("extra")
       },
     }
-    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
-    const args = ["-e", "process.stdout.write(process.argv.slice(1).join('|'))", "approved"]
-    const execution = gateway.runCommand(
+    const gateway = new ExecutionGateway(fs, fixedPolicy("allow"))
+    const result = await gateway.runCommand(
       "fixture.approval-read",
       process.execPath,
       args,
+      observer,
     )
 
-    await decisionStarted
-    args[2] = "mutated"
-    args.push("extra")
-    decisionReleaseResolve()
-
-    const result = await execution
     assert.equal(result.stdout, "approved")
-    assert.equal(evidence[0]?.intent.inputDigest, result.receipt.inputDigest)
-    assert.equal(evidence[1]?.intent.inputDigest, result.receipt.inputDigest)
-    assert.equal(result.receipt.approval?.requestIdentity, evidence[1]?.requestIdentity)
+    assert.equal(result.receipt.inputDigest, intentDigest)
     assert.deepEqual(args, ["-e", "process.stdout.write(process.argv.slice(1).join('|'))", "mutated", "extra"])
   } finally {
     await rm(dir, { recursive: true, force: true })

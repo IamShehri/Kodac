@@ -535,6 +535,20 @@ export class ExecutionGateway {
     await observer?.onIntent?.(intent)
     const policy = await this.policy.evaluate(intent)
     await observer?.onPolicy?.(intent, policy)
+
+    // H4-R1 cannot prove executable-byte identity through path-based execFile.
+    // External-process one-shot approval remains fail-closed until H4-R2 confinement.
+    if (policy.decision === "ask") {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        "external executable identity requires H4-R2 confinement",
+        "Approval unavailable: external executable identity requires H4-R2 confinement",
+      )
+    }
+
     const approval = await this.authorize(intent, policy, startedAt, observer, options.signal)
 
     try {
