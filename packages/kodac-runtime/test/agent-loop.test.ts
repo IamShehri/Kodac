@@ -6,7 +6,7 @@ import { ProviderRegistry } from "../src/model/provider.ts"
 import { AgentTurnRunner } from "../src/model/turn.ts"
 import { InMemoryEventSink, type EventSink, type KodacEvent } from "../src/protocol/event.ts"
 import { RuntimeOrchestrator } from "../src/runtime/orchestrator.ts"
-import { projectModelVisibleHistory } from "../src/session/model-visible-history.ts"
+import { KDO_H2_R2_LIMITS, projectModelVisibleHistory } from "../src/session/model-visible-history.ts"
 import { RuntimeSession } from "../src/session/session.ts"
 import { ToolRegistry, type RuntimeTool } from "../src/tools/registry.ts"
 
@@ -163,6 +163,32 @@ test("history sink failure blocks a later provider invocation and does not enter
   const priorSequence = session.eventsSnapshot().at(-1)?.sequence ?? 0
   const next = await session.emit("session.failed", { status: "failed", error: "history append rejected" })
   assert.equal(next.sequence, priorSequence + 1)
+})
+
+test("aggregate history bounds fail before an unprojectable history event is persisted", async () => {
+  let calls = 0
+  const provider: ModelProvider = {
+    name: "history-bound",
+    async generate() {
+      calls += 1
+      return { assistant: "would exceed the aggregate bound", finishReason: "stop", toolCalls: [] }
+    },
+  }
+  const { loop, sink, session } = harness(provider)
+  const messages: ModelProviderRequest["messages"] = Array.from(
+    { length: KDO_H2_R2_LIMITS.maxProjectedMessages },
+    (_, index) => ({ role: "user", content: `message-${index}` }),
+  )
+
+  await assert.rejects(
+    () => loop.run({ provider: "history-bound", model: "fixture/model", messages }),
+    new RegExp(`projected model history exceeds ${KDO_H2_R2_LIMITS.maxProjectedMessages} messages`),
+  )
+  assert.equal(calls, 1)
+  assert.equal(sink.events.filter((event) => event.type === "model.request.snapshot").length, 1)
+  assert.equal(sink.events.some((event) => event.type === "model.history.message.appended"), false)
+  assert.equal(session.eventsSnapshot().some((event) => event.type === "model.history.message.appended"), false)
+  assert.equal(projectModelVisibleHistory(session.eventsSnapshot()).messages.length, KDO_H2_R2_LIMITS.maxProjectedMessages)
 })
 
 test("separate loop.run invocations use independent canonical projection windows", async () => {
