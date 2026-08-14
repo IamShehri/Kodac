@@ -141,9 +141,10 @@ R2C therefore requires a Linux same-file-descriptor identity boundary:
 2. K2 verifies it is a regular file and enforces a bounded artifact size.
 3. K2 hashes bytes from that exact open file descriptor.
 4. Observed digest must equal the trusted expected digest.
-5. K2 passes that same open file descriptor into the child at a fixed inherited descriptor slot.
-6. K2 starts the launcher through `/proc/self/fd/<fixed-fd>` rather than reopening the configured path for exec.
-7. If `/proc/self/fd` execution or descriptor inheritance is unavailable, R2C fails closed.
+5. K2 passes that same open file descriptor into child descriptor **3**.
+6. K2 starts the launcher through exactly `/proc/self/fd/3` rather than reopening the configured path for exec.
+7. Child descriptor 3 must survive the launcher exec, but it MUST be closed or marked `FD_CLOEXEC` by the launcher before target `execv` so the verified launcher descriptor cannot leak into the target.
+8. If `/proc/self/fd/3` execution or descriptor inheritance is unavailable, R2C fails closed.
 
 Tests must prove that replacing the configured path after the verified descriptor is opened cannot change the bytes observed through the retained descriptor, and that the actual K2 integration executes through the inherited descriptor path.
 
@@ -153,51 +154,65 @@ R2C does **not** claim target executable-byte identity. The target is required t
 
 The H4-R2B native launcher may be extended with an optional R2C control protocol while preserving its R2B direct/probe behavior.
 
-For R2C controlled execution, K2 supplies two fixed inherited control descriptors:
+For R2C controlled execution, the child descriptor map is fixed and versioned by this authorization:
 
-- one launcher-to-K2 readiness descriptor;
-- one K2-to-launcher permit descriptor.
+- descriptor **3**: verified launcher artifact descriptor used for `/proc/self/fd/3` execution;
+- descriptor **4**: launcher-to-K2 readiness channel; launcher owns only the write side and K2 owns only the read side;
+- descriptor **5**: K2-to-launcher permit channel; K2 owns only the write side and launcher owns only the read side.
 
-The launcher must accept the controlled mode only when both descriptors are supplied and valid.
+No untrusted command input may choose or remap descriptors 3, 4, or 5. The child must not inherit the opposite/parent control-channel ends or any duplicate control ends.
 
-After all Landlock rules are installed and `landlock_restrict_self` succeeds, but **before target `execv`**, the launcher writes exactly one bounded machine-readable readiness record:
+Descriptors 3, 4, and 5 must remain usable across the initial launcher exec. Immediately after launcher startup, the native launcher must arrange that all three descriptors are either closed before target `execv` or carry `FD_CLOEXEC` so none can leak into the target. Descriptor 3 may be closed as soon as the launcher process has started and no longer needs its own executable descriptor. Descriptors 4 and 5 remain available only for the bounded handshake and are closed before target `execv`.
+
+The launcher must accept controlled mode only when descriptors 4 and 5 are open descriptors with the required directionality. Invalid, missing, aliased, or otherwise unusable control descriptors are launcher setup failure and must exit `125` without target execution.
+
+After all Landlock rules are installed and `landlock_restrict_self` succeeds, but **before target `execv`**, the launcher writes exactly one ASCII readiness record terminated by one LF:
 
 `kodac-landlock-ready-v1 abi=<N> claim-set=kodac-linux-landlock-fs-v1 enforcement=<full|partial>\n`
 
-The launcher must then block waiting for exactly:
+The complete readiness record, including the LF, MUST be at most **128 bytes**. The launcher writes no other bytes on descriptor 4 and then closes descriptor 4. K2 reads descriptor 4 to EOF with a hard 128-byte maximum; overflow, missing EOF, multiple records, non-ASCII bytes, malformed fields, or any extra bytes are protocol failure and must never release GO.
+
+The launcher then blocks on descriptor 5. K2 may write exactly the three ASCII bytes:
 
 `GO\n`
 
-from K2.
-
-Any EOF, malformed permit, timeout-driven closure, cancellation, or protocol mismatch must exit with launcher failure code `125` without executing the target.
+and must close its permit-write side immediately after the three-byte write. The launcher reads the permit channel to EOF with a hard maximum of **4 bytes** and accepts only the exact three-byte payload `GO\n`; EOF before three bytes, a fourth byte, malformed content, timeout-driven closure, cancellation, or any protocol mismatch must exit with launcher failure code `125` without executing the target.
 
 The launcher MUST NOT send the readiness record before Landlock restriction is active.
 
-The launcher MUST NOT execute the target before receiving exact `GO\n`.
+The launcher MUST NOT execute the target before the exact permit payload has been read and EOF has confirmed there are no additional permit bytes.
 
 ## 11. Durable evidence-before-side-effect invariant
 
 The central R2C invariant is:
 
-`Landlock active -> READY observed -> evidence durably committed -> GO -> target exec`
+`requested policy prepared -> launcher verified/spawned -> Landlock active -> READY observed -> evidence durably committed -> GO -> target exec`
 
 K2 must never send `GO` merely because READY was observed.
 
-K2 must:
+Before launcher open or spawn, K2 must:
 
-1. validate the exact readiness record and bound its size;
-2. create a K2 execution-attempt identity;
-3. validate/build the H4-R2A confinement request;
-4. bind its `executionIntentIdentity` to the exact K2 execution intent digest;
-5. bind its workspace identity to a deterministic K2 workspace-root identity that is explicitly documented as a local root identity, not repository-content identity;
-6. create the H4-R2A backend descriptor and observed enforcement evidence;
-7. build a deterministic durable confinement evidence record containing the full request, enforcement evidence, launcher artifact observation, and attempt identity;
-8. send that record to the trusted evidence commit interface;
-9. validate an exact commit acknowledgment against the record identity;
-10. only if the observed enforcement is `full` for `kodac-linux-landlock-fs-v1` **and** the evidence commit is proven may K2 send `GO\n`.
+1. snapshot and freeze the exact K2 execution intent and confinement requirement;
+2. evaluate policy exactly once and proceed only for `allow`;
+3. create the K2 execution-attempt identity;
+4. validate/build the canonical H4-R2A confinement request;
+5. bind the request `executionIntentIdentity` to the exact K2 execution intent digest;
+6. bind its workspace identity to a deterministic K2 workspace-root identity explicitly documented as a local root identity, not repository-content identity;
+7. derive and validate the H4-R2B Linux Landlock read-only launch plan and its canonical `launcherArgv` from the already validated request/target snapshot;
+8. create the H4-R2A backend descriptor needed for the later observed-enforcement record.
 
-If durable commit fails or acknowledgment is malformed, K2 must not send GO and the target must not execute.
+Only after those requested-policy artifacts are fixed may K2 open/verify the launcher artifact and spawn the controlled launcher through `/proc/self/fd/3` with the fixed descriptor protocol in Section 10.
+
+After READY, K2 must:
+
+1. read and validate the exact readiness record under the 128-byte protocol bound;
+2. create the observed H4-R2A enforcement evidence against the already fixed request/backend/attempt identities;
+3. build a deterministic durable confinement evidence record containing the full precomputed request, observed enforcement evidence, launcher artifact observation, and attempt identity;
+4. send that record to the trusted evidence commit interface;
+5. validate an exact commit acknowledgment against the record identity;
+6. only if the observed enforcement is `full` for `kodac-linux-landlock-fs-v1` **and** the evidence commit is proven may K2 write exactly `GO\n` and close the permit channel.
+
+If durable commit fails or acknowledgment is malformed, K2 must not send GO, must close the permit channel, and the target must not execute.
 
 ## 12. Partial / unavailable behavior
 
@@ -210,7 +225,7 @@ If the controlled launcher reports `partial`:
 - target must not execute;
 - the operation must terminate fail-closed.
 
-If launcher setup fails before READY, protocol output is malformed, the launcher artifact digest mismatches, `/proc/self/fd` execution is unavailable, or the runtime is otherwise unprovable:
+If launcher setup fails before READY, protocol output is malformed, the launcher artifact digest mismatches, `/proc/self/fd/3` execution is unavailable, or the runtime is otherwise unprovable:
 
 - target must not execute;
 - K2 must classify the operation as unavailable/fail-closed without inventing `full` evidence.
@@ -232,9 +247,9 @@ It may define:
 - immutable deep snapshots;
 - trusted runtime configuration shape.
 
-The module itself MUST NOT launch processes.
+The module itself MUST NOT launch processes, open files, hash filesystem artifacts, or become a filesystem service.
 
-Any filesystem-open/hash helper needed for same-FD launcher verification must remain explicitly K2-owned or in a narrowly named Linux artifact helper whose authority is limited to read-only launcher artifact observation. It must not become a general filesystem service.
+All same-FD launcher artifact open/stat/bounded-read/hash/descriptor-inheritance orchestration authorized by R2C MUST remain K2-owned inside the already allowlisted `packages/kodac-runtime/src/execution/gateway.ts`. R2C does not authorize a new Linux artifact-helper path. `packages/kodac-runtime/src/trust/confinement-linux-landlock.ts` remains limited to the already authorized Landlock structural/backend planning boundary and MUST NOT become a general filesystem service.
 
 ## 14. K2 receipt binding
 
@@ -308,7 +323,7 @@ After this authorization is canonical, H4-R2C implementation may modify exactly 
 9. `packages/kodac-runtime/test/kdo-h4-r2c-k2-linux-landlock-read-only.test.ts`
 10. `docs/planning/KODAC_KDO_H4_R2C_K2_LINUX_LANDLOCK_READ_ONLY_EVIDENCE_2026-08-14.md`
 
-No other path is authorized.
+No other path is authorized. In particular, no additional launcher-artifact helper path is authorized; same-FD launcher artifact I/O belongs inside allowlisted `gateway.ts` as stated in Section 13.
 
 The evidence ledger path (#10) MUST remain absent until the pre-ledger candidate satisfies the full R2C gate.
 
@@ -390,7 +405,8 @@ The new R2C focused test must prove at minimum:
 - workspace-root identity is deterministic for the same root and changes for a different root;
 - full confinement request/evidence/record/commit lineage validates exactly;
 - malformed/unknown/tampered/proxy/accessor inputs fail closed without executing hooks;
-- receipt binding is immutable and rejects semantic substitution.
+- receipt binding is immutable and rejects semantic substitution;
+- execution-attempt identity, canonical H4-R2A request, and canonical H4-R2B launch plan/`launcherArgv` are fully materialized before launcher open/spawn.
 
 ### Launcher artifact identity
 
@@ -400,14 +416,20 @@ The new R2C focused test must prove at minimum:
 - observed digest is computed from the retained open descriptor;
 - digest mismatch blocks before launcher execution;
 - retained descriptor bytes stay original even if the configured path is replaced after open;
-- controlled invocation executes through `/proc/self/fd/<fixed-fd>` using that inherited descriptor;
+- controlled invocation executes through exactly `/proc/self/fd/3` using inherited child descriptor 3;
+- same-FD open/stat/bounded-read/hash/inheritance orchestration resides in `gateway.ts`, with no additional helper path;
 - failure to use the descriptor path fails closed rather than reopening the configured path.
 
 ### Native handshake
 
+- the child descriptor map is exactly launcher fd 3, readiness fd 4, permit fd 5;
+- invalid/missing/aliased control descriptors fail with launcher setup failure and no target execution;
 - READY is emitted only after Landlock restriction succeeds;
+- readiness is one ASCII record, LF-terminated, at most 128 bytes, followed by descriptor-4 EOF;
 - no target execution occurs before GO;
-- EOF/malformed permit blocks target execution;
+- permit is exactly three bytes `GO\n`, followed by permit-channel EOF, with a hard four-byte read maximum;
+- EOF/malformed/extra-byte permit blocks target execution;
+- descriptors 3/4/5 do not leak through target `execv`;
 - malformed/oversized readiness evidence blocks;
 - `partial` never becomes `full`;
 - setup failure never executes target.
