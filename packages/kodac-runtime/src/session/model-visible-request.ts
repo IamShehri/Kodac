@@ -94,13 +94,29 @@ function compareStrings(a: string, b: string): number {
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${label} must be an object`)
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError(`${label} must be a plain JSON object`)
   return value as Record<string, unknown>
+}
+
+function ownDataEntries(record: Record<string, unknown>, label: string): Array<readonly [string, unknown]> {
+  if (Object.getOwnPropertySymbols(record).length > 0) throw new TypeError(`${label} contains symbol-keyed fields`)
+  const descriptors = Object.getOwnPropertyDescriptors(record)
+  const entries: Array<readonly [string, unknown]> = []
+  for (const key of Object.keys(descriptors)) {
+    const descriptor = descriptors[key]
+    if (!descriptor?.enumerable) throw new TypeError(`${label} contains non-enumerable field: ${key}`)
+    if (!("value" in descriptor)) throw new TypeError(`${label} contains accessor field: ${key}`)
+    entries.push([key, descriptor.value] as const)
+  }
+  return entries
 }
 
 function exactKeys(record: Record<string, unknown>, allowed: readonly string[], label: string): void {
   const allowedSet = new Set(allowed)
-  for (const key of Object.keys(record)) {
+  for (const [key, value] of ownDataEntries(record, label)) {
     if (!allowedSet.has(key)) throw new TypeError(`${label} contains unknown field: ${key}`)
+    if (value === undefined) throw new TypeError(`${label} contains undefined field: ${key}`)
   }
 }
 
@@ -120,7 +136,7 @@ function cloneJson(value: unknown, label: string, seen = new Set<object>()): unk
     if (!Number.isFinite(value)) throw new TypeError(`${label} contains a non-finite number`)
     return value
   }
-  if (typeof value !== "object") throw new TypeError(`${label} must be JSON-compatible`)
+  if (typeof value !== "object") throw new TypeError(`${label} must be JSON-compatible; ${typeof value} is not allowed`)
   if (seen.has(value)) throw new TypeError(`${label} contains a cycle`)
   seen.add(value)
   try {
@@ -132,11 +148,11 @@ function cloneJson(value: unknown, label: string, seen = new Set<object>()): unk
       }
       return Object.freeze(output)
     }
-    const input = value as Record<string, unknown>
+    const input = asRecord(value, label)
     const output: Record<string, unknown> = {}
-    for (const key of Object.keys(input).sort(compareStrings)) {
-      if (input[key] === undefined) throw new TypeError(`${label} contains undefined field: ${key}`)
-      output[key] = cloneJson(input[key], `${label}.${key}`, seen)
+    for (const [key, item] of ownDataEntries(input, label).sort(([a], [b]) => compareStrings(a, b))) {
+      if (item === undefined) throw new TypeError(`${label} contains undefined field: ${key}`)
+      output[key] = cloneJson(item, `${label}.${key}`, seen)
     }
     return Object.freeze(output)
   } finally {
@@ -146,11 +162,19 @@ function cloneJson(value: unknown, label: string, seen = new Set<object>()): unk
 
 function canonicalize(value: unknown): string {
   if (value === null) return "null"
-  if (typeof value === "string" || typeof value === "boolean" || typeof value === "number") return JSON.stringify(value)
+  if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value)
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("canonical value contains a non-finite number")
+    return JSON.stringify(value)
+  }
+  if (typeof value !== "object") throw new TypeError(`canonical value must be JSON-compatible; ${typeof value} is not allowed`)
   if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`
   const record = asRecord(value, "canonical value")
-  const keys = Object.keys(record).sort(compareStrings)
-  return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalize(record[key])}`).join(",")}}`
+  const entries = ownDataEntries(record, "canonical value").sort(([a], [b]) => compareStrings(a, b))
+  return `{${entries.map(([key, item]) => {
+    if (item === undefined) throw new TypeError(`canonical value contains undefined field: ${key}`)
+    return `${JSON.stringify(key)}:${canonicalize(item)}`
+  }).join(",")}}`
 }
 
 function sha256(value: string): string {
@@ -257,19 +281,17 @@ export function createModelVisibleRequestSnapshot(input: ModelVisibleRequestInpu
   if (totalMessageContentBytes > KDO_H2_R1_LIMITS.maxTotalMessageContentBytes) {
     throw new RangeError(`modelVisibleRequest message content exceeds ${KDO_H2_R1_LIMITS.maxTotalMessageContentBytes} UTF-8 bytes total`)
   }
-  const tools = Object.freeze(
-    input.tools.map((tool, index) => normalizeTool(tool, index)).sort((a, b) => compareStrings(a.name, b.name)),
-  )
-  for (let index = 1; index < tools.length; index += 1) {
-    if (tools[index - 1]?.name === tools[index]?.name) throw new TypeError(`modelVisibleRequest contains duplicate tool: ${tools[index]?.name}`)
+  const normalizedTools = input.tools.map((tool, index) => normalizeTool(tool, index))
+  const toolNames = new Set<string>()
+  for (const tool of normalizedTools) {
+    if (toolNames.has(tool.name)) throw new TypeError(`modelVisibleRequest contains duplicate tool: ${tool.name}`)
+    toolNames.add(tool.name)
   }
+  const tools = Object.freeze(normalizedTools)
   const preimage = requestPreimage({ provider, model, messages, tools })
   const canonical = canonicalize(preimage)
   const modelVisibleBytes = Buffer.byteLength(canonical, "utf8")
-  if (modelVisibleBytes > KDO_H2_R1_LIMITS.maxSnapshotBytes) {
-    throw new RangeError(`modelVisibleRequest exceeds ${KDO_H2_R1_LIMITS.maxSnapshotBytes} canonical JSON bytes`)
-  }
-  return Object.freeze({
+  const snapshot = Object.freeze({
     version: KDO_H2_R1_REQUEST_VERSION,
     provider,
     model,
@@ -281,6 +303,11 @@ export function createModelVisibleRequestSnapshot(input: ModelVisibleRequestInpu
     modelVisibleBytes,
     requestIdentity: sha256(canonical),
   })
+  const snapshotBytes = Buffer.byteLength(canonicalize(snapshot), "utf8")
+  if (snapshotBytes > KDO_H2_R1_LIMITS.maxSnapshotBytes) {
+    throw new RangeError(`modelVisibleRequest snapshot exceeds ${KDO_H2_R1_LIMITS.maxSnapshotBytes} canonical JSON bytes`)
+  }
+  return snapshot
 }
 
 export function validateModelVisibleRequestSnapshot(value: unknown): ModelVisibleRequestSnapshot {
