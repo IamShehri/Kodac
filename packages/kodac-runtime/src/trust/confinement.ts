@@ -76,6 +76,11 @@ function asPlainRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${label} must be a plain object`)
   const prototype = Object.getPrototypeOf(value)
   if (prototype !== Object.prototype && prototype !== null) throw new TypeError(`${label} must be a plain object`)
+  if (Object.getOwnPropertySymbols(value).length !== 0) throw new TypeError(`${label} must not contain symbol fields`)
+  for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
+    if (descriptor.get !== undefined || descriptor.set !== undefined) throw new TypeError(`${label}.${key} must be a data property`)
+    if (!descriptor.enumerable) throw new TypeError(`${label}.${key} must be enumerable`)
+  }
   return value as Record<string, unknown>
 }
 
@@ -85,6 +90,30 @@ function exactKeys(record: Record<string, unknown>, expected: readonly string[],
   if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
     throw new TypeError(`${label} must contain exactly: ${wanted.join(", ")}`)
   }
+}
+
+function denseArrayValues(value: unknown, label: string, maxItems: number): unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError(`${label} must be a plain array`)
+  if (Object.getOwnPropertySymbols(value).length !== 0) throw new TypeError(`${label} must not contain symbol fields`)
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const lengthDescriptor = descriptors.length
+  if (lengthDescriptor === undefined || typeof lengthDescriptor.value !== "number") throw new TypeError(`${label} length is invalid`)
+  const length = lengthDescriptor.value
+  if (!Number.isInteger(length) || length < 0 || length > maxItems) throw new TypeError(`${label} exceeds ${maxItems} entries`)
+  const allowedKeys = new Set(["length", ...Array.from({ length }, (_, index) => String(index))])
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (!allowedKeys.has(key)) throw new TypeError(`${label} contains an unexpected array field: ${key}`)
+    if (key !== "length" && (descriptor.get !== undefined || descriptor.set !== undefined)) {
+      throw new TypeError(`${label}[${key}] must be a data property`)
+    }
+  }
+  const values: unknown[] = []
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = descriptors[String(index)]
+    if (descriptor === undefined || !("value" in descriptor)) throw new TypeError(`${label} must be dense`)
+    values.push(descriptor.value)
+  }
+  return values
 }
 
 function requireEnum<T extends string>(value: unknown, values: readonly T[], label: string): T {
@@ -109,9 +138,8 @@ function canonicalScope(value: unknown): ConfinementScope {
   exactKeys(record, ["readPaths", "writePaths"], "confinement scope")
 
   const buildPaths = (input: unknown, label: string): string[] => {
-    if (!Array.isArray(input)) throw new TypeError(`${label} must be an array`)
-    if (input.length > MAX_SCOPE_ITEMS) throw new TypeError(`${label} exceeds ${MAX_SCOPE_ITEMS} entries`)
-    const paths = input.map((entry, index) => validateCanonicalPath(entry, `${label}[${index}]`))
+    const entries = denseArrayValues(input, label, MAX_SCOPE_ITEMS)
+    const paths = entries.map((entry, index) => validateCanonicalPath(entry, `${label}[${index}]`))
     const sorted = [...paths].sort()
     if (paths.some((path, index) => path !== sorted[index])) throw new TypeError(`${label} must be in canonical sorted order`)
     if (new Set(paths).size !== paths.length) throw new TypeError(`${label} must not contain duplicates`)
@@ -194,10 +222,9 @@ export function createConfinementBackendDescriptor(input: {
   const name = requireBoundedString(record.name, "confinement backend name", MAX_BACKEND_NAME_BYTES)
   const revision = requireBoundedString(record.revision, "confinement backend revision", MAX_BACKEND_REVISION_BYTES)
   const platform = requireEnum(record.platform, CONFINEMENT_PLATFORM_FAMILIES, "confinement backend platform")
-  if (!Array.isArray(record.supportedModes) || record.supportedModes.length === 0 || record.supportedModes.length > CONFINEMENT_MODES.length) {
-    throw new TypeError("confinement backend supportedModes must contain 1..3 entries")
-  }
-  const supportedModes = record.supportedModes.map((mode) => requireEnum(mode, CONFINEMENT_MODES, "confinement backend supported mode"))
+  const modeEntries = denseArrayValues(record.supportedModes, "confinement backend supportedModes", CONFINEMENT_MODES.length)
+  if (modeEntries.length === 0) throw new TypeError("confinement backend supportedModes must contain 1..3 entries")
+  const supportedModes = modeEntries.map((mode) => requireEnum(mode, CONFINEMENT_MODES, "confinement backend supported mode"))
   const canonicalModes = [...supportedModes].sort()
   if (supportedModes.some((mode, index) => mode !== canonicalModes[index])) throw new TypeError("confinement backend supportedModes must be in canonical sorted order")
   if (new Set(supportedModes).size !== supportedModes.length) throw new TypeError("confinement backend supportedModes must not contain duplicates")
@@ -214,7 +241,7 @@ export function validateConfinementBackendDescriptor(value: unknown): Confinemen
     name: requireBoundedString(record.name, "confinement backend name", MAX_BACKEND_NAME_BYTES),
     revision: requireBoundedString(record.revision, "confinement backend revision", MAX_BACKEND_REVISION_BYTES),
     platform: requireEnum(record.platform, CONFINEMENT_PLATFORM_FAMILIES, "confinement backend platform"),
-    supportedModes: Array.isArray(record.supportedModes) ? record.supportedModes as ConfinementMode[] : (() => { throw new TypeError("confinement backend supportedModes must be an array") })(),
+    supportedModes: denseArrayValues(record.supportedModes, "confinement backend supportedModes", CONFINEMENT_MODES.length) as ConfinementMode[],
   })
   const backendIdentity = requireIdentity(record.backendIdentity, "backendIdentity")
   if (backendIdentity !== rebuilt.backendIdentity) throw new TypeError("confinement backend identity mismatch")
