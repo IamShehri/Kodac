@@ -137,6 +137,9 @@ static int parse(int argc, char **argv, struct cli *cli) {
   if (!cli->probe && (cli->command == NULL || cli->command[0] == NULL)) {
     return fail_usage("missing `-- <argv>...` command", NULL);
   }
+  if (!cli->probe && cli->command[0][0] != '/') {
+    return fail_usage("target executable must be an absolute path", NULL);
+  }
   return 0;
 }
 
@@ -263,6 +266,6 @@ int main(int argc, char **argv) {
             KODAC_FS_CLAIM_SET, abi);
   }
 
-  execvp(cli.command[0], cli.command);
+  execv(cli.command[0], cli.command);
   return fail("exec failed", strerror(errno));
 }
