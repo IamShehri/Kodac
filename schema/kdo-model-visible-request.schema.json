@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kodac.dev/schema/kdo-model-visible-request.schema.json",
+  "title": "Kodac H2-R1 Model-Visible Request Snapshot",
+  "type": "object",
+  "additionalProperties": false
+}
