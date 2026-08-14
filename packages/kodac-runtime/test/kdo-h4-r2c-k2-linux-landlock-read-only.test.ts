@@ -79,7 +79,7 @@ function compileLauncher(root: string): string {
 function compileSigpipeProbe(root: string): string {
   const sourcePath = join(root, "sigpipe-probe.c")
   const binary = join(root, "sigpipe-probe")
-  writeFileSync(sourcePath, `#include <signal.h>\n#include <stdio.h>\nint main(void) {\n  struct sigaction action;\n  if (sigaction(SIGPIPE, NULL, &action) != 0) return 2;\n  if (action.sa_handler != SIG_DFL) return 3;\n  fputs("SIGPIPE_DEFAULT", stdout);\n  return 0;\n}\n`, "utf8")
+  writeFileSync(sourcePath, `#include <signal.h>\n#include <stdio.h>\nint main(void) {\n  void (*previous)(int) = signal(SIGPIPE, SIG_DFL);\n  if (previous == SIG_ERR) return 2;\n  if (previous != SIG_DFL) return 3;\n  fputs("SIGPIPE_DEFAULT", stdout);\n  return 0;\n}\n`, "utf8")
   const compile = spawnSync("cc", ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", sourcePath, "-o", binary], {
     encoding: "utf8",
     shell: false,
