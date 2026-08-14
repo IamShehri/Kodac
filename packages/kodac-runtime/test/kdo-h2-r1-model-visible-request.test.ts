@@ -223,6 +223,74 @@ test("non-plain JavaScript objects fail closed and toJSON hooks are never execut
   assert.deepEqual(accepted.messages[0]?.toolCalls?.[0]?.input, { value: 1 })
 })
 
+test("array accessors and hidden array fields fail closed without executing getters", () => {
+  let payloadGetterCalled = false
+  const accessorPayload: unknown[] = []
+  Object.defineProperty(accessorPayload, "0", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      payloadGetterCalled = true
+      return "secret"
+    },
+  })
+  accessorPayload.length = 1
+  assert.throws(() => createModelVisibleRequestSnapshot({
+    provider: "fixture",
+    model: "model",
+    messages: [{ role: "assistant", content: "", toolCalls: [{ id: "x", name: "tool", input: accessorPayload }] }],
+    tools: [],
+  }), /accessor field/)
+  assert.equal(payloadGetterCalled, false)
+
+  let messageGetterCalled = false
+  const accessorMessages: unknown[] = []
+  Object.defineProperty(accessorMessages, "0", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      messageGetterCalled = true
+      return { role: "user", content: "secret" }
+    },
+  })
+  accessorMessages.length = 1
+  assert.throws(() => createModelVisibleRequestSnapshot({
+    provider: "fixture",
+    model: "model",
+    messages: accessorMessages as never,
+    tools: [],
+  }), /accessor field/)
+  assert.equal(messageGetterCalled, false)
+
+  const extra = ["ok"] as unknown[] & { hidden?: string }
+  extra.hidden = "secret"
+  assert.throws(() => createModelVisibleRequestSnapshot({
+    provider: "fixture",
+    model: "model",
+    messages: [{ role: "assistant", content: "", toolCalls: [{ id: "x", name: "tool", input: extra }] }],
+    tools: [],
+  }), /unknown array field/)
+
+  const symbolArray = ["ok"] as unknown[]
+  Object.defineProperty(symbolArray, Symbol("hidden"), { value: "secret", enumerable: true })
+  assert.throws(() => createModelVisibleRequestSnapshot({
+    provider: "fixture",
+    model: "model",
+    messages: [{ role: "assistant", content: "", toolCalls: [{ id: "x", name: "tool", input: symbolArray }] }],
+    tools: [],
+  }), /symbol-keyed fields/)
+
+  class CustomArray extends Array<unknown> {}
+  const customArray = new CustomArray()
+  customArray.push("x")
+  assert.throws(() => createModelVisibleRequestSnapshot({
+    provider: "fixture",
+    model: "model",
+    messages: [{ role: "assistant", content: "", toolCalls: [{ id: "x", name: "tool", input: customArray }] }],
+    tools: [],
+  }), /plain array/)
+})
+
 test("all authorized item and byte bounds fail closed without truncation", () => {
   const L = KDO_H2_R1_LIMITS
   assert.throws(() => createModelVisibleRequestSnapshot({ provider: "p".repeat(L.maxProviderBytes + 1), model: "m", messages: [], tools: [] }), /provider/)
