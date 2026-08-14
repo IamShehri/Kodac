@@ -112,6 +112,28 @@ function ownDataEntries(record: Record<string, unknown>, label: string): Array<r
   return entries
 }
 
+function ownArrayDataValues(array: readonly unknown[], label: string): unknown[] {
+  if (Object.getPrototypeOf(array) !== Array.prototype) throw new TypeError(`${label} must be a plain array`)
+  if (Object.getOwnPropertySymbols(array).length > 0) throw new TypeError(`${label} contains symbol-keyed fields`)
+  const descriptors = Object.getOwnPropertyDescriptors(array)
+  const allowedKeys = new Set<string>(["length"])
+  const values: unknown[] = []
+  for (let index = 0; index < array.length; index += 1) {
+    const key = String(index)
+    allowedKeys.add(key)
+    const descriptor = descriptors[key]
+    if (!descriptor) throw new TypeError(`${label} contains a sparse array`)
+    if (!descriptor.enumerable) throw new TypeError(`${label} contains non-enumerable field: ${key}`)
+    if (!("value" in descriptor)) throw new TypeError(`${label} contains accessor field: ${key}`)
+    if (descriptor.value === undefined) throw new TypeError(`${label} contains undefined item: ${key}`)
+    values.push(descriptor.value)
+  }
+  for (const key of Object.keys(descriptors)) {
+    if (!allowedKeys.has(key)) throw new TypeError(`${label} contains unknown array field: ${key}`)
+  }
+  return values
+}
+
 function exactKeys(record: Record<string, unknown>, allowed: readonly string[], label: string): void {
   const allowedSet = new Set(allowed)
   for (const [key, value] of ownDataEntries(record, label)) {
@@ -141,12 +163,8 @@ function cloneJson(value: unknown, label: string, seen = new Set<object>()): unk
   seen.add(value)
   try {
     if (Array.isArray(value)) {
-      const output: unknown[] = []
-      for (let index = 0; index < value.length; index += 1) {
-        if (!(index in value)) throw new TypeError(`${label} contains a sparse array`)
-        output.push(cloneJson(value[index], `${label}[${index}]`, seen))
-      }
-      return Object.freeze(output)
+      const items = ownArrayDataValues(value, label)
+      return Object.freeze(items.map((item, index) => cloneJson(item, `${label}[${index}]`, seen)))
     }
     const input = asRecord(value, label)
     const output: Record<string, unknown> = {}
@@ -168,7 +186,10 @@ function canonicalize(value: unknown): string {
     return JSON.stringify(value)
   }
   if (typeof value !== "object") throw new TypeError(`canonical value must be JSON-compatible; ${typeof value} is not allowed`)
-  if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`
+  if (Array.isArray(value)) {
+    const items = ownArrayDataValues(value, "canonical value")
+    return `[${items.map(canonicalize).join(",")}]`
+  }
   const record = asRecord(value, "canonical value")
   const entries = ownDataEntries(record, "canonical value").sort(([a], [b]) => compareStrings(a, b))
   return `{${entries.map(([key, item]) => {
@@ -214,7 +235,8 @@ function normalizeMessage(value: unknown, index: number): ModelVisibleMessage {
       throw new TypeError(`${label}.toolCalls must contain at most ${KDO_H2_R1_LIMITS.maxToolCallsPerMessage} entries`)
     }
     const ids = new Set<string>()
-    const normalized = record.toolCalls.map((call, callIndex) => normalizeToolCall(call, `${label}.toolCalls[${callIndex}]`))
+    const calls = ownArrayDataValues(record.toolCalls, `${label}.toolCalls`)
+    const normalized = calls.map((call, callIndex) => normalizeToolCall(call, `${label}.toolCalls[${callIndex}]`))
     for (const call of normalized) {
       if (ids.has(call.id)) throw new TypeError(`${label}.toolCalls contains duplicate id: ${call.id}`)
       ids.add(call.id)
@@ -276,12 +298,14 @@ export function createModelVisibleRequestSnapshot(input: ModelVisibleRequestInpu
   }
   const provider = boundedString(input.provider, "modelVisibleRequest.provider", KDO_H2_R1_LIMITS.maxProviderBytes)
   const model = boundedString(input.model, "modelVisibleRequest.model", KDO_H2_R1_LIMITS.maxModelBytes)
-  const messages = Object.freeze(input.messages.map((message, index) => normalizeMessage(message, index)))
+  const inputMessages = ownArrayDataValues(input.messages, "modelVisibleRequest.messages")
+  const messages = Object.freeze(inputMessages.map((message, index) => normalizeMessage(message, index)))
   const totalMessageContentBytes = messages.reduce((total, message) => total + Buffer.byteLength(message.content, "utf8"), 0)
   if (totalMessageContentBytes > KDO_H2_R1_LIMITS.maxTotalMessageContentBytes) {
     throw new RangeError(`modelVisibleRequest message content exceeds ${KDO_H2_R1_LIMITS.maxTotalMessageContentBytes} UTF-8 bytes total`)
   }
-  const normalizedTools = input.tools.map((tool, index) => normalizeTool(tool, index))
+  const inputTools = ownArrayDataValues(input.tools, "modelVisibleRequest.tools")
+  const normalizedTools = inputTools.map((tool, index) => normalizeTool(tool, index))
   const toolNames = new Set<string>()
   for (const tool of normalizedTools) {
     if (toolNames.has(tool.name)) throw new TypeError(`modelVisibleRequest contains duplicate tool: ${tool.name}`)
