@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto"
 import type { ModelMessage, ModelToolCall } from "../model/provider.ts"
 import type { AgentTurnRunner, AgentTurnResult } from "../model/turn.ts"
+import {
+  createModelHistoryMessageRecord,
+  modelVisibleMessagesEqual,
+  projectModelVisibleHistory,
+} from "../session/model-visible-history.ts"
 import type { RuntimeSession } from "../session/session.ts"
 
 export interface AgentLoopLimits {
@@ -54,6 +59,11 @@ export const DEFAULT_AGENT_LOOP_LIMITS: AgentLoopLimits = {
   maxRepeatedTurnSignatures: 2,
   maxToolResultChars: 12_000,
 }
+
+const RECOVERY_MESSAGE: ModelMessage = Object.freeze({
+  role: "system",
+  content: "The previous model/tool turn failed. Reconsider the task and continue without repeating the same failed action.",
+})
 
 class AgentLoopStop extends Error {
   readonly reason: Exclude<AgentLoopStopReason, "completed">
@@ -144,6 +154,15 @@ async function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Prom
   })
 }
 
+function cloneBootstrapMessage(message: ModelMessage): ModelMessage {
+  return {
+    ...message,
+    ...(message.toolCalls === undefined
+      ? {}
+      : { toolCalls: message.toolCalls.map((call) => ({ ...call })) }),
+  }
+}
+
 export class BoundedAgentLoop {
   private readonly runner: AgentTurnRunner
   private readonly session: RuntimeSession
@@ -162,9 +181,17 @@ export class BoundedAgentLoop {
     let toolCallsUsed = 0
     let failuresUsed = 0
     let assistant = ""
-    const messages = input.messages.map((message) => ({ ...message }))
+    const bootstrapMessages = input.messages.map(cloneBootstrapMessage)
     const toolCounts = new Map<string, number>()
     const turnCounts = new Map<string, number>()
+
+    const startingProjection = projectModelVisibleHistory(this.session.eventsSnapshot())
+    if (
+      startingProjection.anchorRequestIdentity !== undefined &&
+      !modelVisibleMessagesEqual(bootstrapMessages, startingProjection.messages)
+    ) {
+      throw new Error("Anchored model-visible history is event-derived; caller messages do not match the canonical projection")
+    }
 
     const budget = (): AgentLoopBudget => ({
       turnsUsed,
@@ -186,11 +213,18 @@ export class BoundedAgentLoop {
       return remaining
     }
 
+    const messagesForNextTurn = (): ModelMessage[] => {
+      const projection = projectModelVisibleHistory(this.session.eventsSnapshot())
+      return projection.anchorRequestIdentity === undefined
+        ? bootstrapMessages.map(cloneBootstrapMessage)
+        : projection.messages
+    }
+
     await this.session.emit("agent.loop.started", {
       provider: input.provider,
       model: input.model,
       limits,
-      initialMessageCount: messages.length,
+      initialMessageCount: bootstrapMessages.length,
     })
 
     for (let turn = 1; turn <= limits.maxTurns; turn++) {
@@ -207,6 +241,7 @@ export class BoundedAgentLoop {
       const callFingerprints: string[] = []
       const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remaining)))
       const turnSignal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal
+      const turnMessages = messagesForNextTurn()
 
       let result: AgentTurnResult
       try {
@@ -215,7 +250,7 @@ export class BoundedAgentLoop {
             {
               provider: input.provider,
               model: input.model,
-              messages,
+              messages: turnMessages,
               signal: turnSignal,
             },
             {
@@ -247,28 +282,49 @@ export class BoundedAgentLoop {
           budget: budget(),
         })
         if (failuresUsed >= limits.maxFailures) return stop("max_failures")
-        messages.push({
-          role: "system",
-          content: "The previous model/tool turn failed. Reconsider the task and continue without repeating the same failed action.",
-        })
+
+        const projection = projectModelVisibleHistory(this.session.eventsSnapshot())
+        if (projection.anchorRequestIdentity === undefined) {
+          bootstrapMessages.push(cloneBootstrapMessage(RECOVERY_MESSAGE))
+        } else {
+          await this.session.emit("model.history.message.appended", createModelHistoryMessageRecord({
+            afterRequestIdentity: projection.anchorRequestIdentity,
+            source: "recovery_system",
+            message: cloneBootstrapMessage(RECOVERY_MESSAGE),
+          }))
+        }
         continue
       }
 
       assistant = result.assistant
+      const projection = projectModelVisibleHistory(this.session.eventsSnapshot())
+      if (projection.anchorRequestIdentity === undefined) {
+        throw new Error("Successful model turn did not establish an H2-R1 request snapshot anchor")
+      }
+      const afterRequestIdentity = projection.anchorRequestIdentity
+
       if (result.assistant || result.toolCalls.length > 0) {
-        messages.push({
-          role: "assistant",
-          content: result.assistant,
-          toolCalls: result.toolCalls.map((call) => ({ ...call })),
-        })
+        await this.session.emit("model.history.message.appended", createModelHistoryMessageRecord({
+          afterRequestIdentity,
+          source: "assistant_response",
+          message: {
+            role: "assistant",
+            content: result.assistant,
+            toolCalls: result.toolCalls.map((call) => ({ ...call })),
+          },
+        }))
       }
       for (const toolResult of result.toolResults) {
-        messages.push({
-          role: "tool",
-          name: toolResult.name,
-          toolCallId: toolResult.id,
-          content: toolMessageContent(toolResult.output, limits.maxToolResultChars),
-        })
+        await this.session.emit("model.history.message.appended", createModelHistoryMessageRecord({
+          afterRequestIdentity,
+          source: "tool_result",
+          message: {
+            role: "tool",
+            name: toolResult.name,
+            toolCallId: toolResult.id,
+            content: toolMessageContent(toolResult.output, limits.maxToolResultChars),
+          },
+        }))
       }
 
       const signature = sha256(`${result.finishReason}\n${result.assistant}\n${callFingerprints.join("\n")}`)
