@@ -124,8 +124,11 @@ function assertUnicodeScalars(value: string, label: string): void {
 
 class StrictJsonParser {
   private index = 0
+  private readonly text: string
 
-  constructor(private readonly text: string) {}
+  constructor(text: string) {
+    this.text = text
+  }
 
   parse(): JsonValue {
     this.skipWhitespace()
