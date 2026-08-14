@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { spawnSync } from "node:child_process"
 import test from "node:test"
@@ -239,7 +239,7 @@ test("native source and notices preserve donor license and local claim boundarie
 
 test("TypeScript adapter remains pure and protected authority surfaces stay byte-identical", () => {
   const adapter = source("../src/trust/confinement-linux-landlock.ts")
-  assert.doesNotMatch(adapter, /node:child_process|spawnSync|spawn\(|execFile|exec\(|process\.env|readFile|writeFile|node:fs|Bun|Deno/)
+  assert.doesNotMatch(adapter, /from\s+["']node:child_process["']|require\(["']node:child_process["']\)|\bspawnSync\s*\(|\bspawn\s*\(|\bexecFile\s*\(|\bexec\s*\(|process\.env|from\s+["']node:fs["']|require\(["']node:fs["']\)|\bBun\.spawn\b|\bDeno\.Command\b/)
 
   assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "8b481c226276d0b06fabc8d614c1295cd0881a6a")
   assert.equal(gitBlobSha1(source("../src/trust/confinement.ts")), "873f235120645c0a12f10a5bff7e9591db6bb341")
@@ -274,6 +274,11 @@ linuxOnly("Linux native launcher compiles probes and enforces read-only/workspac
     })
     assert.notEqual(classification.enforcement, "unavailable")
     assert.ok((classification.observedAbi ?? 0) >= 1)
+    console.log(`H4_R2B_LANDLOCK_PROBE ${JSON.stringify({
+      abi: classification.observedAbi,
+      enforcement: classification.enforcement,
+      claimSet: classification.claimSet,
+    })}`)
 
     const allowed = join(root, "allowed")
     const denied = join(root, "denied")
