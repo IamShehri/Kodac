@@ -3,8 +3,16 @@ import { createHash } from "node:crypto"
 import { isAbsolute, relative, resolve, sep } from "node:path"
 import type { WorkspaceFileSystem } from "../edit/filesystem.ts"
 import { applyHunks, parsePatch, type AffectedPaths } from "../edit/patch.ts"
-import { createReceipt, type ExecutionReceipt } from "../evidence/receipt.ts"
+import { createReceipt, type ApprovalReceiptBinding, type ExecutionReceipt } from "../evidence/receipt.ts"
 import { isFullGitObjectId } from "../repository/contracts.ts"
+import {
+  KDO_H4_R1_APPROVAL_VERSION,
+  createApprovalEvidence,
+  createApprovalRequest,
+  validateApprovalDecision,
+  type ApprovalOutcome,
+  type ApprovalRuntime,
+} from "../trust/approval.ts"
 import type { ExecutionIntent, PolicyEngine, PolicyResult } from "../trust/policy.ts"
 
 export interface ExecutionObserver {
@@ -70,7 +78,21 @@ function canonicalParent(path: string): string {
   return separator < 0 ? "." : path.slice(0, separator)
 }
 
-function blockedReceipt(intent: ExecutionIntent, policy: PolicyResult, startedAt: string): ExecutionReceipt {
+function canonicalEnvironment(env: NodeJS.ProcessEnv | undefined): Record<string, string> | undefined {
+  if (env === undefined) return undefined
+  return Object.fromEntries(
+    Object.entries(env)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+      .sort(([left], [right]) => left.localeCompare(right)),
+  )
+}
+
+function blockedReceipt(
+  intent: ExecutionIntent,
+  policy: PolicyResult,
+  startedAt: string,
+  reason = policy.reason,
+): ExecutionReceipt {
   return createReceipt({
     capability: intent.capability,
     inputDigest: intent.inputDigest,
@@ -78,7 +100,7 @@ function blockedReceipt(intent: ExecutionIntent, policy: PolicyResult, startedAt
     policy,
     startedAt,
     completedAt: new Date().toISOString(),
-    result: { status: "blocked", reason: policy.reason },
+    result: { status: "blocked", reason },
   })
 }
 
@@ -170,10 +192,113 @@ async function digestAffectedState(fs: WorkspaceFileSystem, affected: AffectedPa
 export class ExecutionGateway {
   private readonly fs: WorkspaceFileSystem
   private readonly policy: PolicyEngine
+  private readonly approval?: ApprovalRuntime
 
-  constructor(fs: WorkspaceFileSystem, policy: PolicyEngine) {
+  constructor(fs: WorkspaceFileSystem, policy: PolicyEngine, approval?: ApprovalRuntime) {
     this.fs = fs
     this.policy = policy
+    this.approval = approval
+  }
+
+  private async block(
+    intent: ExecutionIntent,
+    policy: PolicyResult,
+    startedAt: string,
+    observer: ExecutionObserver | undefined,
+    reason: string,
+    message: string,
+  ): Promise<never> {
+    const receipt = blockedReceipt(intent, policy, startedAt, reason)
+    await persistReceipt(observer, receipt)
+    throw new ExecutionBlockedError(message, receipt)
+  }
+
+  private async authorize(
+    intent: ExecutionIntent,
+    policy: PolicyResult,
+    startedAt: string,
+    observer: ExecutionObserver | undefined,
+    signal?: AbortSignal,
+  ): Promise<ApprovalReceiptBinding | undefined> {
+    if (policy.decision === "allow") return undefined
+    if (policy.decision === "deny") {
+      return this.block(intent, policy, startedAt, observer, policy.reason, `Execution denied: ${policy.reason}`)
+    }
+
+    const runtime = this.approval
+    if (!runtime) {
+      return this.block(intent, policy, startedAt, observer, policy.reason, `Approval required: ${policy.reason}`)
+    }
+
+    const request = createApprovalRequest(intent)
+    try {
+      await runtime.evidence.append(createApprovalEvidence(request, "asked"))
+    } catch {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        "approval asked evidence could not be persisted",
+        "Approval unavailable: asked evidence could not be persisted",
+      )
+    }
+
+    let outcome: ApprovalOutcome
+    try {
+      if (signal?.aborted) {
+        outcome = "cancelled"
+      } else {
+        const rawDecision = await runtime.service.decide(request, { signal })
+        outcome = validateApprovalDecision(rawDecision, request).outcome
+      }
+    } catch {
+      outcome = signal?.aborted ? "cancelled" : "unavailable"
+    }
+
+    const decisionEvidence = createApprovalEvidence(request, "decided", outcome)
+    try {
+      await runtime.evidence.append(decisionEvidence)
+    } catch {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        "approval decision evidence could not be persisted",
+        "Approval unavailable: decision evidence could not be persisted",
+      )
+    }
+
+    if (outcome !== "allowed-once") {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        `one-shot approval outcome: ${outcome}`,
+        `Execution blocked by one-shot approval outcome: ${outcome}`,
+      )
+    }
+
+    if (signal?.aborted) {
+      return this.block(
+        intent,
+        policy,
+        startedAt,
+        observer,
+        "operation aborted after one-shot approval",
+        "Execution blocked: operation aborted after one-shot approval",
+      )
+    }
+
+    return Object.freeze({
+      version: KDO_H4_R1_APPROVAL_VERSION,
+      requestIdentity: request.requestIdentity,
+      requestInstanceId: request.requestInstanceId,
+      decisionEvidenceIdentity: decisionEvidence.evidenceIdentity,
+      outcome: "allowed-once",
+    })
   }
 
   async applyPatch(
@@ -196,15 +321,7 @@ export class ExecutionGateway {
 
     const policy = await this.policy.evaluate(intent)
     await observer?.onPolicy?.(intent, policy)
-
-    if (policy.decision !== "allow") {
-      const receipt = blockedReceipt(intent, policy, startedAt)
-      await persistReceipt(observer, receipt)
-      throw new ExecutionBlockedError(
-        policy.decision === "ask" ? `Approval required: ${policy.reason}` : `Execution denied: ${policy.reason}`,
-        receipt,
-      )
-    }
+    const approval = await this.authorize(intent, policy, startedAt, observer)
 
     let affected: Awaited<ReturnType<typeof applyHunks>>
     try {
@@ -216,6 +333,7 @@ export class ExecutionGateway {
         inputDigest: intent.inputDigest,
         paths: intent.paths,
         policy,
+        ...(approval === undefined ? {} : { approval }),
         startedAt,
         completedAt: new Date().toISOString(),
         result: { status: "failure", error: message },
@@ -229,6 +347,7 @@ export class ExecutionGateway {
       inputDigest: intent.inputDigest,
       paths: intent.paths,
       policy,
+      ...(approval === undefined ? {} : { approval }),
       startedAt,
       completedAt: new Date().toISOString(),
       result: { status: "success", affected, postStateDigest: await digestAffectedState(this.fs, affected) },
@@ -388,20 +507,19 @@ export class ExecutionGateway {
     const intent: ExecutionIntent = {
       capability,
       paths,
-      inputDigest: sha256(JSON.stringify({ executable, args, allowedExitCodes })),
+      inputDigest: sha256(JSON.stringify({
+        executable,
+        args,
+        allowedExitCodes,
+        maxOutputBytes,
+        timeoutMs,
+        env: canonicalEnvironment(options.env),
+      })),
     }
     await observer?.onIntent?.(intent)
     const policy = await this.policy.evaluate(intent)
     await observer?.onPolicy?.(intent, policy)
-
-    if (policy.decision !== "allow") {
-      const receipt = blockedReceipt(intent, policy, startedAt)
-      await persistReceipt(observer, receipt)
-      throw new ExecutionBlockedError(
-        policy.decision === "ask" ? `Approval required: ${policy.reason}` : `Execution denied: ${policy.reason}`,
-        receipt,
-      )
-    }
+    const approval = await this.authorize(intent, policy, startedAt, observer, options.signal)
 
     try {
       for (const path of paths) await this.fs.validatePath(path)
@@ -419,6 +537,7 @@ export class ExecutionGateway {
         inputDigest: intent.inputDigest,
         paths: intent.paths,
         policy,
+        ...(approval === undefined ? {} : { approval }),
         startedAt,
         completedAt: new Date().toISOString(),
         result: {
@@ -438,6 +557,7 @@ export class ExecutionGateway {
         inputDigest: intent.inputDigest,
         paths: intent.paths,
         policy,
+        ...(approval === undefined ? {} : { approval }),
         startedAt,
         completedAt: new Date().toISOString(),
         result: { status: "failure", error: message },
