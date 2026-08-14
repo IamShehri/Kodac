@@ -172,6 +172,10 @@ test("H5-R1A fails closed on malformed or hostile structural inputs without exec
   Object.defineProperty(hidden, "secret", { value: "hidden", enumerable: false })
   assert.throws(() => pruneModelVisibleToolResults([hidden], policy), /enumerable/)
 
+  const hiddenLengthPolicy = { maxToolResultBytes: 192 } as Record<string, unknown>
+  Object.defineProperty(hiddenLengthPolicy, "length", { value: 1, enumerable: false })
+  assert.throws(() => createToolResultPruningPolicy(hiddenLengthPolicy as never), /length must be enumerable/)
+
   const symbolBearing = { role: "tool", name: "x", toolCallId: "y", content: "x".repeat(300) } as Record<PropertyKey, unknown>
   symbolBearing[Symbol("hostile")] = true
   assert.throws(() => pruneModelVisibleToolResults([symbolBearing], policy), /symbol/)
