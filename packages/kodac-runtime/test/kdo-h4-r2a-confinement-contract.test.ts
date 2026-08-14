@@ -177,6 +177,46 @@ test("enforcement evidence binds request attempt and backend while preserving pa
   assert.throws(() => validateConfinementEnforcementEvidence({ ...full, requestIdentity: ID_A }))
 })
 
+test("all explicit H4-R2A item and UTF-8 byte bounds fail closed without truncation", () => {
+  const tooManyPaths = Array.from({ length: 257 }, (_, index) => `scope/${String(index).padStart(3, "0")}`)
+  assert.throws(() => createConfinementRequest({
+    mode: "read-only",
+    workspaceIdentity: ID_A,
+    executionIntentIdentity: ID_B,
+    scope: { readPaths: tooManyPaths, writePaths: [] },
+  }), /256 entries/)
+
+  const oversizedPath = `scope/${"é".repeat(510)}`
+  assert.ok(Buffer.byteLength(oversizedPath, "utf8") > 1024)
+  assert.throws(() => createConfinementRequest({
+    mode: "read-only",
+    workspaceIdentity: ID_A,
+    executionIntentIdentity: ID_B,
+    scope: { readPaths: [oversizedPath], writePaths: [] },
+  }), /1024 UTF-8 bytes/)
+
+  assert.throws(() => createConfinementBackendDescriptor({
+    name: "é".repeat(81),
+    revision: "fixture-v1",
+    platform: "linux",
+    supportedModes: ["read-only"],
+  }), /160 UTF-8 bytes/)
+  assert.throws(() => createConfinementBackendDescriptor({
+    name: "fixture",
+    revision: "é".repeat(129),
+    platform: "linux",
+    supportedModes: ["read-only"],
+  }), /256 UTF-8 bytes/)
+
+  assert.throws(() => createConfinementEnforcementEvidence({
+    request: request(),
+    executionAttemptIdentity: ID_C,
+    backend: backend(),
+    enforcement: "partial",
+    reason: "é".repeat(2049),
+  }), /4096 UTF-8 bytes/)
+})
+
 test("published schema mirrors strict structural contract without pretending runtime UTF-8 byte limits are maxLength", () => {
   const schema = JSON.parse(source("../../../schema/kdo-h4-r2a-confinement.schema.json")) as Record<string, unknown>
   const text = JSON.stringify(schema)
