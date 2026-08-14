@@ -67,6 +67,13 @@ const RECOVERY_MESSAGE: ModelMessage = Object.freeze({
 
 const SESSION_LOOP_TAILS = new WeakMap<RuntimeSession, Promise<void>>()
 
+type HistoryAppendSource = "assistant_response" | "tool_result" | "recovery_system"
+
+interface PendingHistoryMessage {
+  source: HistoryAppendSource
+  message: ModelMessage
+}
+
 class AgentLoopStop extends Error {
   readonly reason: Exclude<AgentLoopStopReason, "completed">
 
@@ -180,15 +187,22 @@ function cloneBootstrapMessage(message: ModelMessage): ModelMessage {
   }
 }
 
-function assertHistoryAppendable(messages: readonly ModelMessage[], message: ModelMessage): void {
-  if (messages.length + 1 > KDO_H2_R2_LIMITS.maxProjectedMessages) {
+function assertHistoryBatchAppendable(
+  messages: readonly ModelMessage[],
+  additions: readonly ModelMessage[],
+): void {
+  if (messages.length + additions.length > KDO_H2_R2_LIMITS.maxProjectedMessages) {
     throw new RangeError(`projected model history exceeds ${KDO_H2_R2_LIMITS.maxProjectedMessages} messages`)
   }
-  const totalContentBytes = messages.reduce(
+  const existingContentBytes = messages.reduce(
     (total, current) => total + Buffer.byteLength(current.content, "utf8"),
-    Buffer.byteLength(message.content, "utf8"),
+    0,
   )
-  if (totalContentBytes > KDO_H2_R2_LIMITS.maxTotalMessageContentBytes) {
+  const addedContentBytes = additions.reduce(
+    (total, current) => total + Buffer.byteLength(current.content, "utf8"),
+    0,
+  )
+  if (existingContentBytes + addedContentBytes > KDO_H2_R2_LIMITS.maxTotalMessageContentBytes) {
     throw new RangeError(
       `projected model history content exceeds ${KDO_H2_R2_LIMITS.maxTotalMessageContentBytes} UTF-8 bytes`,
     )
@@ -251,21 +265,24 @@ export class BoundedAgentLoop {
         : projection.messages
     }
 
-    const appendHistoryMessage = async (
-      source: "assistant_response" | "tool_result" | "recovery_system",
-      message: ModelMessage,
-    ): Promise<void> => {
+    const appendHistoryBatch = async (pending: readonly PendingHistoryMessage[]): Promise<void> => {
+      if (pending.length === 0) return
       const projection = projectModelVisibleHistory(runEvents())
       if (projection.anchorRequestIdentity === undefined) {
         throw new Error("H2-R2 history append requires an H2-R1 request snapshot anchor")
       }
-      const record = createModelHistoryMessageRecord({
-        afterRequestIdentity: projection.anchorRequestIdentity,
+      const records = pending.map(({ source, message }) => createModelHistoryMessageRecord({
+        afterRequestIdentity: projection.anchorRequestIdentity as string,
         source,
         message,
-      })
-      assertHistoryAppendable(projection.messages, record.message as ModelMessage)
-      await this.session.emit("model.history.message.appended", record)
+      }))
+      assertHistoryBatchAppendable(
+        projection.messages,
+        records.map((record) => record.message as ModelMessage),
+      )
+      for (const record of records) {
+        await this.session.emit("model.history.message.appended", record)
+      }
     }
 
     await this.session.emit("agent.loop.started", {
@@ -335,7 +352,10 @@ export class BoundedAgentLoop {
         if (projection.anchorRequestIdentity === undefined) {
           bootstrapMessages.push(cloneBootstrapMessage(RECOVERY_MESSAGE))
         } else {
-          await appendHistoryMessage("recovery_system", cloneBootstrapMessage(RECOVERY_MESSAGE))
+          await appendHistoryBatch([{
+            source: "recovery_system",
+            message: cloneBootstrapMessage(RECOVERY_MESSAGE),
+          }])
         }
         continue
       }
@@ -346,21 +366,29 @@ export class BoundedAgentLoop {
         throw new Error("Successful model turn did not establish an H2-R1 request snapshot anchor")
       }
 
+      const historyBatch: PendingHistoryMessage[] = []
       if (result.assistant || result.toolCalls.length > 0) {
-        await appendHistoryMessage("assistant_response", {
-          role: "assistant",
-          content: result.assistant,
-          toolCalls: result.toolCalls.map((call) => ({ ...call })),
+        historyBatch.push({
+          source: "assistant_response",
+          message: {
+            role: "assistant",
+            content: result.assistant,
+            toolCalls: result.toolCalls.map((call) => ({ ...call })),
+          },
         })
       }
       for (const toolResult of result.toolResults) {
-        await appendHistoryMessage("tool_result", {
-          role: "tool",
-          name: toolResult.name,
-          toolCallId: toolResult.id,
-          content: toolMessageContent(toolResult.output, limits.maxToolResultChars),
+        historyBatch.push({
+          source: "tool_result",
+          message: {
+            role: "tool",
+            name: toolResult.name,
+            toolCallId: toolResult.id,
+            content: toolMessageContent(toolResult.output, limits.maxToolResultChars),
+          },
         })
       }
+      await appendHistoryBatch(historyBatch)
 
       const signature = sha256(`${result.finishReason}\n${result.assistant}\n${callFingerprints.join("\n")}`)
       const repeated = (turnCounts.get(signature) ?? 0) + 1
