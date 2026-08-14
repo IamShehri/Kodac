@@ -1,4 +1,5 @@
 export * from "./agent/loop.ts"
+export * from "./agent/repeat-call-signal.ts"
 export * from "./agent/tool-result-pruning.ts"
 export * from "./context-connectors/contracts.ts"
 export * from "./context-connectors/indexer-state-machine.ts"
