@@ -57,7 +57,12 @@ test("request identity is deterministic and binds mode workspace intent and scop
   const first = request()
   const second = request()
   assert.equal(first.requestIdentity, second.requestIdentity)
-  assert.notEqual(first.requestIdentity, createConfinementRequest({ ...first, mode: "read-only" } as never).requestIdentity)
+  assert.notEqual(first.requestIdentity, createConfinementRequest({
+    mode: "read-only",
+    workspaceIdentity: first.workspaceIdentity,
+    executionIntentIdentity: first.executionIntentIdentity,
+    scope: first.scope,
+  }).requestIdentity)
   assert.notEqual(first.requestIdentity, createConfinementRequest({
     mode: first.mode,
     workspaceIdentity: ID_C,
