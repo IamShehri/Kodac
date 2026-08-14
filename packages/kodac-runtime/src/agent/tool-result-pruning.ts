@@ -33,6 +33,7 @@ export const KDO_H5_R1A_LIMITS = Object.freeze({
   maxToolResultBytes: KDO_H2_R1_LIMITS.maxMessageContentBytes,
   maxMessages: KDO_H2_R1_LIMITS.maxMessages,
   maxTotalMessageContentBytes: KDO_H2_R1_LIMITS.maxTotalMessageContentBytes,
+  maxStructuralDepth: KDO_H2_R1_LIMITS.maxJsonDepth + 8,
 } as const)
 
 export interface ToolResultPruningPolicyInput {
@@ -76,8 +77,16 @@ function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex")
 }
 
-function assertNoStructuralHooks(value: unknown, label: string, seen = new WeakSet<object>()): void {
+function assertNoStructuralHooks(
+  value: unknown,
+  label: string,
+  seen = new WeakSet<object>(),
+  depth = 0,
+): void {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") return
+  if (depth > KDO_H5_R1A_LIMITS.maxStructuralDepth) {
+    throw new RangeError(`${label} exceeds structural depth ${KDO_H5_R1A_LIMITS.maxStructuralDepth}`)
+  }
   const object = value as object
   if (utilTypes.isProxy(object)) throw new TypeError(`${label} must not be a proxy`)
   if (seen.has(object)) throw new TypeError(`${label} must not be cyclic`)
@@ -94,7 +103,9 @@ function assertNoStructuralHooks(value: unknown, label: string, seen = new WeakS
       if (key !== "length" && !descriptor.enumerable) {
         throw new TypeError(`${label}.${key} must be enumerable`)
       }
-      if ("value" in descriptor) assertNoStructuralHooks(descriptor.value, `${label}.${key}`, seen)
+      if ("value" in descriptor) {
+        assertNoStructuralHooks(descriptor.value, `${label}.${key}`, seen, depth + 1)
+      }
     }
   } finally {
     seen.delete(object)
