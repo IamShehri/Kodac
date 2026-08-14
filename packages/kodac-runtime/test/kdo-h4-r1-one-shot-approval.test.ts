@@ -17,6 +17,7 @@ import { RuntimeSession } from "../src/session/session.ts"
 import { createApplyPatchTool } from "../src/tools/apply-patch.ts"
 import {
   KDO_H4_R1_APPROVAL_VERSION,
+  KDO_H4_R1_EVIDENCE_COMMIT_VERSION,
   type ApprovalEvidence,
   type ApprovalOutcome,
   type ApprovalRuntime,
@@ -29,17 +30,30 @@ async function root(): Promise<string> {
   return mkdtemp(join(tmpdir(), "kodac-h4-r1-"))
 }
 
+function durableCommit(record: ApprovalEvidence) {
+  return {
+    version: KDO_H4_R1_EVIDENCE_COMMIT_VERSION,
+    evidenceIdentity: record.evidenceIdentity,
+    durability: "durable" as const,
+  }
+}
+
+function recordingEvidence(evidence: ApprovalEvidence[]) {
+  return {
+    commit(record: ApprovalEvidence) {
+      evidence.push(record)
+      return durableCommit(record)
+    },
+  }
+}
+
 function decisionRuntime(
   outcome: ApprovalOutcome,
   evidence: ApprovalEvidence[],
   calls: { count: number },
 ): ApprovalRuntime {
   return {
-    evidence: {
-      append(record) {
-        evidence.push(record)
-      },
-    },
+    evidence: recordingEvidence(evidence),
     service: {
       decide(request) {
         calls.count += 1
@@ -127,11 +141,7 @@ test("approval service failure becomes unavailable and remains blocked", async (
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: {
-        append(record) {
-          evidence.push(record)
-        },
-      },
+      evidence: recordingEvidence(evidence),
       service: { decide: () => { throw new Error("answerer offline") } },
     }
     const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
@@ -150,11 +160,7 @@ test("malformed or mismatched decisions fail closed as unavailable", async () =>
     try {
       const fs = new NodeWorkspaceFileSystem(dir)
       const runtime: ApprovalRuntime = {
-        evidence: {
-          append(record) {
-            evidence.push(record)
-          },
-        },
+        evidence: recordingEvidence(evidence),
         service: {
           decide(request) {
             if (mode === "malformed") return { outcome: "allowed-once" }
@@ -177,17 +183,17 @@ test("malformed or mismatched decisions fail closed as unavailable", async () =>
   }
 })
 
-test("allowed-once persists decided evidence before mutation and binds the K2 receipt", async () => {
+test("allowed-once durably commits decided evidence before mutation and binds the K2 receipt", async () => {
   const dir = await root()
   const evidence: ApprovalEvidence[] = []
   const calls = { count: 0 }
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime = decisionRuntime("allowed-once", evidence, calls)
-    const originalAppend = runtime.evidence.append.bind(runtime.evidence)
-    runtime.evidence.append = async (record) => {
+    const originalCommit = runtime.evidence.commit.bind(runtime.evidence)
+    runtime.evidence.commit = async (record) => {
       if (record.phase === "decided") assert.equal(await fs.exists("proof.txt"), false)
-      await originalAppend(record)
+      return originalCommit(record)
     }
     const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
     const result = await gateway.applyPatch(patch)
@@ -213,11 +219,7 @@ test("allowed-once is consumed by one invocation and cannot authorize the next i
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: {
-        append(record) {
-          evidence.push(record)
-        },
-      },
+      evidence: recordingEvidence(evidence),
       service: {
         decide(request) {
           call += 1
@@ -250,11 +252,7 @@ test("concurrent identical asks receive distinct one-shot request instances", as
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: {
-        append(record) {
-          evidence.push(record)
-        },
-      },
+      evidence: recordingEvidence(evidence),
       service: {
         async decide(request) {
           instanceIds.push(request.requestInstanceId)
@@ -285,13 +283,72 @@ test("concurrent identical asks receive distinct one-shot request instances", as
   }
 })
 
-test("asked evidence failure blocks before the approval service is consulted", async () => {
+test("callback-only asked evidence observation is not durable proof", async () => {
+  const dir = await root()
+  const evidence: ApprovalEvidence[] = []
+  let calls = 0
+  try {
+    const fs = new NodeWorkspaceFileSystem(dir)
+    const runtime: ApprovalRuntime = {
+      evidence: {
+        commit(record) {
+          evidence.push(record)
+          return undefined
+        },
+      },
+      service: { decide: () => { calls += 1; return null } },
+    }
+    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
+    await assert.rejects(() => gateway.applyPatch(patch), ExecutionBlockedError)
+    assert.equal(calls, 0)
+    assert.deepEqual(evidence.map((record) => record.phase), ["asked"])
+    assert.equal(await fs.exists("proof.txt"), false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("invalid asked evidence commit acknowledgment blocks before the approval service", async () => {
+  for (const mode of ["identity", "durability"] as const) {
+    const dir = await root()
+    let calls = 0
+    try {
+      const fs = new NodeWorkspaceFileSystem(dir)
+      const runtime: ApprovalRuntime = {
+        evidence: {
+          commit(record) {
+            return mode === "identity"
+              ? {
+                  version: KDO_H4_R1_EVIDENCE_COMMIT_VERSION,
+                  evidenceIdentity: "0".repeat(64),
+                  durability: "durable",
+                }
+              : {
+                  version: KDO_H4_R1_EVIDENCE_COMMIT_VERSION,
+                  evidenceIdentity: record.evidenceIdentity,
+                  durability: "memory-only",
+                }
+          },
+        },
+        service: { decide: () => { calls += 1; return null } },
+      }
+      const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
+      await assert.rejects(() => gateway.applyPatch(patch), ExecutionBlockedError)
+      assert.equal(calls, 0)
+      assert.equal(await fs.exists("proof.txt"), false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }
+})
+
+test("asked evidence persistence failure blocks before the approval service is consulted", async () => {
   const dir = await root()
   let calls = 0
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: { append: () => { throw new Error("ledger unavailable") } },
+      evidence: { commit: () => { throw new Error("ledger unavailable") } },
       service: { decide: () => { calls += 1; return null } },
     }
     const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
@@ -303,16 +360,17 @@ test("asked evidence failure blocks before the approval service is consulted", a
   }
 })
 
-test("decided evidence failure blocks allowed-once before side effects", async () => {
+test("decided evidence persistence failure blocks allowed-once before side effects", async () => {
   const dir = await root()
   let evidenceWrites = 0
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
       evidence: {
-        append() {
+        commit(record) {
           evidenceWrites += 1
           if (evidenceWrites === 2) throw new Error("decision ledger unavailable")
+          return durableCommit(record)
         },
       },
       service: {
@@ -334,7 +392,43 @@ test("decided evidence failure blocks allowed-once before side effects", async (
   }
 })
 
-test("an already-aborted approval is recorded as cancelled and never consults the service", async () => {
+test("invalid decided evidence commit acknowledgment blocks allowed-once before side effects", async () => {
+  const dir = await root()
+  let evidenceWrites = 0
+  try {
+    const fs = new NodeWorkspaceFileSystem(dir)
+    const runtime: ApprovalRuntime = {
+      evidence: {
+        commit(record) {
+          evidenceWrites += 1
+          if (evidenceWrites === 1) return durableCommit(record)
+          return {
+            version: KDO_H4_R1_EVIDENCE_COMMIT_VERSION,
+            evidenceIdentity: record.evidenceIdentity,
+            durability: "memory-only",
+          }
+        },
+      },
+      service: {
+        decide(request) {
+          return {
+            version: KDO_H4_R1_APPROVAL_VERSION,
+            requestIdentity: request.requestIdentity,
+            requestInstanceId: request.requestInstanceId,
+            outcome: "allowed-once",
+          }
+        },
+      },
+    }
+    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
+    await assert.rejects(() => gateway.applyPatch(patch), ExecutionBlockedError)
+    assert.equal(await fs.exists("proof.txt"), false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("an already-aborted approval is durably recorded as cancelled and never consults the service", async () => {
   const dir = await root()
   const controller = new AbortController()
   controller.abort(new Error("cancelled by caller"))
@@ -343,11 +437,7 @@ test("an already-aborted approval is recorded as cancelled and never consults th
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: {
-        append(record) {
-          evidence.push(record)
-        },
-      },
+      evidence: recordingEvidence(evidence),
       service: { decide: () => { calls += 1; return null } },
     }
     const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
@@ -368,7 +458,7 @@ test("an already-aborted approval is recorded as cancelled and never consults th
   }
 })
 
-test("an already-aborted applyPatch approval is cancelled before mutation", async () => {
+test("an already-aborted applyPatch approval is durably cancelled before mutation", async () => {
   const dir = await root()
   const controller = new AbortController()
   controller.abort(new Error("cancelled by caller"))
@@ -377,11 +467,7 @@ test("an already-aborted applyPatch approval is cancelled before mutation", asyn
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: {
-        append(record) {
-          evidence.push(record)
-        },
-      },
+      evidence: recordingEvidence(evidence),
       service: { decide: () => { calls += 1; return null } },
     }
     const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
@@ -408,11 +494,7 @@ test("repo.apply_patch propagates cancellation during pending approval and late 
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: {
-        append(record) {
-          evidence.push(record)
-        },
-      },
+      evidence: recordingEvidence(evidence),
       service: {
         async decide(request) {
           decisionStartedResolve()
@@ -483,7 +565,11 @@ test("approval request identity binds execution environment and bounds", async (
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: { append: () => undefined },
+      evidence: {
+        commit(record) {
+          return durableCommit(record)
+        },
+      },
       service: {
         decide(request) {
           identities.push(request.requestIdentity)
@@ -524,7 +610,11 @@ test("ambient environment is snapshotted before approval and cannot drift before
   try {
     const fs = new NodeWorkspaceFileSystem(dir)
     const runtime: ApprovalRuntime = {
-      evidence: { append: () => undefined },
+      evidence: {
+        commit(record) {
+          return durableCommit(record)
+        },
+      },
       service: {
         decide(request) {
           process.env[key] = "after"
