@@ -100,7 +100,7 @@ function assertNoStructuralHooks(
       if (descriptor.get !== undefined || descriptor.set !== undefined) {
         throw new TypeError(`${label}.${key} must be a data property`)
       }
-      if (key !== "length" && !descriptor.enumerable) {
+      if (!descriptor.enumerable && !(Array.isArray(object) && key === "length")) {
         throw new TypeError(`${label}.${key} must be enumerable`)
       }
       if ("value" in descriptor) {
