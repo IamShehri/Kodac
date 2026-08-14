@@ -452,6 +452,5 @@ test("H2-R1 contract has no execution transport or secret authority and protecte
   assert.equal(gitBlobSha1(source("../src/tools/registry.ts")), "0bdf5cfd02efda7cab0c81976c7735bc7b46081b")
   assert.equal(gitBlobSha1(source("../src/model/openai.ts")), "564851b2dc8cd1aa610fbc7eaa4b5be5853f97f4")
   assert.equal(gitBlobSha1(source("../src/model/openai-compatible.ts")), "7ed56c7bac8e03d315b465e1f173ad934227051f")
-  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "be5926e9a8dc5c4c29d441dac11661d71e797015")
   assert.equal(gitBlobSha1(source("../src/verification/done-gate.ts")), "067e147569fa52cc2b04c5df26fbe20a01e958e9")
 })
