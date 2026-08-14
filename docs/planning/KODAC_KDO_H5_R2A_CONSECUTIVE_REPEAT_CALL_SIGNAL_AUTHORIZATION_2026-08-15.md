@@ -231,12 +231,14 @@ packages/kodac-runtime/scripts/run-tests.mjs
 
 Kodac must not port a hidden mutable tracker object as the authority-bearing representation.
 
-The preferred contract is equivalent in purpose to:
+The public authority-relevant boundary must be serialized rather than an arbitrary JavaScript object graph. The preferred contract is equivalent in purpose to:
 
 ```text
-advanceRepeatCallSignal(previousState, currentCall, policy)
+advanceRepeatCallSignal(previousStateJson, currentCallJson, policyJson)
   -> immutable nextState + optional immutable advisorySignal
 ```
+
+`previousStateJson` may be the one canonical empty-state sentinel defined by the implementation; `currentCallJson` and `policyJson` must be primitive strings. No overload may accept an arbitrary JavaScript object for `currentCall`.
 
 The transition must be deterministic and side-effect free.
 
@@ -251,7 +253,7 @@ Exact TypeScript names may vary if these semantics remain unambiguous.
 
 ---
 
-## 8. Call equivalence
+## 8. Call equivalence and canonical byte profile
 
 Two observed calls belong to the same consecutive chain only when both are equal:
 
@@ -262,19 +264,70 @@ canonical tool input
 
 Tool-call transport IDs must **not** affect equivalence because providers normally issue a new call ID for each attempt.
 
-Canonicalization must be stricter than the donor's `json.dumps(..., default=str)` fallback.
+### 8.1 Non-observable public input boundary
 
-Requirements:
+`currentCallJson` must be a primitive JavaScript string and must be type-checked with `typeof value === "string"` before any property access, reflection, enumeration, prototype inspection, coercion, `toString`, or serialization attempt.
 
-- JSON-compatible input only;
-- deterministic recursive object-key ordering;
-- array order preserved;
-- no `undefined`, NaN, Infinity, BigInt, functions, symbols, accessors, proxies, cyclic objects, sparse arrays, hidden structural fields, or `toJSON` execution;
-- explicit bounds on nesting/items/bytes;
-- canonical input SHA-256 identity;
-- call fingerprint binds tool name + canonical input identity.
+A non-string object — including a `Proxy`, accessor-bearing object, boxed string, array, function, or object with `toJSON` — must be rejected without reading any property or invoking any user-defined hook.
 
-The primitive must fail closed rather than stringify unsupported runtime objects.
+Only after the primitive-string check may the implementation UTF-8 encode and parse the JSON text. `JSON.parse`-equivalent parsing produces inert JSON data; no JavaScript object supplied by the caller may enter the canonicalizer directly.
+
+The parsed call record must have exactly these keys:
+
+```text
+version
+toolName
+toolInput
+```
+
+`version` must equal the implementation's exact H5-R2A call-schema version. `toolName` must be a JSON string. `toolInput` may be any JSON value allowed by the canonical profile below.
+
+### 8.2 Canonical JSON profile
+
+Canonicalization must use the JSON Canonicalization Scheme defined by RFC 8785 (JCS), interpreted as UTF-8 bytes, with no implementation-specific extensions.
+
+Required consequences include:
+
+- input must be valid JSON text and valid I-JSON for JCS processing;
+- object member names are sorted exactly by the JCS ordering rule;
+- array order is preserved;
+- strings use the JCS/ECMAScript JSON escaping rules;
+- lone UTF-16 surrogate code units are rejected;
+- Unicode text is **not** NFC/NFD/NFKC/NFKD normalized; distinct source strings remain distinct;
+- JSON numbers are parsed as finite IEEE-754 binary64 values and serialized exactly by the ECMAScript number serialization required by RFC 8785;
+- negative zero canonicalizes as `0`;
+- alternate lexical exponent/decimal spellings that represent the same permitted binary64 value therefore produce the same canonical number bytes;
+- NaN and infinities are impossible at the JSON-text boundary and remain forbidden;
+- no `undefined`, BigInt, function, symbol, accessor, Proxy, cyclic object, sparse array, hidden structural field, or `toJSON` execution can participate because arbitrary runtime objects are not accepted.
+
+### 8.3 Exact bounds
+
+The H5-R2A implementation must enforce these maximums before producing an identity:
+
+```text
+currentCallJson UTF-8 bytes: <= 131072
+toolName UTF-8 bytes: 1..256
+canonical toolInput UTF-8 bytes: <= 65536
+maximum JSON nesting depth: 32
+maximum total array elements + object members in toolInput: 4096
+maximum thresholds in policy: 16
+maximum advisory threshold: 65535
+maximum consecutiveCount: 65535
+```
+
+Any exceeded bound fails closed.
+
+### 8.4 Tool-name bytes
+
+`toolName` identity bytes are the exact UTF-8 encoding of the parsed JSON string after JSON unescaping, with no Unicode normalization. Lone surrogates are rejected. Length is bound separately in the call preimage, so embedded punctuation or delimiter-like characters cannot create ambiguity.
+
+### 8.5 Input and call identity
+
+The canonical tool-input identity is SHA-256 over the domain-separated preimage defined in section 12 using the exact RFC 8785 canonical UTF-8 bytes of `toolInput`.
+
+The call fingerprint binds the exact tool-name UTF-8 bytes and the raw 32-byte tool-input digest under its own domain separator. Provider call IDs do not participate.
+
+The primitive must fail closed rather than stringify unsupported runtime values.
 
 ---
 
@@ -283,8 +336,11 @@ The primitive must fail closed rather than stringify unsupported runtime objects
 For state `S` and current call `C`:
 
 ```text
-if C.fingerprint == S.lastCallFingerprint:
-  consecutiveCount = S.consecutiveCount + 1
+if S is initial/empty:
+  consecutiveCount = 1
+  chain starts at C
+else if C.fingerprint == S.lastCallFingerprint:
+  consecutiveCount = min(S.consecutiveCount + 1, 65535)
 else:
   consecutiveCount = 1
   chain resets to C
@@ -297,7 +353,11 @@ Required properties:
 - different arguments reset even when the tool name is unchanged;
 - different tool name resets even when arguments are identical;
 - provider call ID changes do not reset the chain;
+- `consecutiveCount` saturates at exactly `65535`; a further matching call leaves it at `65535` rather than overflowing or rejecting;
+- a threshold signal is emitted only when the count **advances** onto that threshold, so saturated repeats never re-emit the highest-threshold signal;
 - the primitive does not know whether a tool call was allowed, denied, failed, or succeeded; a future integration layer decides which observed result boundaries feed it.
+
+The saturation rule is a bounded representation rule only. It grants no execution authority and does not change the existing hard duplicate guard.
 
 ---
 
@@ -311,8 +371,9 @@ The canonical implementation policy must enforce at least:
 threshold >= 2
 thresholds unique
 thresholds strictly ascending after canonicalization
-threshold count bounded
-maximum threshold bounded
+threshold count <= 16
+maximum threshold <= 65535
+maximum consecutiveCount = 65535
 ```
 
 R2A must not copy DeepCode's `(3, 5, 8)` as an unconditional Kodac default.
@@ -359,7 +420,7 @@ Exact fields may be narrower, but no field may grant authority.
 
 ---
 
-## 12. Deterministic identities
+## 12. Deterministic identities and exact preimages
 
 At minimum R2A must provide deterministic structural identities for:
 
@@ -369,9 +430,38 @@ At minimum R2A must provide deterministic structural identities for:
 - repeat state;
 - emitted signal.
 
-Identities must use SHA-256 and canonical preimages.
+Every published identity is the lowercase 64-hex-character encoding of a SHA-256 digest. When one identity participates in another preimage, the **raw 32 digest bytes**, not the 64 ASCII hex characters, are used unless explicitly stated otherwise.
 
-No clock, UUID, randomness, process state, environment state, filesystem state, session object, or provider object identity may participate.
+All fixed prefixes below are exact ASCII bytes. `NUL` means one `0x00` byte. `U32BE(n)` means an unsigned 32-bit big-endian length.
+
+```text
+POLICY PREIMAGE:
+ASCII("KODAC-H5-R2A") || NUL || ASCII("POLICY") || NUL || ASCII("V1") || NUL
+|| RFC8785(canonicalPolicy)
+
+INPUT PREIMAGE:
+ASCII("KODAC-H5-R2A") || NUL || ASCII("INPUT") || NUL || ASCII("V1") || NUL
+|| RFC8785(toolInput)
+
+CALL PREIMAGE:
+ASCII("KODAC-H5-R2A") || NUL || ASCII("CALL") || NUL || ASCII("V1") || NUL
+|| U32BE(toolNameUtf8.length) || toolNameUtf8
+|| RAW32(toolInputIdentity)
+
+STATE PREIMAGE:
+ASCII("KODAC-H5-R2A") || NUL || ASCII("STATE") || NUL || ASCII("V1") || NUL
+|| RFC8785(stateWithoutStateIdentity)
+
+SIGNAL PREIMAGE:
+ASCII("KODAC-H5-R2A") || NUL || ASCII("SIGNAL") || NUL || ASCII("V1") || NUL
+|| RFC8785(signalWithoutSignalIdentity)
+```
+
+`canonicalPolicy`, `stateWithoutStateIdentity`, and `signalWithoutSignalIdentity` must each have one exact versioned schema with exact keys and no unknown fields. Their JCS bytes are therefore independently reproducible.
+
+Domain separation is mandatory: no policy, input, call, state, or signal digest may reuse another kind's prefix.
+
+No clock, UUID, randomness, process state, environment state, filesystem state, session object, provider object identity, locale, host endianness, or platform newline may participate.
 
 ---
 
@@ -379,16 +469,21 @@ No clock, UUID, randomness, process state, environment state, filesystem state, 
 
 The primitive must validate externally supplied prior state rather than trusting it.
 
+Externally supplied prior state must cross the public boundary as primitive JSON text (or the one canonical empty-state sentinel), not as an arbitrary caller-owned JavaScript object.
+
 Requirements:
 
+- primitive-string check occurs before any parse or inspection;
+- valid bounded UTF-8 JSON text;
 - exact version;
 - exact keys;
-- bounded count;
-- valid SHA-256 identities;
-- derived state identity recomputation;
+- `consecutiveCount` is an integer in `1..65535` for non-empty state;
+- valid lowercase SHA-256 identities;
+- derived state identity recomputation using section 12 exact preimage;
 - malformed/impossible state rejected;
 - state and signal outputs immutable/defensive snapshots;
-- caller inputs not mutated.
+- caller inputs not mutated;
+- canonical serialized state emitted by the module can be fed back without semantic change.
 
 An empty/initial state must have one canonical representation.
 
@@ -429,9 +524,9 @@ The R2A focused test must prove at minimum:
 1. exact DeepCode donor provenance pin/license/source blob;
 2. deterministic strict policy identity;
 3. empty/initial state canonicality;
-4. first observation count = 1, no signal unless threshold=1 is somehow attempted (which must be rejected);
+4. first observation count = 1 and threshold `1` is rejected;
 5. same tool + same semantic input increments consecutive count;
-6. object-key ordering does not change call fingerprint;
+6. RFC 8785 object-key ordering does not change call fingerprint;
 7. changed provider call ID does not change equivalence;
 8. same tool + changed input resets chain;
 9. changed tool + same input resets chain;
@@ -444,11 +539,16 @@ The R2A focused test must prove at minimum:
 16. prior-state identity mutation fails closed;
 17. impossible count/identity combinations fail closed;
 18. unknown state/policy/call fields fail closed;
-19. invalid JSON primitives fail closed;
-20. cyclic/deep/proxy/accessor/hidden/symbol/sparse inputs fail closed without executing hooks;
-21. item/byte/depth bounds fail closed;
-22. production module has no filesystem/process/network/session/model/tool-execution authority;
-23. `agent/loop.ts`, H2 surfaces, H5-R1A pruning module, K2, and Done Gate remain byte-identical.
+19. malformed JSON text and invalid JSON primitives fail closed;
+20. non-string Proxy/accessor/toJSON objects supplied at serialized boundaries are rejected by primitive type check without triggering Proxy traps, getters, coercion, or hooks;
+21. parsed JSON values cannot introduce accessors, proxies, symbols, hidden fields, sparse arrays, cycles, or executable `toJSON` behavior;
+22. canonical byte vectors cover `-0`, alternate exponent/decimal spellings, escaped strings, non-ASCII Unicode, object-key ordering, and lone-surrogate rejection;
+23. domain-separated policy/input/call/state/signal preimage vectors reproduce exact expected SHA-256 identities;
+24. tool-name byte-length binding proves delimiter-like and non-ASCII names cannot collide;
+25. item/byte/depth/tool-name/threshold-count bounds fail closed at limit+1;
+26. a matching-call stream beyond `65535` saturates at `65535`, does not overflow/reject, and does not re-emit a threshold signal after saturation;
+27. production module has no filesystem/process/network/session/model/tool-execution authority;
+28. `agent/loop.ts`, H2 surfaces, H5-R1A pruning module, K2, and Done Gate remain byte-identical.
 
 ---
 
