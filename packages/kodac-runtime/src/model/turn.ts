@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import type { RuntimeOrchestrator } from "../runtime/orchestrator.ts"
+import { createModelVisibleRequestSnapshot, materializeModelVisibleRequest } from "../session/model-visible-request.ts"
 import type { RuntimeSession } from "../session/session.ts"
 import type { ToolRegistry } from "../tools/registry.ts"
 import { OpenAICompatibleProvider } from "./openai-compatible.ts"
@@ -105,28 +106,31 @@ export class AgentTurnRunner {
     throwIfAborted(input.signal)
     const provider = this.resolveProvider(input.provider)
     const tools = this.tools.list()
+    const snapshot = createModelVisibleRequestSnapshot({ provider: provider.name, model: input.model, messages: input.messages, tools })
+    await this.session.emit("model.request.snapshot", snapshot)
+    const request = materializeModelVisibleRequest(snapshot)
 
     await this.session.emit("model.requested", {
       provider: provider.name,
-      model: input.model,
-      messageCount: input.messages.length,
-      tools: tools.map((tool) => ({ name: tool.name, capability: tool.capability })),
+      model: request.model,
+      messageCount: request.messages.length,
+      tools: request.tools.map((tool) => ({ name: tool.name, capability: tool.capability })),
     })
 
     const onStreamEvent = async (event: ModelProviderStreamEvent): Promise<void> => {
       if (event.type === "started") {
-        await this.session.emit("model.stream.started", { provider: provider.name, model: input.model })
+        await this.session.emit("model.stream.started", { provider: provider.name, model: request.model })
       } else if (event.type === "text_delta") {
         await this.session.emit("model.stream.text_delta", {
           provider: provider.name,
-          model: input.model,
+          model: request.model,
           contentDigest: sha256(event.text),
           contentLength: event.text.length,
         })
       } else if (event.type === "tool_call_delta") {
         await this.session.emit("model.stream.tool_call_delta", {
           provider: provider.name,
-          model: input.model,
+          model: request.model,
           index: event.index,
           id: event.id,
           name: event.name,
@@ -134,11 +138,11 @@ export class AgentTurnRunner {
           argumentsLength: event.argumentsDelta?.length,
         })
       } else if (event.type === "usage") {
-        await this.session.emit("model.stream.usage", { provider: provider.name, model: input.model, usage: event.usage })
+        await this.session.emit("model.stream.usage", { provider: provider.name, model: request.model, usage: event.usage })
       } else {
         await this.session.emit("model.stream.completed", {
           provider: provider.name,
-          model: input.model,
+          model: request.model,
           finishReason: event.finishReason,
           responseId: event.responseId,
         })
@@ -149,9 +153,9 @@ export class AgentTurnRunner {
     let response: ModelProviderResponse
     try {
       response = await provider.generate({
-        model: input.model,
-        messages: input.messages,
-        tools,
+        model: request.model,
+        messages: request.messages,
+        tools: request.tools,
         signal: input.signal,
         onStreamEvent,
       })
@@ -160,7 +164,7 @@ export class AgentTurnRunner {
     } catch (error) {
       await this.session.emit("model.failed", {
         provider: provider.name,
-        model: input.model,
+        model: request.model,
         error: error instanceof Error ? error.message : String(error),
         ...(error instanceof ModelProviderError
           ? { providerCode: error.code, retryable: error.retryable, status: error.status }
@@ -171,7 +175,7 @@ export class AgentTurnRunner {
 
     await this.session.emit("model.responded", {
       provider: provider.name,
-      model: input.model,
+      model: request.model,
       finishReason: response.finishReason,
       assistantLength: response.assistant.length,
       toolCallCount: response.toolCalls.length,
@@ -185,7 +189,7 @@ export class AgentTurnRunner {
     if (response.assistant) {
       await this.session.emit("assistant.message", {
         provider: provider.name,
-        model: input.model,
+        model: request.model,
         contentDigest: sha256(response.assistant),
         contentLength: response.assistant.length,
       })
@@ -196,7 +200,7 @@ export class AgentTurnRunner {
       throwIfAborted(input.signal)
       await this.session.emit("model.tool_call.requested", {
         provider: provider.name,
-        model: input.model,
+        model: request.model,
         callId: call.id,
         tool: call.name,
       })
