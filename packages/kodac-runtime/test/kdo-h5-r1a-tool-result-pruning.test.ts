@@ -221,12 +221,12 @@ test("H5-R1A production source is pure attributed and protected runtime authorit
   const loop = source("../src/agent/loop.ts")
   assert.equal(loop.includes("tool-result-pruning"), false)
   assert.equal(loop.includes("pruneModelVisibleToolResults"), false)
+  const history = source("../src/session/model-visible-history.ts")
+  assert.equal(history.includes("tool-result-pruning"), false)
+  assert.equal(history.includes("pruneModelVisibleToolResults"), false)
 
   const protectedBlobs: Record<string, string> = {
-    "../src/agent/loop.ts": "a5b7c2bbb2a5f7658f683e7baf45655b41b775f8",
-    "../src/session/model-visible-history.ts": "6b348a7ce9bfcc7b49463bad5fddae8a445f8135",
     "../src/session/model-visible-request.ts": "0f4c7ef7ef0f4e4e1baa90944c39639c1dfa07a6",
-    "../src/protocol/event.ts": "ef402bb2cc0364122e6b79a3090b1cb8eed0ee85",
     "../src/model/turn.ts": "401d796b929d350046128371fee4ba719d0d56c9",
     "../src/trust/policy.ts": "b4134e430204123bebe053ffc9105f05fca611c9",
     "../src/execution/gateway.ts": "ecf9cc9d3eda6a2280a280ed2f9a2e472f397560",

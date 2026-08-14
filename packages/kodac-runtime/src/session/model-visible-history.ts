@@ -2,6 +2,14 @@ import { createHash } from "node:crypto"
 
 import type { ModelMessage } from "../model/provider.ts"
 import {
+  KDO_H5_R2A_CALL_VERSION,
+  KDO_H5_R2A_POLICY_VERSION,
+  KDO_H5_R2A_SIGNAL_JSON_MAX_BYTES,
+  advanceRepeatCallSignal,
+  serializeRepeatCallAdvisorySignal,
+  validateRepeatCallAdvisorySignalJson,
+} from "../agent/repeat-call-signal.ts"
+import {
   KODAC_EVENT_PROTOCOL,
   KODAC_EVENT_VERSION,
   type KodacEvent,
@@ -16,6 +24,11 @@ import {
 } from "./model-visible-request.ts"
 
 export const KDO_H2_R2_HISTORY_VERSION = "kodac-model-visible-history-v1" as const
+export const KDO_H5_R2B_ADVISORY_HISTORY_VERSION = "kodac-repeat-call-advisory-history-v1" as const
+export const KDO_H5_R2B_REPEAT_POLICY_IDENTITY = "7331f353c9a29af123cd54fa99453768b35fe2534db5d009df9dae67cdc80222" as const
+export const KDO_H5_R2B_ADVISORY_MESSAGE_CONTENT =
+  "Kodac advisory: the same tool call with the same canonical input completed twice consecutively. Reconsider the approach before issuing the same call again." as const
+export const KDO_H5_R2B_ADVISORY_RECORD_MAX_BYTES = 8192 as const
 
 export const KDO_H2_R2_DEEPSEEK_HARNESS_DONOR_PROVENANCE = Object.freeze({
   repository: "deepseek-ai/deepseek-harness",
@@ -68,6 +81,27 @@ export interface ModelHistoryMessageRecordInput {
   readonly message: ModelMessage
 }
 
+export interface RepeatCallAdvisoryHistoryRecord {
+  readonly version: typeof KDO_H5_R2B_ADVISORY_HISTORY_VERSION
+  readonly afterRequestIdentity: string
+  readonly assistantHistoryRecordIdentity: string
+  readonly toolResultHistoryRecordIdentity: string
+  readonly signalJson: string
+  readonly signalIdentity: string
+  readonly message: ModelVisibleMessage
+  readonly messageBytes: number
+  readonly messageIdentity: string
+  readonly recordPreimageBytes: number
+  readonly recordIdentity: string
+}
+
+export interface RepeatCallAdvisoryHistoryRecordInput {
+  readonly afterRequestIdentity: string
+  readonly assistantHistoryRecordIdentity: string
+  readonly toolResultHistoryRecordIdentity: string
+  readonly signalJson: string
+}
+
 export interface ProjectedModelVisibleHistory {
   readonly sessionId?: string
   readonly anchorRequestIdentity?: string
@@ -76,6 +110,7 @@ export interface ProjectedModelVisibleHistory {
 
 const SHA256 = /^[0-9a-f]{64}$/
 const SOURCE = new Set<string>(KDO_H2_R2_HISTORY_SOURCES)
+const R2B_REPEAT_POLICY_JSON = `{"thresholds":[2],"version":${JSON.stringify(KDO_H5_R2A_POLICY_VERSION)}}`
 const INPUT_KEYS = ["afterRequestIdentity", "source", "message"] as const
 const RECORD_KEYS = [
   "version",
@@ -85,6 +120,25 @@ const RECORD_KEYS = [
   "messageBytes",
   "recordPreimageBytes",
   "messageIdentity",
+  "recordIdentity",
+] as const
+const ADVISORY_INPUT_KEYS = [
+  "afterRequestIdentity",
+  "assistantHistoryRecordIdentity",
+  "toolResultHistoryRecordIdentity",
+  "signalJson",
+] as const
+const ADVISORY_RECORD_KEYS = [
+  "version",
+  "afterRequestIdentity",
+  "assistantHistoryRecordIdentity",
+  "toolResultHistoryRecordIdentity",
+  "signalJson",
+  "signalIdentity",
+  "message",
+  "messageBytes",
+  "messageIdentity",
+  "recordPreimageBytes",
   "recordIdentity",
 ] as const
 
@@ -248,6 +302,110 @@ export function validateModelHistoryMessageRecord(value: unknown): ModelHistoryM
   return rebuilt
 }
 
+function advisoryMessage(): ModelVisibleMessage {
+  return validateModelVisibleMessage({ role: "system", content: KDO_H5_R2B_ADVISORY_MESSAGE_CONTENT })
+}
+
+function canonicalAdvisoryPreimage(input: {
+  afterRequestIdentity: string
+  assistantHistoryRecordIdentity: string
+  toolResultHistoryRecordIdentity: string
+  signalJson: string
+  message: ModelVisibleMessage
+}): string {
+  return `{"afterRequestIdentity":${JSON.stringify(input.afterRequestIdentity)},"assistantHistoryRecordIdentity":${JSON.stringify(input.assistantHistoryRecordIdentity)},"message":${canonicalModelVisibleMessage(input.message)},"signalJson":${JSON.stringify(input.signalJson)},"toolResultHistoryRecordIdentity":${JSON.stringify(input.toolResultHistoryRecordIdentity)},"version":${JSON.stringify(KDO_H5_R2B_ADVISORY_HISTORY_VERSION)}}`
+}
+
+function canonicalAdvisoryRecord(record: RepeatCallAdvisoryHistoryRecord): string {
+  return `{"afterRequestIdentity":${JSON.stringify(record.afterRequestIdentity)},"assistantHistoryRecordIdentity":${JSON.stringify(record.assistantHistoryRecordIdentity)},"message":${canonicalModelVisibleMessage(record.message)},"messageBytes":${record.messageBytes},"messageIdentity":${JSON.stringify(record.messageIdentity)},"recordIdentity":${JSON.stringify(record.recordIdentity)},"recordPreimageBytes":${record.recordPreimageBytes},"signalIdentity":${JSON.stringify(record.signalIdentity)},"signalJson":${JSON.stringify(record.signalJson)},"toolResultHistoryRecordIdentity":${JSON.stringify(record.toolResultHistoryRecordIdentity)},"version":${JSON.stringify(record.version)}}`
+}
+
+export function createRepeatCallAdvisoryHistoryRecord(
+  input: RepeatCallAdvisoryHistoryRecordInput,
+): RepeatCallAdvisoryHistoryRecord {
+  const inputRecord = asPlainRecord(input, "repeatCallAdvisoryHistory")
+  exactKeys(inputRecord, ADVISORY_INPUT_KEYS, "repeatCallAdvisoryHistory")
+  const afterRequestIdentity = requireSha256(inputRecord.afterRequestIdentity, "repeatCallAdvisoryHistory.afterRequestIdentity")
+  const assistantHistoryRecordIdentity = requireSha256(
+    inputRecord.assistantHistoryRecordIdentity,
+    "repeatCallAdvisoryHistory.assistantHistoryRecordIdentity",
+  )
+  const toolResultHistoryRecordIdentity = requireSha256(
+    inputRecord.toolResultHistoryRecordIdentity,
+    "repeatCallAdvisoryHistory.toolResultHistoryRecordIdentity",
+  )
+  if (typeof inputRecord.signalJson !== "string") throw new TypeError("repeatCallAdvisoryHistory.signalJson must be a primitive string")
+  if (Buffer.byteLength(inputRecord.signalJson, "utf8") > KDO_H5_R2A_SIGNAL_JSON_MAX_BYTES) {
+    throw new RangeError(`repeatCallAdvisoryHistory.signalJson exceeds ${KDO_H5_R2A_SIGNAL_JSON_MAX_BYTES} UTF-8 bytes`)
+  }
+  const signal = validateRepeatCallAdvisorySignalJson(inputRecord.signalJson)
+  if (signal.policyIdentity !== KDO_H5_R2B_REPEAT_POLICY_IDENTITY) {
+    throw new TypeError("repeat-call advisory signal policy is not the canonical R2B policy")
+  }
+  if (signal.threshold !== 2 || signal.thresholdIndex !== 0 || signal.consecutiveCount !== 2) {
+    throw new TypeError("repeat-call advisory signal is not the canonical R2B threshold-2 signal")
+  }
+  const signalJson = serializeRepeatCallAdvisorySignal(signal)
+  const message = advisoryMessage()
+  const messageCanonical = canonicalModelVisibleMessage(message)
+  const messageBytes = Buffer.byteLength(messageCanonical, "utf8")
+  const messageIdentity = sha256(messageCanonical)
+  const preimage = canonicalAdvisoryPreimage({
+    afterRequestIdentity,
+    assistantHistoryRecordIdentity,
+    toolResultHistoryRecordIdentity,
+    signalJson,
+    message,
+  })
+  const recordPreimageBytes = Buffer.byteLength(preimage, "utf8")
+  const record: RepeatCallAdvisoryHistoryRecord = Object.freeze({
+    version: KDO_H5_R2B_ADVISORY_HISTORY_VERSION,
+    afterRequestIdentity,
+    assistantHistoryRecordIdentity,
+    toolResultHistoryRecordIdentity,
+    signalJson,
+    signalIdentity: signal.signalIdentity,
+    message,
+    messageBytes,
+    messageIdentity,
+    recordPreimageBytes,
+    recordIdentity: sha256(preimage),
+  })
+  const finalBytes = Buffer.byteLength(canonicalAdvisoryRecord(record), "utf8")
+  if (finalBytes > KDO_H5_R2B_ADVISORY_RECORD_MAX_BYTES) {
+    throw new RangeError(`repeatCallAdvisoryHistory exceeds ${KDO_H5_R2B_ADVISORY_RECORD_MAX_BYTES} canonical JSON bytes`)
+  }
+  return record
+}
+
+export function validateRepeatCallAdvisoryHistoryRecord(value: unknown): RepeatCallAdvisoryHistoryRecord {
+  const record = asPlainRecord(value, "repeatCallAdvisoryHistoryRecord")
+  exactKeys(record, ADVISORY_RECORD_KEYS, "repeatCallAdvisoryHistoryRecord")
+  if (record.version !== KDO_H5_R2B_ADVISORY_HISTORY_VERSION) throw new TypeError("unsupported repeat-call advisory history record")
+  requireSha256(record.signalIdentity, "repeatCallAdvisoryHistoryRecord.signalIdentity")
+  requireSha256(record.messageIdentity, "repeatCallAdvisoryHistoryRecord.messageIdentity")
+  requireSha256(record.recordIdentity, "repeatCallAdvisoryHistoryRecord.recordIdentity")
+  requirePositiveSafeInteger(record.messageBytes, "repeatCallAdvisoryHistoryRecord.messageBytes")
+  requirePositiveSafeInteger(record.recordPreimageBytes, "repeatCallAdvisoryHistoryRecord.recordPreimageBytes")
+  const rebuilt = createRepeatCallAdvisoryHistoryRecord({
+    afterRequestIdentity: record.afterRequestIdentity as string,
+    assistantHistoryRecordIdentity: record.assistantHistoryRecordIdentity as string,
+    toolResultHistoryRecordIdentity: record.toolResultHistoryRecordIdentity as string,
+    signalJson: record.signalJson as string,
+  })
+  if (
+    record.signalIdentity !== rebuilt.signalIdentity ||
+    record.messageBytes !== rebuilt.messageBytes ||
+    record.messageIdentity !== rebuilt.messageIdentity ||
+    record.recordPreimageBytes !== rebuilt.recordPreimageBytes ||
+    record.recordIdentity !== rebuilt.recordIdentity ||
+    canonicalAdvisoryRecord(record as unknown as RepeatCallAdvisoryHistoryRecord) !== canonicalAdvisoryRecord(rebuilt)
+  ) {
+    throw new TypeError("repeat-call advisory history record derived fields mismatch")
+  }
+  return rebuilt
+}
+
 function normalizeMessageList(value: unknown, label: string): ModelVisibleMessage[] {
   const raw = ownArrayDataValues(value, label)
   if (raw.length > KDO_H2_R2_LIMITS.maxProjectedMessages) {
@@ -309,6 +467,38 @@ function assertProjectedBounds(messages: readonly ModelVisibleMessage[]): void {
   }
 }
 
+function assertRepeatAdvisorySourceBinding(
+  record: RepeatCallAdvisoryHistoryRecord,
+  assistantRecord: ModelHistoryMessageRecord,
+  toolResultRecord: ModelHistoryMessageRecord,
+): void {
+  const toolResultId = toolResultRecord.message.toolCallId
+  const toolResultName = toolResultRecord.message.name
+  if (toolResultId === undefined || toolResultName === undefined) {
+    throw new TypeError("repeat-call advisory source tool-result record is missing its canonical bindings")
+  }
+  const matchingCalls = (assistantRecord.message.toolCalls ?? []).filter(
+    (call) => call.id === toolResultId && call.name === toolResultName,
+  )
+  if (matchingCalls.length !== 1) {
+    throw new TypeError("repeat-call advisory source records do not identify exactly one matching assistant tool call")
+  }
+  const matchingCall = matchingCalls[0]
+  if (matchingCall === undefined) throw new TypeError("repeat-call advisory source assistant tool call is unavailable")
+  const serializedInput = JSON.stringify(matchingCall.input)
+  if (serializedInput === undefined) throw new TypeError("repeat-call advisory source tool input is not JSON-serializable")
+  const currentCallJson = `{"version":${JSON.stringify(KDO_H5_R2A_CALL_VERSION)},"toolName":${JSON.stringify(matchingCall.name)},"toolInput":${serializedInput}}`
+  const derived = advanceRepeatCallSignal(null, currentCallJson, R2B_REPEAT_POLICY_JSON)
+  const signal = validateRepeatCallAdvisorySignalJson(record.signalJson)
+  if (
+    derived.nextState.toolName !== signal.toolName ||
+    derived.nextState.toolInputIdentity !== signal.toolInputIdentity ||
+    derived.nextState.callFingerprint !== signal.callFingerprint
+  ) {
+    throw new TypeError("repeat-call advisory signal does not match its bound assistant/tool-result source records")
+  }
+}
+
 export function projectModelVisibleHistory(value: readonly KodacEvent[] | unknown): ProjectedModelVisibleHistory {
   const eventValues = ownArrayDataValues(value, "events")
   if (eventValues.length > KDO_H2_R2_LIMITS.maxProjectionEvents) {
@@ -319,6 +509,8 @@ export function projectModelVisibleHistory(value: readonly KodacEvent[] | unknow
   let previousSequence: number | undefined
   let anchorRequestIdentity: string | undefined
   let projected: ModelVisibleMessage[] = []
+  let seenAssistantRecords = new Map<string, ModelHistoryMessageRecord>()
+  let seenToolResultRecords = new Map<string, ModelHistoryMessageRecord>()
 
   for (let index = 0; index < eventValues.length; index += 1) {
     const event = readEventEnvelope(eventValues[index], index)
@@ -344,6 +536,8 @@ export function projectModelVisibleHistory(value: readonly KodacEvent[] | unknow
       }
       assertProjectedBounds(projected)
       anchorRequestIdentity = snapshot.requestIdentity
+      seenAssistantRecords = new Map<string, ModelHistoryMessageRecord>()
+      seenToolResultRecords = new Map<string, ModelHistoryMessageRecord>()
       continue
     }
 
@@ -353,6 +547,28 @@ export function projectModelVisibleHistory(value: readonly KodacEvent[] | unknow
       if (record.afterRequestIdentity !== anchorRequestIdentity) {
         throw new TypeError("model history message is bound to a stale request identity")
       }
+      if (record.source === "assistant_response") seenAssistantRecords.set(record.recordIdentity, record)
+      if (record.source === "tool_result") seenToolResultRecords.set(record.recordIdentity, record)
+      projected = [...projected, record.message]
+      assertProjectedBounds(projected)
+      continue
+    }
+
+    if (event.type === "model.history.repeat_call_advisory.appended") {
+      if (anchorRequestIdentity === undefined) throw new TypeError("repeat-call advisory cannot precede a request snapshot anchor")
+      const record = validateRepeatCallAdvisoryHistoryRecord(event.payload)
+      if (record.afterRequestIdentity !== anchorRequestIdentity) {
+        throw new TypeError("repeat-call advisory is bound to a stale request identity")
+      }
+      const assistantRecord = seenAssistantRecords.get(record.assistantHistoryRecordIdentity)
+      if (assistantRecord === undefined) {
+        throw new TypeError("repeat-call advisory references an unseen assistant history record")
+      }
+      const toolResultRecord = seenToolResultRecords.get(record.toolResultHistoryRecordIdentity)
+      if (toolResultRecord === undefined) {
+        throw new TypeError("repeat-call advisory references an unseen tool-result history record")
+      }
+      assertRepeatAdvisorySourceBinding(record, assistantRecord, toolResultRecord)
       projected = [...projected, record.message]
       assertProjectedBounds(projected)
       continue

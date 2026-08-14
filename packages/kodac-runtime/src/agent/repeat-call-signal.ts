@@ -4,6 +4,7 @@ export const KDO_H5_R2A_POLICY_VERSION = "kodac-repeat-call-policy-v1" as const
 export const KDO_H5_R2A_CALL_VERSION = "kodac-repeat-call-v1" as const
 export const KDO_H5_R2A_STATE_VERSION = "kodac-repeat-call-state-v1" as const
 export const KDO_H5_R2A_SIGNAL_VERSION = "kodac-repeat-call-signal-v1" as const
+export const KDO_H5_R2A_SIGNAL_JSON_MAX_BYTES = 4096 as const
 
 export const KDO_H5_R2A_LIMITS = Object.freeze({
   maxCurrentCallJsonBytes: 128 * 1024,
@@ -69,6 +70,7 @@ export interface RepeatCallTransition {
   readonly nextState: RepeatCallState
   readonly nextStateJson: string
   readonly advisorySignal: RepeatCallAdvisorySignal | null
+  readonly advisorySignalJson: string | null
 }
 
 interface RepeatCallPolicy {
@@ -91,6 +93,19 @@ const STATE_KEYS = [
   "consecutiveCount",
   "policyIdentity",
   "stateIdentity",
+  "toolInputIdentity",
+  "toolName",
+  "version",
+] as const
+const SIGNAL_KEYS = [
+  "callFingerprint",
+  "consecutiveCount",
+  "nextStateIdentity",
+  "policyIdentity",
+  "priorStateIdentity",
+  "signalIdentity",
+  "threshold",
+  "thresholdIndex",
   "toolInputIdentity",
   "toolName",
   "version",
@@ -529,6 +544,82 @@ function createSignal(input: Omit<RepeatCallAdvisorySignal, "signalIdentity">): 
   return Object.freeze({ ...input, signalIdentity })
 }
 
+function signalJson(signal: RepeatCallAdvisorySignal): string {
+  const record: JsonObject = {
+    ...signalBase(signal),
+    signalIdentity: signal.signalIdentity,
+  }
+  return canonicalizeJson(record)
+}
+
+export function serializeRepeatCallAdvisorySignal(signal: RepeatCallAdvisorySignal): string {
+  return signalJson(signal)
+}
+
+export function validateRepeatCallAdvisorySignalJson(value: unknown): RepeatCallAdvisorySignal {
+  const serialized = assertPrimitiveJsonText(
+    value,
+    "repeatCallAdvisorySignalJson",
+    KDO_H5_R2A_SIGNAL_JSON_MAX_BYTES,
+  )
+  const record = asObject(parseJsonText(serialized), "repeat-call advisory signal")
+  exactKeys(record, SIGNAL_KEYS, "repeat-call advisory signal")
+  if (record.version !== KDO_H5_R2A_SIGNAL_VERSION) throw new TypeError("repeat-call advisory signal version mismatch")
+  if (typeof record.toolName !== "string") throw new TypeError("repeat-call advisory signal toolName must be a string")
+  assertUnicodeScalars(record.toolName, "repeat-call advisory signal toolName")
+  const toolNameBytes = Buffer.byteLength(record.toolName, "utf8")
+  if (toolNameBytes < 1 || toolNameBytes > KDO_H5_R2A_LIMITS.maxToolNameBytes) {
+    throw new RangeError(`repeat-call advisory signal toolName must be 1..${KDO_H5_R2A_LIMITS.maxToolNameBytes} UTF-8 bytes`)
+  }
+  const policyIdentity = requireIdentity(record.policyIdentity as JsonValue, "repeat-call advisory signal policyIdentity")
+  const toolInputIdentity = requireIdentity(record.toolInputIdentity as JsonValue, "repeat-call advisory signal toolInputIdentity")
+  const storedCallFingerprint = requireIdentity(record.callFingerprint as JsonValue, "repeat-call advisory signal callFingerprint")
+  const expectedCallFingerprint = callFingerprint(record.toolName, toolInputIdentity)
+  if (storedCallFingerprint !== expectedCallFingerprint) throw new TypeError("repeat-call advisory signal call fingerprint mismatch")
+  const priorStateIdentity = requireIdentity(record.priorStateIdentity as JsonValue, "repeat-call advisory signal priorStateIdentity")
+  const nextStateIdentity = requireIdentity(record.nextStateIdentity as JsonValue, "repeat-call advisory signal nextStateIdentity")
+  if (
+    typeof record.consecutiveCount !== "number" ||
+    !Number.isInteger(record.consecutiveCount) ||
+    record.consecutiveCount < 2 ||
+    record.consecutiveCount > KDO_H5_R2A_LIMITS.maxConsecutiveCount
+  ) {
+    throw new RangeError(`repeat-call advisory signal consecutiveCount must be 2..${KDO_H5_R2A_LIMITS.maxConsecutiveCount}`)
+  }
+  if (
+    typeof record.threshold !== "number" ||
+    !Number.isInteger(record.threshold) ||
+    record.threshold < 2 ||
+    record.threshold > KDO_H5_R2A_LIMITS.maxThreshold ||
+    record.threshold !== record.consecutiveCount
+  ) {
+    throw new RangeError("repeat-call advisory signal threshold must equal its bounded consecutiveCount")
+  }
+  if (
+    typeof record.thresholdIndex !== "number" ||
+    !Number.isInteger(record.thresholdIndex) ||
+    record.thresholdIndex < 0 ||
+    record.thresholdIndex >= KDO_H5_R2A_LIMITS.maxThresholds
+  ) {
+    throw new RangeError(`repeat-call advisory signal thresholdIndex must be 0..${KDO_H5_R2A_LIMITS.maxThresholds - 1}`)
+  }
+  const storedSignalIdentity = requireIdentity(record.signalIdentity as JsonValue, "repeat-call advisory signal signalIdentity")
+  const rebuilt = createSignal({
+    version: KDO_H5_R2A_SIGNAL_VERSION,
+    policyIdentity,
+    toolName: record.toolName,
+    toolInputIdentity,
+    callFingerprint: storedCallFingerprint,
+    consecutiveCount: record.consecutiveCount,
+    threshold: record.threshold,
+    thresholdIndex: record.thresholdIndex,
+    priorStateIdentity,
+    nextStateIdentity,
+  })
+  if (rebuilt.signalIdentity !== storedSignalIdentity) throw new TypeError("repeat-call advisory signal identity mismatch")
+  return rebuilt
+}
+
 export function advanceRepeatCallSignal(
   previousStateJson: string | null,
   currentCallJson: string,
@@ -568,10 +659,12 @@ export function advanceRepeatCallSignal(
       nextStateIdentity: nextState.stateIdentity,
     })
     : null
+  const advisorySignalJson = advisorySignal === null ? null : signalJson(advisorySignal)
 
   return Object.freeze({
     nextState,
     nextStateJson: stateJson(nextState),
     advisorySignal,
+    advisorySignalJson,
   })
 }

@@ -2,8 +2,14 @@ import { createHash } from "node:crypto"
 import type { ModelMessage, ModelToolCall } from "../model/provider.ts"
 import type { AgentTurnRunner, AgentTurnResult } from "../model/turn.ts"
 import {
+  KDO_H5_R2A_CALL_VERSION,
+  KDO_H5_R2A_POLICY_VERSION,
+  advanceRepeatCallSignal,
+} from "./repeat-call-signal.ts"
+import {
   KDO_H2_R2_LIMITS,
   createModelHistoryMessageRecord,
+  createRepeatCallAdvisoryHistoryRecord,
   projectModelVisibleHistory,
 } from "../session/model-visible-history.ts"
 import type { RuntimeSession } from "../session/session.ts"
@@ -65,6 +71,8 @@ const RECOVERY_MESSAGE: ModelMessage = Object.freeze({
   content: "The previous model/tool turn failed. Reconsider the task and continue without repeating the same failed action.",
 })
 
+const R2B_REPEAT_POLICY_JSON = `{"thresholds":[2],"version":${JSON.stringify(KDO_H5_R2A_POLICY_VERSION)}}`
+
 const SESSION_LOOP_TAILS = new WeakMap<RuntimeSession, Promise<void>>()
 
 type HistoryAppendSource = "assistant_response" | "tool_result" | "recovery_system"
@@ -72,6 +80,17 @@ type HistoryAppendSource = "assistant_response" | "tool_result" | "recovery_syst
 interface PendingHistoryMessage {
   source: HistoryAppendSource
   message: ModelMessage
+}
+
+interface PendingRepeatAdvisory {
+  signalJson: string
+  callFingerprint: string
+  toolCallId: string
+}
+
+interface RepeatBatchObservation {
+  nextStateJson: string | null
+  advisory: PendingRepeatAdvisory | null
 }
 
 class AgentLoopStop extends Error {
@@ -137,8 +156,8 @@ function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex")
 }
 
-function toolFingerprint(call: ModelToolCall): string {
-  return sha256(`${call.name}\n${stableSerialize(call.input)}`)
+function toolFingerprintFromSerialized(call: ModelToolCall, serializedInput: string): string {
+  return sha256(`${call.name}\n${serializedInput}`)
 }
 
 function toolMessageContent(output: unknown, limit: number): string {
@@ -209,6 +228,58 @@ function assertHistoryBatchAppendable(
   }
 }
 
+function r2aCurrentCallJson(call: ModelToolCall, serializedInput: string): string {
+  return `{"version":${JSON.stringify(KDO_H5_R2A_CALL_VERSION)},"toolName":${JSON.stringify(call.name)},"toolInput":${serializedInput}}`
+}
+
+function observeRepeatBatch(input: {
+  previousStateJson: string | null
+  result: AgentTurnResult
+  serializedInputs: ReadonlyMap<string, string>
+  enabled: boolean
+}): RepeatBatchObservation {
+  if (!input.enabled) return { nextStateJson: null, advisory: null }
+  if (input.result.toolCalls.length === 0) return { nextStateJson: null, advisory: null }
+  if (input.result.toolCalls.length !== input.result.toolResults.length) {
+    return { nextStateJson: null, advisory: null }
+  }
+
+  let stateJson = input.previousStateJson
+  let pending: PendingRepeatAdvisory | null = null
+
+  for (let index = 0; index < input.result.toolCalls.length; index += 1) {
+    const call = input.result.toolCalls[index]
+    const toolResult = input.result.toolResults[index]
+    if (call === undefined || toolResult === undefined || call.id !== toolResult.id || call.name !== toolResult.name) {
+      return { nextStateJson: null, advisory: null }
+    }
+    const serializedInput = input.serializedInputs.get(call.id)
+    if (serializedInput === undefined) return { nextStateJson: null, advisory: null }
+
+    try {
+      const transition = advanceRepeatCallSignal(
+        stateJson,
+        r2aCurrentCallJson(call, serializedInput),
+        R2B_REPEAT_POLICY_JSON,
+      )
+      if (pending !== null && pending.callFingerprint !== transition.nextState.callFingerprint) pending = null
+      stateJson = transition.nextStateJson
+      if (transition.advisorySignal !== null && transition.advisorySignalJson !== null) {
+        pending = {
+          signalJson: transition.advisorySignalJson,
+          callFingerprint: transition.advisorySignal.callFingerprint,
+          toolCallId: call.id,
+        }
+      }
+    } catch {
+      stateJson = null
+      pending = null
+    }
+  }
+
+  return { nextStateJson: stateJson, advisory: pending }
+}
+
 export class BoundedAgentLoop {
   private readonly runner: AgentTurnRunner
   private readonly session: RuntimeSession
@@ -226,12 +297,14 @@ export class BoundedAgentLoop {
 
   private async runExclusive(input: AgentLoopInput): Promise<AgentLoopResult> {
     const limits = resolveLimits(input.limits)
+    const repeatObservationEnabled = limits.maxIdenticalToolCalls >= 2
     const startedAt = this.clock()
     const runStartSequence = this.session.eventsSnapshot().at(-1)?.sequence ?? 0
     let turnsUsed = 0
     let toolCallsUsed = 0
     let failuresUsed = 0
     let assistant = ""
+    let repeatStateJson: string | null = null
     const bootstrapMessages = input.messages.map(cloneBootstrapMessage)
     const toolCounts = new Map<string, number>()
     const turnCounts = new Map<string, number>()
@@ -265,8 +338,11 @@ export class BoundedAgentLoop {
         : projection.messages
     }
 
-    const appendHistoryBatch = async (pending: readonly PendingHistoryMessage[]): Promise<void> => {
-      if (pending.length === 0) return
+    const appendHistoryBatch = async (
+      pending: readonly PendingHistoryMessage[],
+      advisory: PendingRepeatAdvisory | null = null,
+    ): Promise<void> => {
+      if (pending.length === 0 && advisory === null) return
       const projection = projectModelVisibleHistory(runEvents())
       if (projection.anchorRequestIdentity === undefined) {
         throw new Error("H2-R2 history append requires an H2-R1 request snapshot anchor")
@@ -276,12 +352,31 @@ export class BoundedAgentLoop {
         source,
         message,
       }))
-      assertHistoryBatchAppendable(
-        projection.messages,
-        records.map((record) => record.message as ModelMessage),
-      )
+      const advisoryRecord = advisory === null
+        ? null
+        : (() => {
+          const assistantRecord = records.find((record) => record.source === "assistant_response")
+          const toolResultRecord = records.find(
+            (record) => record.source === "tool_result" && record.message.toolCallId === advisory.toolCallId,
+          )
+          if (assistantRecord === undefined || toolResultRecord === undefined) {
+            throw new Error("R2B advisory requires canonical assistant and triggering tool-result history records")
+          }
+          return createRepeatCallAdvisoryHistoryRecord({
+            afterRequestIdentity: projection.anchorRequestIdentity as string,
+            assistantHistoryRecordIdentity: assistantRecord.recordIdentity,
+            toolResultHistoryRecordIdentity: toolResultRecord.recordIdentity,
+            signalJson: advisory.signalJson,
+          })
+        })()
+      const additions: ModelMessage[] = records.map((record) => record.message as ModelMessage)
+      if (advisoryRecord !== null) additions.push(advisoryRecord.message as ModelMessage)
+      assertHistoryBatchAppendable(projection.messages, additions)
       for (const record of records) {
         await this.session.emit("model.history.message.appended", record)
+      }
+      if (advisoryRecord !== null) {
+        await this.session.emit("model.history.repeat_call_advisory.appended", advisoryRecord)
       }
     }
 
@@ -304,6 +399,7 @@ export class BoundedAgentLoop {
       turnsUsed += 1
       await this.session.emit("agent.turn.started", { turn, budget: budget() })
       const callFingerprints: string[] = []
+      const serializedInputs = new Map<string, string>()
       const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remaining)))
       const turnSignal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal
       const turnMessages = messagesForNextTurn()
@@ -323,10 +419,12 @@ export class BoundedAgentLoop {
                 if (input.signal?.aborted) throw new AgentLoopStop("aborted")
                 if (budget().elapsedMs >= limits.maxElapsedMs) throw new AgentLoopStop("max_elapsed")
                 if (toolCallsUsed >= limits.maxToolCalls) throw new AgentLoopStop("max_tool_calls")
-                const fingerprint = toolFingerprint(call)
+                const serializedInput = stableSerialize(call.input)
+                const fingerprint = toolFingerprintFromSerialized(call, serializedInput)
                 const prior = toolCounts.get(fingerprint) ?? 0
                 if (prior >= limits.maxIdenticalToolCalls) throw new AgentLoopStop("duplicate_tool_call")
                 toolCounts.set(fingerprint, prior + 1)
+                serializedInputs.set(call.id, serializedInput)
                 callFingerprints.push(fingerprint)
                 toolCallsUsed += 1
               },
@@ -335,6 +433,7 @@ export class BoundedAgentLoop {
           turnSignal,
         )
       } catch (error) {
+        repeatStateJson = null
         if (error instanceof AgentLoopStop) return stop(error.reason)
         if (turnSignal.aborted) {
           return stop(input.signal?.aborted ? "aborted" : "max_elapsed")
@@ -388,7 +487,15 @@ export class BoundedAgentLoop {
           },
         })
       }
-      await appendHistoryBatch(historyBatch)
+
+      const repeatObservation = observeRepeatBatch({
+        previousStateJson: repeatStateJson,
+        result,
+        serializedInputs,
+        enabled: repeatObservationEnabled,
+      })
+      await appendHistoryBatch(historyBatch, repeatObservation.advisory)
+      repeatStateJson = repeatObservation.nextStateJson
 
       const signature = sha256(`${result.finishReason}\n${result.assistant}\n${callFingerprints.join("\n")}`)
       const repeated = (turnCounts.get(signature) ?? 0) + 1

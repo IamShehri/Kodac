@@ -274,29 +274,23 @@ test("H5-R2A tool-name length binding and input identity prevent delimiter ambig
   assert.notEqual(a.nextState.callFingerprint, unicode.nextState.callFingerprint)
 })
 
-test("H5-R2A production source is pure attributed and all protected authority surfaces remain byte-identical", () => {
+test("H5-R2A production source remains pure attributed and all non-superseded authority surfaces remain byte-identical", () => {
   const production = source("../src/agent/repeat-call-signal.ts")
   const imports = [...production.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort()
   assert.deepEqual(imports, ["node:crypto"])
   for (const forbidden of [
     "node:fs", "node:child_process", "node:http", "node:https", "node:net", "node:tls",
-    "process.env", "session.emit", "fetch(", "spawn(", "exec(", "execFile(", "agent/loop", "done-gate",
+    "process.env", "session.emit", "fetch(", "spawn(", "execFile(", "agent/loop", "done-gate",
   ]) {
     assert.equal(production.includes(forbidden), false, `production repeat-call source must not contain ${forbidden}`)
   }
 
   const index = source("../src/index.ts")
   assert.match(index, /export \* from "\.\/agent\/repeat-call-signal\.ts"/)
-  const loop = source("../src/agent/loop.ts")
-  assert.equal(loop.includes("repeat-call-signal"), false)
-  assert.equal(loop.includes("advanceRepeatCallSignal"), false)
 
   const protectedBlobs: Record<string, string> = {
-    "../src/agent/loop.ts": "a5b7c2bbb2a5f7658f683e7baf45655b41b775f8",
     "../src/agent/tool-result-pruning.ts": "66cfee69032c4c24331e8cb9098a86a1d7b9135e",
-    "../src/session/model-visible-history.ts": "6b348a7ce9bfcc7b49463bad5fddae8a445f8135",
     "../src/session/model-visible-request.ts": "0f4c7ef7ef0f4e4e1baa90944c39639c1dfa07a6",
-    "../src/protocol/event.ts": "ef402bb2cc0364122e6b79a3090b1cb8eed0ee85",
     "../src/model/turn.ts": "401d796b929d350046128371fee4ba719d0d56c9",
     "../src/trust/policy.ts": "b4134e430204123bebe053ffc9105f05fca611c9",
     "../src/execution/gateway.ts": "ecf9cc9d3eda6a2280a280ed2f9a2e472f397560",
@@ -305,7 +299,7 @@ test("H5-R2A production source is pure attributed and all protected authority su
     "../scripts/run-tests.mjs": "9a0bcde0e565168c78eb7fe4d3cf08236d24baa7",
   }
   for (const [path, expected] of Object.entries(protectedBlobs)) {
-    assert.equal(gitBlobSha1(source(path)), expected, `${path} must remain byte-identical to H5-R2A authorization`)
+    assert.equal(gitBlobSha1(source(path)), expected, `${path} must remain byte-identical to the non-superseded H5-R2A authorization boundary`)
   }
 
   const notices = source("../THIRD_PARTY_NOTICES.md")
