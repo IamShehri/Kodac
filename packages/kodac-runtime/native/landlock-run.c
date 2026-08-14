@@ -264,6 +264,32 @@ static int require_fd_direction(int fd, int need_write, const char *label) {
   return 0;
 }
 
+static int same_fd_object(const struct stat *left, const struct stat *right) {
+  return left->st_dev == right->st_dev && left->st_ino != 0 &&
+         left->st_ino == right->st_ino;
+}
+
+static int require_distinct_control_fds(void) {
+  struct stat launcher;
+  struct stat ready;
+  struct stat permit;
+  if (fstat(KODAC_LAUNCHER_FD, &launcher) != 0) {
+    return fail("controlled launcher fd 3", "cannot stat descriptor");
+  }
+  if (fstat(KODAC_READY_FD, &ready) != 0) {
+    return fail("controlled READY fd 4", "cannot stat descriptor");
+  }
+  if (fstat(KODAC_PERMIT_FD, &permit) != 0) {
+    return fail("controlled permit fd 5", "cannot stat descriptor");
+  }
+  if (same_fd_object(&launcher, &ready) ||
+      same_fd_object(&launcher, &permit) ||
+      same_fd_object(&ready, &permit)) {
+    return fail("controlled descriptor map is aliased", NULL);
+  }
+  return 0;
+}
+
 static int set_cloexec(int fd, const char *label) {
   int flags = fcntl(fd, F_GETFD);
   if (flags < 0) return fail(label, "descriptor is not open");
@@ -295,12 +321,8 @@ static int controlled_ready_and_wait(int partial, long abi) {
   if (code != 0) return code;
   code = require_fd_direction(KODAC_PERMIT_FD, 0, "controlled permit fd 5");
   if (code != 0) return code;
-
-  if (KODAC_READY_FD == KODAC_PERMIT_FD ||
-      KODAC_LAUNCHER_FD == KODAC_READY_FD ||
-      KODAC_LAUNCHER_FD == KODAC_PERMIT_FD) {
-    return fail("controlled descriptor map is aliased", NULL);
-  }
+  code = require_distinct_control_fds();
+  if (code != 0) return code;
 
   if (close(KODAC_LAUNCHER_FD) != 0) {
     return fail("controlled launcher fd 3", "cannot close descriptor after launcher exec");

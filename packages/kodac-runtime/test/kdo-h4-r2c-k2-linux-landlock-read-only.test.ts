@@ -26,7 +26,10 @@ import {
   createConfinementEnforcementEvidence,
   createConfinementRequest,
 } from "../src/trust/confinement.ts"
-import { createLinuxLandlockBackendDescriptor } from "../src/trust/confinement-linux-landlock.ts"
+import {
+  KDO_H4_R2B_LINUX_LANDLOCK_LAUNCHER_FAILURE_EXIT,
+  createLinuxLandlockBackendDescriptor,
+} from "../src/trust/confinement-linux-landlock.ts"
 import {
   KDO_H4_R2C_CONTROL_FLAG,
   KDO_H4_R2C_LAUNCHER_FD,
@@ -250,6 +253,30 @@ test("H4-R2C Linux integration proves full READY durable evidence before GO no-w
     const probeMatch = /^kodac-landlock-v1 abi=([1-9][0-9]*) claim-set=kodac-linux-landlock-fs-v1 enforcement=(full|partial)\n$/.exec(probe.stdout)
     assert.ok(probeMatch, `unexpected probe output: ${probe.stdout}`)
     assert.equal(probeMatch[2], "full", `R2C requires full Landlock enforcement; got: ${probe.stdout}`)
+
+    const aliasControlPath = join(root, "aliased-control")
+    const launcherFd = openSync(binary, "r")
+    const aliasedControlFd = openSync(aliasControlPath, "w+")
+    try {
+      const aliased = spawnSync(binary, [
+        "--controlled",
+        "--ro", "/",
+        "--",
+        process.execPath,
+        "-e",
+        "process.stdout.write('TARGET_EXECUTED')",
+      ], {
+        encoding: "utf8",
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe", launcherFd, aliasedControlFd, aliasedControlFd],
+      })
+      assert.equal(aliased.status, KDO_H4_R2B_LINUX_LANDLOCK_LAUNCHER_FAILURE_EXIT)
+      assert.match(aliased.stderr, /controlled descriptor map is aliased/)
+      assert.equal(aliased.stdout.includes("TARGET_EXECUTED"), false)
+    } finally {
+      closeSync(launcherFd)
+      closeSync(aliasedControlFd)
+    }
 
     const fs = new NodeWorkspaceFileSystem(root)
     const committed: DurableConfinementEvidenceRecord[] = []
