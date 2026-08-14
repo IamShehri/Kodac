@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import type { ExecutionIntent } from "./policy.ts"
 
 export const KDO_H4_R1_APPROVAL_VERSION = "kodac-h4-r1-one-shot-approval-v1" as const
+export const KDO_H4_R1_EVIDENCE_COMMIT_VERSION = "kodac-h4-r1-approval-evidence-commit-v1" as const
 
 export type ApprovalOutcome = "allowed-once" | "rejected" | "cancelled" | "unavailable"
 export type ApprovalEvidencePhase = "asked" | "decided"
@@ -34,12 +35,23 @@ export interface ApprovalEvidence {
   outcome?: ApprovalOutcome
 }
 
+export interface ApprovalEvidenceCommit {
+  version: typeof KDO_H4_R1_EVIDENCE_COMMIT_VERSION
+  evidenceIdentity: string
+  durability: "durable"
+}
+
 export interface ApprovalService {
   decide(request: ApprovalRequest, options?: { signal?: AbortSignal }): Promise<unknown> | unknown
 }
 
 export interface ApprovalEvidenceSink {
-  append(evidence: ApprovalEvidence): Promise<void> | void
+  /**
+   * Persist the exact evidence record durably and return an acknowledgment only
+   * after the durable commit is complete. Callback invocation or in-memory
+   * observation alone is not a valid acknowledgment.
+   */
+  commit(evidence: ApprovalEvidence): Promise<unknown> | unknown
 }
 
 export interface ApprovalRuntime {
@@ -114,6 +126,26 @@ export function validateApprovalDecision(value: unknown, request: ApprovalReques
     requestIdentity,
     requestInstanceId,
     outcome: record.outcome as ApprovalOutcome,
+  })
+}
+
+export function validateApprovalEvidenceCommit(value: unknown, evidence: ApprovalEvidence): ApprovalEvidenceCommit {
+  const record = asRecord(value, "approval evidence commit")
+  exactKeys(record, ["version", "evidenceIdentity", "durability"], "approval evidence commit")
+  if (record.version !== KDO_H4_R1_EVIDENCE_COMMIT_VERSION) {
+    throw new TypeError("approval evidence commit version mismatch")
+  }
+  const evidenceIdentity = requireString(record.evidenceIdentity, "approval evidence commit evidenceIdentity")
+  if (evidenceIdentity !== evidence.evidenceIdentity) {
+    throw new TypeError("approval evidence commit evidenceIdentity mismatch")
+  }
+  if (record.durability !== "durable") {
+    throw new TypeError("approval evidence commit must attest durable persistence")
+  }
+  return Object.freeze({
+    version: KDO_H4_R1_EVIDENCE_COMMIT_VERSION,
+    evidenceIdentity,
+    durability: "durable",
   })
 }
 
