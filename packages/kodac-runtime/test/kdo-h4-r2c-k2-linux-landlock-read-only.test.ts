@@ -230,7 +230,7 @@ test("H4-R2C structural contracts are strict immutable and receipt binding rejec
   assert.throws(() => validateLinuxLandlockRuntimeConfig({ ...runtime, requiredEnforcement: "partial" }))
 })
 
-test("H4-R2C authority boundaries preserve ASK blocker protected surfaces and keep the evidence ledger absent", () => {
+test("H4-R2C authority boundaries preserve ASK blocker and protected surfaces", () => {
   const runtimeSource = source("../src/trust/confinement-runtime.ts")
   assert.doesNotMatch(runtimeSource, /child_process|\bspawn\s*\(|\bexecFile\s*\(|readFile|writeFile|appendFile|process\.env|Deno|Bun/)
   const gatewaySource = source("../src/execution/gateway.ts")
@@ -244,7 +244,9 @@ test("H4-R2C authority boundaries preserve ASK blocker protected surfaces and ke
   assert.doesNotMatch(gatewaySource, /workspace-write/)
   assert.match(source("../src/evidence/receipt.ts"), /bindingIdentity/)
 
-  assert.equal(existsSync(new URL("../../../docs/planning/KODAC_KDO_H4_R2C_K2_LINUX_LANDLOCK_READ_ONLY_EVIDENCE_2026-08-14.md", import.meta.url)), false)
+  // Ledger phase is verified by the repository-level pre/post-ledger inventory gate.
+  // This focused runtime proof must remain valid both before and after the separately
+  // authorized ledger path is added.
   assert.equal(gitBlobSha1(source("../src/trust/confinement.ts")), "873f235120645c0a12f10a5bff7e9591db6bb341")
   assert.equal(gitBlobSha1(source("../src/trust/policy.ts")), "b4134e430204123bebe053ffc9105f05fca611c9")
   assert.equal(gitBlobSha1(source("../src/trust/approval.ts")), "d36a604cb1957bc65dac3978c626ba48a9b299fb")
