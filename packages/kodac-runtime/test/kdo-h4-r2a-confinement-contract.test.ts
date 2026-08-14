@@ -113,6 +113,43 @@ test("unknown fields enums malformed identities and non-plain inputs fail closed
   assert.throws(() => validateConfinementRequest({ ...request(), requestIdentity: ID_C }))
 })
 
+test("sparse accessor symbol and hidden structural hooks fail closed without executing getters", () => {
+  let getterCalls = 0
+  const accessorScope: Record<string, unknown> = { writePaths: [] }
+  Object.defineProperty(accessorScope, "readPaths", {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return ["docs/readme.md"]
+    },
+  })
+  assert.throws(() => createConfinementRequest({ mode: "read-only", workspaceIdentity: ID_A, executionIntentIdentity: ID_B, scope: accessorScope as never }))
+  assert.equal(getterCalls, 0)
+
+  const accessorArray = ["docs/readme.md"]
+  Object.defineProperty(accessorArray, "0", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      getterCalls += 1
+      return "docs/readme.md"
+    },
+  })
+  assert.throws(() => createConfinementRequest({ mode: "read-only", workspaceIdentity: ID_A, executionIntentIdentity: ID_B, scope: { readPaths: accessorArray, writePaths: [] } }))
+  assert.equal(getterCalls, 0)
+
+  const sparse = new Array<string>(1)
+  assert.throws(() => createConfinementRequest({ mode: "read-only", workspaceIdentity: ID_A, executionIntentIdentity: ID_B, scope: { readPaths: sparse, writePaths: [] } }))
+
+  const hiddenScope: Record<string, unknown> = { readPaths: [], writePaths: [] }
+  Object.defineProperty(hiddenScope, "hidden", { value: true, enumerable: false })
+  assert.throws(() => createConfinementRequest({ mode: "read-only", workspaceIdentity: ID_A, executionIntentIdentity: ID_B, scope: hiddenScope as never }))
+
+  const symbolScope: Record<string, unknown> = { readPaths: [], writePaths: [] }
+  Object.defineProperty(symbolScope, Symbol("hidden"), { value: true, enumerable: true })
+  assert.throws(() => createConfinementRequest({ mode: "read-only", workspaceIdentity: ID_A, executionIntentIdentity: ID_B, scope: symbolScope as never }))
+})
+
 test("backend descriptors are inert deterministic immutable structural data", () => {
   const first = backend()
   const second = backend()
