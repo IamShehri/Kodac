@@ -236,7 +236,7 @@ class StrictJsonParser {
 
   private parseNumber(): number {
     const remainder = this.text.slice(this.index)
-    const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(remainder)
+    const match = remainder.match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/)
     if (!match) throw new SyntaxError(`invalid JSON number at offset ${this.index}`)
     const token = match[0]
     this.index += token.length
