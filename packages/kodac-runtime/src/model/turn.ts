@@ -106,7 +106,17 @@ export class AgentTurnRunner {
     throwIfAborted(input.signal)
     const provider = this.resolveProvider(input.provider)
     const tools = this.tools.list()
-    const snapshot = createModelVisibleRequestSnapshot({ provider: provider.name, model: input.model, messages: input.messages, tools })
+    let snapshot: ReturnType<typeof createModelVisibleRequestSnapshot>
+    try {
+      snapshot = createModelVisibleRequestSnapshot({ provider: provider.name, model: input.model, messages: input.messages, tools })
+    } catch (error) {
+      await this.session.emit("model.failed", {
+        provider: provider.name,
+        stage: "request_snapshot",
+        error: "model-visible request snapshot rejected",
+      })
+      throw error
+    }
     await this.session.emit("model.request.snapshot", snapshot)
     const request = materializeModelVisibleRequest(snapshot)
 
