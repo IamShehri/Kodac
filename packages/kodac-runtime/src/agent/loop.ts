@@ -64,12 +64,29 @@ const RECOVERY_MESSAGE: ModelMessage = Object.freeze({
   content: "The previous model/tool turn failed. Reconsider the task and continue without repeating the same failed action.",
 })
 
+const SESSION_LOOP_TAILS = new WeakMap<RuntimeSession, Promise<void>>()
+
 class AgentLoopStop extends Error {
   readonly reason: Exclude<AgentLoopStopReason, "completed">
 
   constructor(reason: Exclude<AgentLoopStopReason, "completed">) {
     super(`Agent loop stopped: ${reason}`)
     this.reason = reason
+  }
+}
+
+async function runExclusiveForSession<T>(session: RuntimeSession, operation: () => Promise<T>): Promise<T> {
+  const previous = SESSION_LOOP_TAILS.get(session) ?? Promise.resolve()
+  let release!: () => void
+  const slot = new Promise<void>((resolve) => { release = resolve })
+  const queued = previous.catch(() => undefined).then(() => slot)
+  SESSION_LOOP_TAILS.set(session, queued)
+  await previous.catch(() => undefined)
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (SESSION_LOOP_TAILS.get(session) === queued) SESSION_LOOP_TAILS.delete(session)
   }
 }
 
@@ -174,6 +191,10 @@ export class BoundedAgentLoop {
   }
 
   async run(input: AgentLoopInput): Promise<AgentLoopResult> {
+    return runExclusiveForSession(this.session, () => this.runExclusive(input))
+  }
+
+  private async runExclusive(input: AgentLoopInput): Promise<AgentLoopResult> {
     const limits = resolveLimits(input.limits)
     const startedAt = this.clock()
     const runJournalOffset = this.session.eventsSnapshot().length
