@@ -5,12 +5,16 @@ import { join } from "node:path"
 import test from "node:test"
 
 import { NodeWorkspaceFileSystem } from "../src/edit/filesystem.ts"
+import { InMemoryReceiptLedger } from "../src/evidence/ledger.ts"
 import {
   ExecutionBlockedError,
   ExecutionGateway,
   ExecutionUnprovenError,
   type ExecutionObserver,
 } from "../src/execution/gateway.ts"
+import { InMemoryEventSink } from "../src/protocol/event.ts"
+import { RuntimeSession } from "../src/session/session.ts"
+import { createApplyPatchTool } from "../src/tools/apply-patch.ts"
 import {
   KDO_H4_R1_APPROVAL_VERSION,
   type ApprovalEvidence,
@@ -388,6 +392,66 @@ test("an already-aborted applyPatch approval is cancelled before mutation", asyn
     assert.equal(calls, 0)
     assert.equal(evidence[1]?.outcome, "cancelled")
     assert.equal(await fs.exists("proof.txt"), false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("repo.apply_patch propagates cancellation during pending approval and late allowed-once cannot mutate", async () => {
+  const dir = await root()
+  const evidence: ApprovalEvidence[] = []
+  let decisionStartedResolve!: () => void
+  let decisionReleaseResolve!: () => void
+  const decisionStarted = new Promise<void>((resolve) => { decisionStartedResolve = resolve })
+  const decisionRelease = new Promise<void>((resolve) => { decisionReleaseResolve = resolve })
+  let serviceReturnedAllowedOnce = false
+  try {
+    const fs = new NodeWorkspaceFileSystem(dir)
+    const runtime: ApprovalRuntime = {
+      evidence: {
+        append(record) {
+          evidence.push(record)
+        },
+      },
+      service: {
+        async decide(request) {
+          decisionStartedResolve()
+          await decisionRelease
+          serviceReturnedAllowedOnce = true
+          return {
+            version: KDO_H4_R1_APPROVAL_VERSION,
+            requestIdentity: request.requestIdentity,
+            requestInstanceId: request.requestInstanceId,
+            outcome: "allowed-once",
+          }
+        },
+      },
+    }
+    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
+    const ledger = new InMemoryReceiptLedger()
+    const session = new RuntimeSession(new InMemoryEventSink(), "h4-r1-apply-patch-abort")
+    const tool = createApplyPatchTool(gateway, ledger)
+    const controller = new AbortController()
+
+    const execution = tool.execute(
+      { patchText: patch },
+      { session, signal: controller.signal },
+    )
+
+    await decisionStarted
+    controller.abort(new Error("cancelled while approval was pending"))
+    decisionReleaseResolve()
+
+    await assert.rejects(execution, ExecutionBlockedError)
+    assert.equal(serviceReturnedAllowedOnce, true)
+    assert.equal(await fs.exists("proof.txt"), false)
+    assert.deepEqual(evidence.map((record) => [record.phase, record.outcome]), [
+      ["asked", undefined],
+      ["decided", "cancelled"],
+    ])
+    assert.equal(ledger.receipts.length, 1)
+    assert.equal(ledger.receipts[0]?.result.status, "blocked")
+    assert.equal(ledger.receipts.some((receipt) => receipt.result.status === "success"), false)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
