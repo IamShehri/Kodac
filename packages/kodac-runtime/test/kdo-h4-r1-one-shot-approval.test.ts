@@ -640,3 +640,51 @@ test("ambient environment is snapshotted before approval and cannot drift before
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test("command arguments are snapshotted before approval and cannot drift before execution", async () => {
+  const dir = await root()
+  const evidence: ApprovalEvidence[] = []
+  let decisionStartedResolve!: () => void
+  let decisionReleaseResolve!: () => void
+  const decisionStarted = new Promise<void>((resolve) => { decisionStartedResolve = resolve })
+  const decisionRelease = new Promise<void>((resolve) => { decisionReleaseResolve = resolve })
+  try {
+    const fs = new NodeWorkspaceFileSystem(dir)
+    const runtime: ApprovalRuntime = {
+      evidence: recordingEvidence(evidence),
+      service: {
+        async decide(request) {
+          decisionStartedResolve()
+          await decisionRelease
+          return {
+            version: KDO_H4_R1_APPROVAL_VERSION,
+            requestIdentity: request.requestIdentity,
+            requestInstanceId: request.requestInstanceId,
+            outcome: "allowed-once",
+          }
+        },
+      },
+    }
+    const gateway = new ExecutionGateway(fs, fixedPolicy("ask"), runtime)
+    const args = ["-e", "process.stdout.write(process.argv.slice(1).join('|'))", "approved"]
+    const execution = gateway.runCommand(
+      "fixture.approval-read",
+      process.execPath,
+      args,
+    )
+
+    await decisionStarted
+    args[2] = "mutated"
+    args.push("extra")
+    decisionReleaseResolve()
+
+    const result = await execution
+    assert.equal(result.stdout, "approved")
+    assert.equal(evidence[0]?.intent.inputDigest, result.receipt.inputDigest)
+    assert.equal(evidence[1]?.intent.inputDigest, result.receipt.inputDigest)
+    assert.equal(result.receipt.approval?.requestIdentity, evidence[1]?.requestIdentity)
+    assert.deepEqual(args, ["-e", "process.stdout.write(process.argv.slice(1).join('|'))", "mutated", "extra"])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

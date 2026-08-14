@@ -502,6 +502,7 @@ export class ExecutionGateway {
     validateOutput?: (stdout: string, stderr: string) => void,
   ): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
     const startedAt = new Date().toISOString()
+    const executionArgs = [...args]
     const maxOutputBytes = options.maxOutputBytes ?? 256 * 1024
     const timeoutMs = options.timeoutMs ?? 5_000
     const allowedExitCodes = normalizedAllowedExitCodes(options.allowedExitCodes)
@@ -514,7 +515,7 @@ export class ExecutionGateway {
       paths,
       inputDigest: sha256(JSON.stringify({
         executable,
-        args,
+        args: executionArgs,
         allowedExitCodes,
         maxOutputBytes,
         timeoutMs,
@@ -528,7 +529,7 @@ export class ExecutionGateway {
 
     try {
       for (const path of paths) await this.fs.validatePath(path)
-      const { stdout, stderr, exitCode } = await runProcess(executable, args, this.fs.root, {
+      const { stdout, stderr, exitCode } = await runProcess(executable, executionArgs, this.fs.root, {
         signal: options.signal,
         maxOutputBytes,
         timeoutMs,
