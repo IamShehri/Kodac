@@ -21,6 +21,7 @@ import {
   createLinuxLandlockBackendDescriptor,
   createLinuxLandlockLaunchPlan,
   materializeLinuxLandlockInvocation,
+  validateLinuxLandlockLaunchPlan,
 } from "../src/trust/confinement-linux-landlock.ts"
 
 const source = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf8")
@@ -52,7 +53,7 @@ test("H4-R2B donor provenance claim set and backend descriptor are exact", () =>
   assert.deepEqual(descriptor.supportedModes, ["read-only", "workspace-write"])
 })
 
-test("launch plans are deterministic immutable non-executing and preserve target argv", () => {
+test("launch plans are deterministic immutable validated and preserve target argv", () => {
   const input = {
     launcherPath: "/opt/kodac/landlock-run",
     mode: "workspace-write" as const,
@@ -74,12 +75,44 @@ test("launch plans are deterministic immutable non-executing and preserve target
     "--",
     "/usr/bin/node", "-e", "console.log('x')", "",
   ])
+  assert.deepEqual(validateLinuxLandlockLaunchPlan(JSON.parse(JSON.stringify(first))), first)
 
   const materialized = materializeLinuxLandlockInvocation(first)
   assert.equal(materialized.file, "/opt/kodac/landlock-run")
   assert.deepEqual(materialized.args, first.launcherArgv)
   materialized.args[0] = "mutated"
   assert.equal(first.launcherArgv[0], "--ro")
+
+  assert.throws(() => validateLinuxLandlockLaunchPlan({ ...first, launcherArgv: ["--", "/bin/false"] }))
+  assert.throws(() => validateLinuxLandlockLaunchPlan({ ...first, planIdentity: "0".repeat(64) }))
+  assert.throws(() => validateLinuxLandlockLaunchPlan({ ...first, extra: true }))
+})
+
+test("materialization rejects proxy structural hooks before invoking traps", () => {
+  const plan = createLinuxLandlockLaunchPlan({
+    launcherPath: "/launcher",
+    mode: "read-only",
+    readOnlyRoots: ["/"],
+    readWriteRoots: [],
+    targetArgv: ["/bin/true"],
+  })
+  let traps = 0
+  const proxied = new Proxy(plan, {
+    getPrototypeOf() {
+      traps += 1
+      return Object.prototype
+    },
+    ownKeys() {
+      traps += 1
+      return []
+    },
+    get(target, property, receiver) {
+      traps += 1
+      return Reflect.get(target, property, receiver)
+    },
+  })
+  assert.throws(() => materializeLinuxLandlockInvocation(proxied))
+  assert.equal(traps, 0)
 })
 
 test("launch-plan authority rejects unsupported modes PATH resolution ambiguity and unsafe grants", () => {
@@ -218,7 +251,7 @@ test("probe classification is exact bounded and never upgrades partial or malfor
   }).enforcement, "unavailable")
 })
 
-test("native source and notices preserve donor license and local claim boundaries", () => {
+test("native source and notices preserve donor license local claim boundaries and absolute execution", () => {
   const native = source("../native/landlock-run.c")
   const notices = source("../THIRD_PARTY_NOTICES.md")
   assert.match(native, /SPDX-License-Identifier: BSD-3-Clause/)
@@ -228,8 +261,9 @@ test("native source and notices preserve donor license and local claim boundarie
   assert.match(native, /kodac-linux-landlock-fs-v1/)
   assert.match(native, /PR_SET_NO_NEW_PRIVS/)
   assert.match(native, /__NR_landlock_restrict_self/)
-  assert.match(native, /execvp/)
-  assert.doesNotMatch(native, /LANDLOCK_ACCESS_NET|LANDLOCK_SCOPE_|seccomp|unshare\(|mount\(/)
+  assert.match(native, /target executable must be an absolute path/)
+  assert.match(native, /execv\(/)
+  assert.doesNotMatch(native, /execvp\(|LANDLOCK_ACCESS_NET|LANDLOCK_SCOPE_|seccomp|unshare\(|mount\(/)
 
   assert.match(notices, /DeepSeek Harness Landlock launcher adaptation/)
   assert.match(notices, /BSD 3-Clause License/)
@@ -266,6 +300,15 @@ linuxOnly("Linux native launcher compiles probes and enforces read-only/workspac
     })
     assert.equal(compile.status, 0, `native compile failed: ${compile.stderr}`)
     assert.equal(existsSync(binary), true)
+
+    const relativeTarget = spawnSync(binary, [
+      "--ro", "/", "--",
+      "node",
+      "-e",
+      "process.stdout.write('TARGET_EXECUTED')",
+    ], { encoding: "utf8", shell: false })
+    assert.equal(relativeTarget.status, KDO_H4_R2B_LINUX_LANDLOCK_LAUNCHER_FAILURE_EXIT)
+    assert.equal(relativeTarget.stdout.includes("TARGET_EXECUTED"), false)
 
     const probe = spawnSync(binary, ["--probe"], { encoding: "utf8", shell: false })
     assert.equal(probe.status, 0, `Landlock probe unavailable: ${probe.stderr}`)
