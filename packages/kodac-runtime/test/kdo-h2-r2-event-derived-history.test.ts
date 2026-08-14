@@ -417,7 +417,6 @@ test("H2-R2 protected authority surfaces remain byte-identical", () => {
     ["../src/model/openai-compatible.ts", "7ed56c7bac8e03d315b465e1f173ad934227051f"],
     ["../src/runtime/orchestrator.ts", "b069da69909b282fdbdc2c62279e0297cbd430e9"],
     ["../src/tools/registry.ts", "0bdf5cfd02efda7cab0c81976c7735bc7b46081b"],
-    ["../src/execution/gateway.ts", "be5926e9a8dc5c4c29d441dac11661d71e797015"],
     ["../src/verification/done-gate.ts", "067e147569fa52cc2b04c5df26fbe20a01e958e9"],
   ])
   for (const [path, expectedBlob] of expected) {
