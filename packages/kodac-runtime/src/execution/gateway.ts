@@ -78,12 +78,11 @@ function canonicalParent(path: string): string {
   return separator < 0 ? "." : path.slice(0, separator)
 }
 
-function canonicalEnvironment(env: NodeJS.ProcessEnv | undefined): Record<string, string> | undefined {
-  if (env === undefined) return undefined
+function canonicalEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(env)
       .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-      .sort(([left], [right]) => left.localeCompare(right)),
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0),
   )
 }
 
@@ -126,7 +125,7 @@ interface ProcessOptions {
   signal?: AbortSignal
   maxOutputBytes: number
   timeoutMs: number
-  env?: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv
   allowedExitCodes: number[]
 }
 
@@ -304,6 +303,7 @@ export class ExecutionGateway {
   async applyPatch(
     patchText: string,
     observer?: ExecutionObserver,
+    options: { signal?: AbortSignal } = {},
   ): Promise<{ affected: Awaited<ReturnType<typeof applyHunks>>; receipt: ExecutionReceipt }> {
     const startedAt = new Date().toISOString()
     const parsed = parsePatch(patchText)
@@ -321,7 +321,7 @@ export class ExecutionGateway {
 
     const policy = await this.policy.evaluate(intent)
     await observer?.onPolicy?.(intent, policy)
-    const approval = await this.authorize(intent, policy, startedAt, observer)
+    const approval = await this.authorize(intent, policy, startedAt, observer, options.signal)
 
     let affected: Awaited<ReturnType<typeof applyHunks>>
     try {
@@ -501,6 +501,7 @@ export class ExecutionGateway {
     const maxOutputBytes = options.maxOutputBytes ?? 256 * 1024
     const timeoutMs = options.timeoutMs ?? 5_000
     const allowedExitCodes = normalizedAllowedExitCodes(options.allowedExitCodes)
+    const environment = canonicalEnvironment(options.env ?? process.env)
     if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) throw new Error("maxOutputBytes must be a positive integer")
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive integer")
 
@@ -513,7 +514,7 @@ export class ExecutionGateway {
         allowedExitCodes,
         maxOutputBytes,
         timeoutMs,
-        env: canonicalEnvironment(options.env),
+        env: environment,
       })),
     }
     await observer?.onIntent?.(intent)
@@ -527,7 +528,7 @@ export class ExecutionGateway {
         signal: options.signal,
         maxOutputBytes,
         timeoutMs,
-        env: options.env,
+        env: environment,
         allowedExitCodes,
       })
       validateOutput?.(stdout, stderr)
