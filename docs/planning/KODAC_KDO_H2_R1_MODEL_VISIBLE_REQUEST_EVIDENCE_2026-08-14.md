@@ -1,7 +1,7 @@
 # KDO-H2-R1 Model-Visible Request Reconstruction Evidence
 
 Date: 2026-08-14
-Status: EVIDENCE LEDGER — PRE-LEDGER CERTIFICATION RECORDED; POST-LEDGER CERTIFICATION IS EXTERNAL
+Status: EVIDENCE LEDGER — PRE-LEDGER AND REVIEW-RECONCILIATION EVIDENCE RECORDED; FINAL HEAD CERTIFICATION IS EXTERNAL
 
 ## Identity
 
@@ -17,7 +17,9 @@ Supplemental legacy-test authorization merge: `4a070a3258521bd34ab9dd4476739091e
 
 Certified pre-ledger head: `2e0cab36288b5b1177396a25bedb69349a25d336`
 
-This file records H2-R1 evidence only. It does not self-certify the commit that contains this ledger. Post-ledger certification is established externally by exact-head GitHub Actions and review state so that recording the certification does not recursively create another uncertified repository head.
+Review-reconciliation candidate before this ledger update: `64dbb6add16b058e2324f00542bda87a4579e591`
+
+This file records H2-R1 evidence only. It does not self-certify the commit that contains this ledger. Final certification is established externally by exact-head GitHub Actions and review state so that recording certification does not recursively create another uncertified repository head.
 
 ## Certified invariant
 
@@ -25,21 +27,29 @@ This file records H2-R1 evidence only. It does not self-certify the commit that 
 
 The runtime records one required `model.request.snapshot` before provider execution and materializes provider-visible `model/messages/tools` from the validated snapshot. Failure to construct, validate, or append that snapshot prevents provider execution.
 
+Snapshot-construction rejection records only coarse `model.failed` evidence with stage `request_snapshot`; it does not persist the rejected prompt or raw validation error.
+
 The snapshot preserves exact ordered messages and exact ordered model-visible tool descriptors. H2-R1 does not re-sort the canonical projection returned by `ToolRegistry.list()`.
 
 The request identity is deterministic SHA-256 over the structural request preimage. Repeated identical provider-boundary requests keep the same structural identity while session event sequence distinguishes occurrences.
 
-## Validation and bounds
+## Validation, materialization, and bounds
 
-The certified implementation fails closed for malformed model-visible structures, including unknown fields, explicit undefined values, non-JSON primitives, non-finite numbers, cycles, sparse arrays, duplicate tool-call ids, duplicate tool names, non-plain objects, object accessors, array accessors, extra array fields, symbol-keyed array fields, and array subclasses.
+The implementation fails closed for malformed model-visible structures, including unknown fields, explicit undefined values, non-JSON primitives, non-finite numbers, cycles, sparse arrays, duplicate tool-call ids, duplicate tool names, non-plain objects, object accessors, array accessors, extra array fields, symbol-keyed array fields, and array subclasses.
 
 Object and array descriptor inspection does not invoke getters or serialization hooks while validating these structures.
+
+JSON nesting is explicitly bounded by `maxJsonDepth`; deeply nested caller data is rejected with an attributable typed validation error before unbounded recursive traversal can reach provider execution.
 
 Explicit item and byte bounds are enforced without truncation. The complete final serialized snapshot, including derived fields and request identity, is checked against `maxSnapshotBytes`; `modelVisibleBytes` retains its preimage measurement meaning.
 
 Runtime UTF-8 byte validation remains authoritative; JSON Schema string-length semantics are not treated as equivalent to UTF-8 byte limits.
 
-## Manual review correction
+Locally constructed snapshots are tracked by exact object identity inside the snapshot module. Materializing that exact already-validated object avoids redundant full re-validation. Serialized, copied, replayed, or otherwise untrusted snapshot objects continue through the strict validation path and cannot inherit trusted status by structural similarity.
+
+Snapshots remain deeply immutable. Provider-boundary materialization returns independent, deeply mutable JSON copies for tool-call inputs and tool input schemas, preserving the existing mutable `ModelProviderRequest` contract without permitting provider mutation to alter the durable snapshot.
+
+## Manual review correction before ledger creation
 
 Exact-head manual review found an additional array-accessor path after the first green pre-ledger candidate. The production correction was committed as:
 
@@ -95,7 +105,7 @@ The H2-R1 focused regression suite preserves these protected repository-path ide
 - `packages/kodac-runtime/src/execution/gateway.ts`: `be5926e9a8dc5c4c29d441dac11661d71e797015`
 - `packages/kodac-runtime/src/verification/done-gate.ts`: `067e147569fa52cc2b04c5df26fbe20a01e958e9`
 
-## Exact-head CI evidence
+## Pre-ledger exact-head CI evidence
 
 All certification below is for pre-ledger head `2e0cab36288b5b1177396a25bedb69349a25d336`.
 
@@ -119,9 +129,40 @@ All certification below is for pre-ledger head `2e0cab36288b5b1177396a25bedb6934
   - Ubuntu `94640023254`: typecheck, tests, benchmark PASS
   - K2 gate `94640196209`: PASS
 
+## Post-ledger review reconciliation history
+
+CodeRabbit exact review surfaced five actionable threads after the ledger was added.
+
+Four findings were valid within H2-R1 and were corrected inside already-authorized paths:
+
+1. snapshot-construction failures now emit coarse attributable `model.failed` evidence without raw rejected input;
+2. locally created trusted snapshots no longer incur redundant full re-validation during provider materialization, while untrusted serialized/copy inputs remain strict;
+3. JSON traversal now has an explicit nesting-depth bound;
+4. provider-boundary tool-call inputs and input schemas are deeply mutable independent copies while the durable snapshot remains deeply frozen.
+
+The fifth finding correctly identified evidence-store confidentiality/retention risk but proposed redacting the lossless snapshot. Redaction, digesting, or truncation would violate the authorized H2-R1 reconstructability invariant. Storage permissions, retention/expiry, cleanup, and access policy were therefore separated into tracking issue `#47` (`security(kdo): harden evidence-store access and retention for lossless request snapshots`). CodeRabbit accepted that scope separation and withdrew the redaction finding for PR #45.
+
+Review-reconciliation candidate:
+
+`64dbb6add16b058e2324f00542bda87a4579e591`
+
+At that candidate:
+
+- governance run `31759453804`: SUCCESS;
+- K3-R4 run `31759453771`: SUCCESS;
+- K3-R5 run `31759453773`: SUCCESS;
+- K2 runtime run `31759453764`: SUCCESS;
+  - runtime classifier `94642474701`: PASS;
+  - Windows `94642493886`: typecheck, tests, benchmark PASS;
+  - macOS `94642493894`: typecheck, tests, benchmark PASS;
+  - Ubuntu `94642494000`: typecheck, tests, benchmark PASS;
+  - K2 runtime gate `94642603744`: PASS.
+
+All five review threads were adjudicated and resolved before this ledger update. These results are historical evidence for the parent review-reconciliation candidate, not self-certification of the commit containing this ledger update.
+
 ## Completion claim
 
-The certified evidence supports exactly:
+The evidence supports exactly:
 
 `KODAC_PROVIDER_BOUNDARY_REQUEST_RECONSTRUCTABLE`
 
@@ -129,11 +170,11 @@ This ledger does not establish `FULL_SESSION_EVENT_SOURCED`, `RAW_PROVIDER_WIRE_
 
 H2-R2 remains outstanding.
 
-## Mandatory post-ledger gate
+## Mandatory final exact-head gate
 
 The exact PR head containing this ledger must pass:
 
-- the full authorized changed-path check;
+- the full authorized ten-path changed-path check;
 - governance and provenance;
 - TypeScript typecheck and full runtime tests;
 - Ubuntu, macOS, and Windows runtime jobs;
@@ -144,7 +185,7 @@ The exact PR head containing this ledger must pass:
 - exact-head review adjudication;
 - unresolved review threads = `0`.
 
-Post-ledger certification is represented by those external exact-head results and must not be written back into this ledger, because doing so would create another repository head requiring another certification cycle.
+Final certification is represented by those external exact-head results and must not be written back into this ledger, because doing so would create another repository head requiring another certification cycle.
 
 Only after those gates pass may PR #45 be marked Ready for review.
 
