@@ -239,7 +239,9 @@ test("native source and notices preserve donor license and local claim boundarie
 
 test("TypeScript adapter remains pure and protected authority surfaces stay byte-identical", () => {
   const adapter = source("../src/trust/confinement-linux-landlock.ts")
-  assert.doesNotMatch(adapter, /from\s+["']node:child_process["']|require\(["']node:child_process["']\)|\bspawnSync\s*\(|\bspawn\s*\(|\bexecFile\s*\(|\bexec\s*\(|process\.env|from\s+["']node:fs["']|require\(["']node:fs["']\)|\bBun\.spawn\b|\bDeno\.Command\b/)
+  const importSpecifiers = [...adapter.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort()
+  assert.deepEqual(importSpecifiers, ["./confinement.ts", "node:crypto", "node:path", "node:util"])
+  assert.doesNotMatch(adapter, /process\.env|\bspawnSync\s*\(|\bspawn\s*\(|\bexecFile\s*\(|\bBun\.spawn\b|\bDeno\.Command\b|import\s*\(/)
 
   assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "8b481c226276d0b06fabc8d614c1295cd0881a6a")
   assert.equal(gitBlobSha1(source("../src/trust/confinement.ts")), "873f235120645c0a12f10a5bff7e9591db6bb341")
