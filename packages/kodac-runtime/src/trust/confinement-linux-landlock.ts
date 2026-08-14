@@ -27,6 +27,8 @@ const MAX_ROOTS = 256
 const MAX_ARG_ITEMS = 256
 const MAX_ARG_BYTES = 64 * 1024
 const MAX_ARGV_BYTES = 256 * 1024
+const MAX_LAUNCHER_ARG_ITEMS = MAX_ROOTS * 4 + MAX_ARG_ITEMS + 1
+const MAX_LAUNCHER_ARGV_BYTES = 3 * 1024 * 1024
 const MAX_PROBE_OUTPUT_BYTES = 4096
 
 export type LinuxLandlockConfinementMode = "read-only" | "workspace-write"
@@ -118,6 +120,12 @@ function boundedString(value: unknown, label: string, maxBytes: number, allowEmp
   return value
 }
 
+function requireIdentity(value: unknown, label: string): string {
+  const identity = boundedString(value, label, 64)
+  if (!/^[0-9a-f]{64}$/.test(identity)) throw new TypeError(`${label} must be a lowercase SHA-256 identity`)
+  return identity
+}
+
 function absoluteCanonicalPath(value: unknown, label: string): string {
   const path = boundedString(value, label, MAX_PATH_BYTES)
   if (!posix.isAbsolute(path)) throw new TypeError(`${label} must be an absolute POSIX path`)
@@ -142,6 +150,14 @@ function canonicalTargetArgv(value: unknown): readonly string[] {
   if (!posix.isAbsolute(argv[0] ?? "")) throw new TypeError("targetArgv[0] must be an absolute POSIX executable path")
   const totalBytes = argv.reduce((total, item) => total + byteLength(item), 0)
   if (totalBytes > MAX_ARGV_BYTES) throw new TypeError(`targetArgv exceeds ${MAX_ARGV_BYTES} UTF-8 bytes`)
+  return Object.freeze([...argv])
+}
+
+function canonicalLauncherArgv(value: unknown): readonly string[] {
+  const entries = denseArrayValues(value, "launcherArgv", MAX_LAUNCHER_ARG_ITEMS)
+  const argv = entries.map((entry, index) => boundedString(entry, `launcherArgv[${index}]`, MAX_ARG_BYTES, true))
+  const totalBytes = argv.reduce((total, item) => total + byteLength(item), 0)
+  if (totalBytes > MAX_LAUNCHER_ARGV_BYTES) throw new TypeError(`launcherArgv exceeds ${MAX_LAUNCHER_ARGV_BYTES} UTF-8 bytes`)
   return Object.freeze([...argv])
 }
 
@@ -217,16 +233,39 @@ export function createLinuxLandlockLaunchPlan(input: {
   return Object.freeze({ ...base, planIdentity: sha256(planPreimage(base)), launcherArgv })
 }
 
-export function materializeLinuxLandlockInvocation(plan: LinuxLandlockLaunchPlan): { file: string; args: string[] } {
+export function validateLinuxLandlockLaunchPlan(value: unknown): LinuxLandlockLaunchPlan {
+  const record = asPlainRecord(value, "Linux Landlock launch plan")
+  exactKeys(
+    record,
+    ["version", "claimSet", "planIdentity", "launcherPath", "mode", "readOnlyRoots", "readWriteRoots", "targetArgv", "launcherArgv"],
+    "Linux Landlock launch plan",
+  )
+  if (record.version !== KDO_H4_R2B_LINUX_LANDLOCK_PLAN_VERSION) throw new TypeError("Linux Landlock launch-plan version mismatch")
+  if (record.claimSet !== KDO_H4_R2B_LINUX_LANDLOCK_CLAIM_SET) throw new TypeError("Linux Landlock claim-set mismatch")
+
   const rebuilt = createLinuxLandlockLaunchPlan({
-    launcherPath: plan.launcherPath,
-    mode: plan.mode,
-    readOnlyRoots: [...plan.readOnlyRoots],
-    readWriteRoots: [...plan.readWriteRoots],
-    targetArgv: [...plan.targetArgv],
+    launcherPath: absoluteCanonicalPath(record.launcherPath, "launcherPath"),
+    mode: requireMode(record.mode),
+    readOnlyRoots: [...canonicalRoots(record.readOnlyRoots, "readOnlyRoots")],
+    readWriteRoots: [...canonicalRoots(record.readWriteRoots, "readWriteRoots")],
+    targetArgv: [...canonicalTargetArgv(record.targetArgv)],
   })
-  if (rebuilt.planIdentity !== plan.planIdentity) throw new TypeError("Linux Landlock launch-plan identity mismatch")
-  return { file: rebuilt.launcherPath, args: [...rebuilt.launcherArgv] }
+  const planIdentity = requireIdentity(record.planIdentity, "planIdentity")
+  if (planIdentity !== rebuilt.planIdentity) throw new TypeError("Linux Landlock launch-plan identity mismatch")
+
+  const suppliedLauncherArgv = canonicalLauncherArgv(record.launcherArgv)
+  if (
+    suppliedLauncherArgv.length !== rebuilt.launcherArgv.length ||
+    suppliedLauncherArgv.some((item, index) => item !== rebuilt.launcherArgv[index])
+  ) {
+    throw new TypeError("Linux Landlock launcher argv does not match the canonical derived invocation")
+  }
+  return rebuilt
+}
+
+export function materializeLinuxLandlockInvocation(plan: LinuxLandlockLaunchPlan): { file: string; args: string[] } {
+  const validated = validateLinuxLandlockLaunchPlan(plan)
+  return { file: validated.launcherPath, args: [...validated.launcherArgv] }
 }
 
 function unavailable(reason: string): LinuxLandlockProbeClassification {
