@@ -4,8 +4,9 @@ import { BoundedAgentLoop } from "../src/agent/loop.ts"
 import type { ModelProvider, ModelProviderRequest, ModelProviderResponse } from "../src/model/provider.ts"
 import { ProviderRegistry } from "../src/model/provider.ts"
 import { AgentTurnRunner } from "../src/model/turn.ts"
-import { InMemoryEventSink } from "../src/protocol/event.ts"
+import { InMemoryEventSink, type EventSink, type KodacEvent } from "../src/protocol/event.ts"
 import { RuntimeOrchestrator } from "../src/runtime/orchestrator.ts"
+import { projectModelVisibleHistory } from "../src/session/model-visible-history.ts"
 import { RuntimeSession } from "../src/session/session.ts"
 import { ToolRegistry, type RuntimeTool } from "../src/tools/registry.ts"
 
@@ -19,7 +20,14 @@ class RecordingProvider implements ModelProvider {
   }
 
   async generate(request: ModelProviderRequest): Promise<ModelProviderResponse> {
-    this.requests.push({ ...request, messages: request.messages.map((message) => ({ ...message })), tools: [...request.tools] })
+    this.requests.push({
+      ...request,
+      messages: request.messages.map((message) => ({
+        ...message,
+        ...(message.toolCalls === undefined ? {} : { toolCalls: message.toolCalls.map((call) => ({ ...call })) }),
+      })),
+      tools: [...request.tools],
+    })
     const response = this.responses.shift()
     if (!response) throw new Error("No scripted response")
     return response
@@ -29,6 +37,7 @@ class RecordingProvider implements ModelProvider {
 function harness(provider: ModelProvider, tools: RuntimeTool[] = [], clock: () => number = () => Date.now()): {
   loop: BoundedAgentLoop
   sink: InMemoryEventSink
+  session: RuntimeSession
 } {
   const sink = new InMemoryEventSink()
   const session = new RuntimeSession(sink, "session-loop-test")
@@ -38,7 +47,7 @@ function harness(provider: ModelProvider, tools: RuntimeTool[] = [], clock: () =
   const providers = new ProviderRegistry()
   providers.register(provider)
   const runner = new AgentTurnRunner(providers, registry, orchestrator, session)
-  return { loop: new BoundedAgentLoop(runner, session, clock), sink }
+  return { loop: new BoundedAgentLoop(runner, session, clock), sink, session }
 }
 
 const echoTool: RuntimeTool<{ value: string }, { echoed: string }> = {
@@ -49,7 +58,7 @@ const echoTool: RuntimeTool<{ value: string }, { echoed: string }> = {
   },
 }
 
-test("feeds tool results back into the next model turn", async () => {
+test("feeds event-derived tool history into the next model turn", async () => {
   const provider = new RecordingProvider([
     { assistant: "", finishReason: "tool_calls", toolCalls: [{ id: "call-1", name: "test.echo", input: { value: "verified" } }] },
     { assistant: "done", finishReason: "stop", toolCalls: [] },
@@ -65,7 +74,114 @@ test("feeds tool results back into the next model turn", async () => {
   assert.equal(toolMessage?.role, "tool")
   assert.equal(toolMessage?.toolCallId, "call-1")
   assert.equal(toolMessage?.content, "{\"echoed\":\"verified\"}")
+
+  const snapshotIndexes = sink.events
+    .map((event, index) => event.type === "model.request.snapshot" ? index : -1)
+    .filter((index) => index >= 0)
+  assert.equal(snapshotIndexes.length, 2)
+  const throughSecondRequest = sink.events.slice(0, (snapshotIndexes[1] ?? -1) + 1)
+  const projection = projectModelVisibleHistory(throughSecondRequest)
+  assert.deepEqual(projection.messages, provider.requests[1].messages)
+
+  const historySources = sink.events
+    .filter((event) => event.type === "model.history.message.appended")
+    .map((event) => (event.payload as { source: string }).source)
+  assert.deepEqual(historySources.slice(0, 2), ["assistant_response", "tool_result"])
   assert.ok(sink.events.some((event) => event.type === "agent.loop.completed"))
+})
+
+test("records anchored recovery history before retrying a provider failure", async () => {
+  const requests: ModelProviderRequest[] = []
+  let calls = 0
+  const provider: ModelProvider = {
+    name: "recovering",
+    async generate(request) {
+      requests.push({ ...request, messages: request.messages.map((message) => ({ ...message })), tools: [...request.tools] })
+      calls += 1
+      if (calls === 1) throw new Error("temporary failure")
+      return { assistant: "recovered", finishReason: "stop", toolCalls: [] }
+    },
+  }
+  const { loop, sink } = harness(provider)
+  const result = await loop.run({
+    provider: "recovering",
+    model: "fixture/model",
+    messages: [{ role: "user", content: "recover" }],
+    limits: { maxFailures: 2 },
+  })
+
+  assert.equal(result.status, "completed")
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].messages.at(-1)?.role, "system")
+  assert.match(requests[1].messages.at(-1)?.content ?? "", /previous model\/tool turn failed/)
+  const recovery = sink.events.find(
+    (event) => event.type === "model.history.message.appended" &&
+      (event.payload as { source?: string }).source === "recovery_system",
+  )
+  assert.ok(recovery)
+
+  const secondSnapshotIndex = sink.events
+    .map((event, index) => event.type === "model.request.snapshot" ? index : -1)
+    .filter((index) => index >= 0)[1]
+  assert.notEqual(secondSnapshotIndex, undefined)
+  const projection = projectModelVisibleHistory(sink.events.slice(0, (secondSnapshotIndex ?? -1) + 1))
+  assert.deepEqual(projection.messages, requests[1].messages)
+})
+
+test("history sink failure blocks a later provider invocation and does not enter the session journal", async () => {
+  class RejectHistorySink implements EventSink {
+    readonly events: KodacEvent[] = []
+
+    append(event: KodacEvent): void {
+      if (event.type === "model.history.message.appended") throw new Error("history sink rejected")
+      this.events.push(event)
+    }
+  }
+
+  let calls = 0
+  const provider: ModelProvider = {
+    name: "one-shot",
+    async generate() {
+      calls += 1
+      return { assistant: "answer", finishReason: "stop", toolCalls: [] }
+    },
+  }
+  const sink = new RejectHistorySink()
+  const session = new RuntimeSession(sink, "session-history-failure")
+  const registry = new ToolRegistry()
+  const orchestrator = new RuntimeOrchestrator(registry, session)
+  const providers = new ProviderRegistry()
+  providers.register(provider)
+  const loop = new BoundedAgentLoop(new AgentTurnRunner(providers, registry, orchestrator, session), session)
+
+  await assert.rejects(
+    () => loop.run({ provider: "one-shot", model: "fixture/model", messages: [{ role: "user", content: "x" }] }),
+    /history sink rejected/,
+  )
+  assert.equal(calls, 1)
+  assert.equal(session.eventsSnapshot().some((event) => event.type === "model.history.message.appended"), false)
+  const priorSequence = session.eventsSnapshot().at(-1)?.sequence ?? 0
+  const next = await session.emit("session.failed", { status: "failed", error: "history append rejected" })
+  assert.equal(next.sequence, priorSequence + 1)
+})
+
+test("anchored session history cannot be silently replaced by new caller messages", async () => {
+  let calls = 0
+  const provider: ModelProvider = {
+    name: "anchored",
+    async generate() {
+      calls += 1
+      return { assistant: "done", finishReason: "stop", toolCalls: [] }
+    },
+  }
+  const { loop } = harness(provider)
+  await loop.run({ provider: "anchored", model: "fixture/model", messages: [{ role: "user", content: "first" }] })
+  assert.equal(calls, 1)
+  await assert.rejects(
+    () => loop.run({ provider: "anchored", model: "fixture/model", messages: [{ role: "user", content: "replacement" }] }),
+    /caller messages do not match the canonical projection/,
+  )
+  assert.equal(calls, 1)
 })
 
 test("blocks an identical tool call before a second execution", async () => {
