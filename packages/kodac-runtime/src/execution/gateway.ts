@@ -291,7 +291,7 @@ async function readBoundedStream(
 function waitForChild(child: ChildProcess): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolvePromise, rejectPromise) => {
     child.once("error", rejectPromise)
-    child.once("close", (exitCode, signal) => resolvePromise({ exitCode, signal }))
+    child.once("exit", (exitCode, signal) => resolvePromise({ exitCode, signal }))
   })
 }
 
