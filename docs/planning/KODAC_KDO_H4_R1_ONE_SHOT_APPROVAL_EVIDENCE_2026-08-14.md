@@ -19,10 +19,8 @@ Canonical implementation base for PR #52:
 Authorization chain:
 
 1. PR #51 / merge `fbac06934eaf55c173a70ddf24a42ecb2323c2b8` — original H4-R1 one-shot approval authorization.
-2. PR #53 / merge `0bf9ca5cd21e486346ffbdf648793edd88282ae` is NOT the authorization identity and MUST NOT be used. The canonical PR #53 merge is `0bf9ca5cd4d152b6a1758c7f962ba81bdba4d1f7` — legacy-test reconciliation.
+2. PR #53 / merge `0bf9ca5cd4d152b6a1758c7f962ba81bdba4d1f7` — legacy-test reconciliation.
 3. PR #54 / merge `b9b055a4cd21e486346ffbdf648793edd88282ae` — `repo.apply_patch` abort-propagation supplemental authorization.
-
-The explicit correction above is intentional: this ledger refuses shortened or substituted commit identity.
 
 ## 2. Bounded H4-R1 claim
 
@@ -406,13 +404,13 @@ This decision authorizes evidence capture only. It is not the final H4-R1 comple
 
 ## 25. Ledger-only delta requirement
 
-This file must be the only delta between accepted pre-ledger head:
+This file must be the only changed path between accepted pre-ledger head:
 
 `badb19152a608c4d08571455b195deaca96f8a45`
 
-and the new ledger-bearing head.
+and the final ledger-bearing head.
 
-Any additional production/test/config change invalidates this evidence-capture transition and requires a new pre-ledger certification.
+Any additional production/test/config path change invalidates this evidence-capture transition and requires a new pre-ledger certification.
 
 ## 26. Required post-ledger gates
 
@@ -455,7 +453,7 @@ Before merge, verify all of the following against the final ledger-bearing head:
 - unresolved review threads = 0;
 - no valid outstanding review finding remains;
 - changed paths remain inside the complete H4-R1 authorization chain;
-- ledger is present as the only post-pre-ledger delta.
+- ledger is present as the only post-pre-ledger path delta.
 
 Merge must use an expected-head guard.
 
