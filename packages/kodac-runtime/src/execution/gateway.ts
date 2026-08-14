@@ -249,7 +249,7 @@ export class ExecutionGateway {
         outcome = "cancelled"
       } else {
         const rawDecision = await runtime.service.decide(request, { signal })
-        outcome = validateApprovalDecision(rawDecision, request).outcome
+        outcome = signal?.aborted ? "cancelled" : validateApprovalDecision(rawDecision, request).outcome
       }
     } catch {
       outcome = signal?.aborted ? "cancelled" : "unavailable"
