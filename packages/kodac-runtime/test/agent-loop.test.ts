@@ -191,6 +191,67 @@ test("aggregate history bounds fail before an unprojectable history event is per
   assert.equal(projectModelVisibleHistory(session.eventsSnapshot()).messages.length, KDO_H2_R2_LIMITS.maxProjectedMessages)
 })
 
+test("complete turn message-count overflow is rejected before any history record from that turn is persisted", async () => {
+  const provider = new RecordingProvider([
+    {
+      assistant: "",
+      finishReason: "tool_calls",
+      toolCalls: [
+        { id: "call-a", name: "test.echo", input: { value: "a" } },
+        { id: "call-b", name: "test.echo", input: { value: "b" } },
+      ],
+    },
+  ])
+  const { loop, sink, session } = harness(provider, [echoTool])
+  const messages: ModelProviderRequest["messages"] = Array.from(
+    { length: KDO_H2_R2_LIMITS.maxProjectedMessages - 2 },
+    (_, index) => ({ role: "user", content: `message-${index}` }),
+  )
+
+  await assert.rejects(
+    () => loop.run({ provider: "recording", model: "fixture/model", messages }),
+    new RegExp(`projected model history exceeds ${KDO_H2_R2_LIMITS.maxProjectedMessages} messages`),
+  )
+  assert.equal(provider.requests.length, 1)
+  assert.equal(sink.events.some((event) => event.type === "model.history.message.appended"), false)
+  assert.equal(session.eventsSnapshot().some((event) => event.type === "model.history.message.appended"), false)
+  assert.equal(projectModelVisibleHistory(session.eventsSnapshot()).messages.length, messages.length)
+})
+
+test("complete turn total-content overflow is rejected before any history record from that turn is persisted", async () => {
+  const valueA = "a".repeat(1_500)
+  const valueB = "b".repeat(1_500)
+  const provider = new RecordingProvider([
+    {
+      assistant: "",
+      finishReason: "tool_calls",
+      toolCalls: [
+        { id: "call-a", name: "test.echo", input: { value: valueA } },
+        { id: "call-b", name: "test.echo", input: { value: valueB } },
+      ],
+    },
+  ])
+  const { loop, sink, session } = harness(provider, [echoTool])
+  const messageCount = 8
+  const reservedHeadroom = 2_000
+  const perMessageBytes = Math.floor(
+    (KDO_H2_R2_LIMITS.maxTotalMessageContentBytes - reservedHeadroom) / messageCount,
+  )
+  const messages: ModelProviderRequest["messages"] = Array.from(
+    { length: messageCount },
+    () => ({ role: "user", content: "x".repeat(perMessageBytes) }),
+  )
+
+  await assert.rejects(
+    () => loop.run({ provider: "recording", model: "fixture/model", messages }),
+    new RegExp(`projected model history content exceeds ${KDO_H2_R2_LIMITS.maxTotalMessageContentBytes} UTF-8 bytes`),
+  )
+  assert.equal(provider.requests.length, 1)
+  assert.equal(sink.events.some((event) => event.type === "model.history.message.appended"), false)
+  assert.equal(session.eventsSnapshot().some((event) => event.type === "model.history.message.appended"), false)
+  assert.equal(projectModelVisibleHistory(session.eventsSnapshot()).messages.length, messageCount)
+})
+
 test("separate loop.run invocations use independent canonical projection windows", async () => {
   const provider = new RecordingProvider([
     { assistant: "first done", finishReason: "stop", toolCalls: [] },
