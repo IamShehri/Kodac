@@ -345,6 +345,16 @@ function sameLauncherStat(
     before.ctimeMs === after.ctimeMs
 }
 
+function preservePermitWriteHalf(stream: Writable | null | undefined): Writable {
+  if (!stream) throw new Error("controlled Landlock launcher did not expose K2 permit fd 5")
+  const socket = stream as Writable & { allowHalfOpen?: boolean }
+  if (typeof socket.allowHalfOpen !== "boolean") {
+    throw new Error("controlled Landlock permit transport cannot preserve a one-way K2 write half")
+  }
+  socket.allowHalfOpen = true
+  return socket
+}
+
 async function observeLauncherArtifact(config: LinuxLandlockRuntimeConfig): Promise<{
   handle: FileHandle
   observation: LauncherArtifactObservation
@@ -870,6 +880,11 @@ export class ExecutionGateway {
             stdio: ["ignore", "pipe", "pipe", artifact.handle.fd, "pipe", "pipe"],
           },
         )
+        // Extra Node stdio pipes are duplex Unix socketpairs. The launcher
+        // immediately shuts down its forbidden write half of FD5. Preserve the
+        // parent's permitted write half synchronously, before libuv can process
+        // that peer FIN and auto-close it under allowHalfOpen=false.
+        permitStream = preservePermitWriteHalf(child.stdio[KDO_H4_R2C_PERMIT_FD] as Writable | null)
         await artifact.handle.close()
         launcherHandleOpen = false
       } finally {
@@ -879,7 +894,6 @@ export class ExecutionGateway {
       const stdoutStream = child.stdout
       const stderrStream = child.stderr
       const readyStream = child.stdio[KDO_H4_R2C_READY_FD] as Readable | null
-      permitStream = child.stdio[KDO_H4_R2C_PERMIT_FD] as Writable | null ?? undefined
       if (!stdoutStream || !stderrStream || !readyStream || !permitStream) {
         throw new Error("controlled Landlock launcher did not expose the required K2 streams")
       }
