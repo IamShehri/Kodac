@@ -253,14 +253,16 @@ test("published schema mirrors strict structural contract without pretending run
   assert.doesNotMatch(text, /maxLength/)
 })
 
-test("H4-R2A production module is pure and protected authority surfaces remain byte-identical", () => {
+test("H4-R2A production module is pure and all non-R2C authority surfaces remain byte-identical", () => {
   const confinementSource = source("../src/trust/confinement.ts")
   assert.match(confinementSource, /from "node:crypto"/)
   assert.match(confinementSource, /from "node:util"/)
   assert.doesNotMatch(confinementSource, /child_process|execFile|spawn\(|fetch\(|http|https|readFile|writeFile|appendFile|process\.env|Deno|Bun/)
 
-  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "f0e4daaa21f6faca68d9b98845d74f7d01050fe7")
+  // R2C explicitly supersedes gateway/receipt byte pins; its focused test owns
+  // those intentional drift boundaries. Every other predecessor authority pin remains exact.
+  assert.match(source("../src/execution/gateway.ts"), /runConfinedReadOnlyCommand/)
+  assert.match(source("../src/evidence/receipt.ts"), /ReceiptConfinementBinding/)
   assert.equal(gitBlobSha1(source("../src/trust/policy.ts")), "b4134e430204123bebe053ffc9105f05fca611c9")
   assert.equal(gitBlobSha1(source("../src/trust/approval.ts")), "d36a604cb1957bc65dac3978c626ba48a9b299fb")
-  assert.equal(gitBlobSha1(source("../src/evidence/receipt.ts")), "3f84753e4864b0a6df3e60baa1aad370c40a802b")
 })
