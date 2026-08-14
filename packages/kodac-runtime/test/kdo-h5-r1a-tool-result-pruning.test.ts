@@ -42,6 +42,7 @@ test("H5-R1A provenance and pruning policy are strict deterministic and bounded"
   assert.equal(KDO_H5_R1A_STRATEGY, "head-tail-equal-v1")
   assert.equal(KDO_H5_R1A_LIMITS.minToolResultBytes, 128)
   assert.equal(KDO_H5_R1A_LIMITS.maxToolResultBytes, 512 * 1024)
+  assert.equal(KDO_H5_R1A_LIMITS.maxStructuralDepth, 72)
 
   const first = createToolResultPruningPolicy({ maxToolResultBytes: 256 })
   const second = createToolResultPruningPolicy({ maxToolResultBytes: 256 })
@@ -174,6 +175,22 @@ test("H5-R1A fails closed on malformed or hostile structural inputs without exec
   const symbolBearing = { role: "tool", name: "x", toolCallId: "y", content: "x".repeat(300) } as Record<PropertyKey, unknown>
   symbolBearing[Symbol("hostile")] = true
   assert.throws(() => pruneModelVisibleToolResults([symbolBearing], policy), /symbol/)
+
+  const cyclic = { role: "tool", name: "x", toolCallId: "y", content: "x".repeat(300) } as Record<string, unknown>
+  cyclic.self = cyclic
+  assert.throws(() => pruneModelVisibleToolResults([cyclic], policy), /cyclic/)
+
+  let deeplyNested: unknown = "leaf"
+  for (let depth = 0; depth < KDO_H5_R1A_LIMITS.maxStructuralDepth + 8; depth += 1) {
+    deeplyNested = { next: deeplyNested }
+  }
+  assert.throws(() => pruneModelVisibleToolResults([
+    {
+      role: "assistant",
+      content: "deep",
+      toolCalls: [{ id: "deep-1", name: "fixture", input: deeplyNested }],
+    },
+  ], policy), /structural depth/)
 
   let policyProxyGets = 0
   const proxiedPolicyInput = new Proxy(
