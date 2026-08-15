@@ -12,6 +12,8 @@ export type KodacEventType =
   | "tool.started"
   | "tool.completed"
   | "tool.failed"
+  | "tool.guard.evaluated"
+  | "tool.guard.execution_observed"
   | "receipt.recorded"
   | "model.request.snapshot"
   | "model.history.message.appended"
