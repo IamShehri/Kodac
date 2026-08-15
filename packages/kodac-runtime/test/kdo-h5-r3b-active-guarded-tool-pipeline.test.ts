@@ -210,7 +210,12 @@ test("R3B tool exposure is a strict H2-backed provider subset with registry desc
 
   await runner.run({ provider: provider.name, model: "fixture/model", messages: [{ role: "user", content: "hi" }], guardPlanJson: plan })
   assert.equal(provider.requests.length, 1)
-  assert.deepEqual(provider.requests[0]?.tools, [{ name: "test.alpha", capability: "test.alpha" }])
+  assert.deepEqual(provider.requests[0]?.tools, [{
+    name: "test.alpha",
+    capability: "test.alpha",
+    description: "Kodac capability test.alpha",
+    inputSchema: { type: "object", additionalProperties: true },
+  }])
   const snapshotEvent = session.eventsSnapshot().find((event) => event.type === "model.request.snapshot")
   assert.ok(snapshotEvent)
   assert.deepEqual((snapshotEvent.payload as { tools: unknown[] }).tools, provider.requests[0]?.tools)
