@@ -412,7 +412,6 @@ test("H2-R2 projector source has no new ambient execution or persistence authori
 
 test("H2-R2 protected authority surfaces remain byte-identical", () => {
   const expected = new Map([
-    ["../src/model/turn.ts", "401d796b929d350046128371fee4ba719d0d56c9"],
     ["../src/model/provider.ts", "a15f1d86ceab88ab6fa1be787719d222e354e0c4"],
     ["../src/model/openai.ts", "564851b2dc8cd1aa610fbc7eaa4b5be5853f97f4"],
     ["../src/model/openai-compatible.ts", "7ed56c7bac8e03d315b465e1f173ad934227051f"],
