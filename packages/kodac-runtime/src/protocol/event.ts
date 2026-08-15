@@ -33,6 +33,7 @@ export type KodacEventType =
   | "agent.turn.started"
   | "agent.turn.completed"
   | "agent.turn.failed"
+  | "agent.turn.stopped"
   | "agent.loop.completed"
   | "agent.loop.stopped"
   | "verification.plan.created"
