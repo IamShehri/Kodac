@@ -484,6 +484,16 @@ function r3aPipelineJson(tools: readonly GuardedToolDescriptor[], call: JsonObje
   })
 }
 
+function preflightPlanPipelines(plan: GuardedToolPlan, tools: readonly GuardedToolDescriptor[]): void {
+  for (const rule of plan.callRules) {
+    reduceGuardedToolPipeline(r3aPipelineJson(
+      tools,
+      { toolName: rule.toolName, capability: rule.capability, input: null },
+      [...plan.toolDecisions, ...rule.decisions],
+    ))
+  }
+}
+
 function emptyToolSetIdentity(): string {
   const canonical = canonicalizeJson({ version: "kodac-guarded-tool-set-v1", tools: [] })
   return createHash("sha256")
@@ -496,6 +506,7 @@ export function reduceGuardedToolExposure(planJson: string, registeredToolsJson:
   const plan = parsePlan(planJson)
   const tools = parseRegisteredTools(registeredToolsJson)
   validatePlanReferences(plan, tools)
+  preflightPlanPipelines(plan, tools)
   if (tools.length === 0) {
     const identity = emptyToolSetIdentity()
     return Object.freeze({ planIdentity: plan.planIdentity, baseToolSetIdentity: identity, effectiveToolSetIdentity: identity, effectiveTools: Object.freeze([]) })
@@ -523,6 +534,7 @@ export function reduceGuardedToolCallWithPlan(
   const plan = parsePlan(planJson)
   const tools = parseRegisteredTools(registeredToolsJson)
   validatePlanReferences(plan, tools)
+  preflightPlanPipelines(plan, tools)
   const serializedCall = assertPrimitiveJsonText(callJson, "guardedToolCallJson", KDO_H5_R3B_PLAN_LIMITS.maxCallJsonBytes)
   const call = asObject(parseJsonText(serializedCall), "guardedToolCall")
   exactKeys(call, CALL_KEYS, "guardedToolCall")
