@@ -550,7 +550,7 @@ test("R3B post-execution guard evidence failure prevents successful turn complet
   assert.equal(session.eventsSnapshot().some((event) => event.type === "tool.guard.execution_observed"), false)
 })
 
-test("R3B pure plan module has no ambient authority and active protected surfaces stay isolated", () => {
+test("R3B pure plan module has no ambient authority and R1B history pruning cannot rewrite guard or K2 authority", () => {
   const planSource = source("../src/agent/guarded-tool-plan.ts")
   const imports = [...planSource.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort()
   assert.deepEqual(imports, ["./guarded-tool-pipeline.ts", "node:crypto"])
@@ -559,7 +559,20 @@ test("R3B pure plan module has no ambient authority and active protected surface
   assert.equal(gitBlobSha1(source("../src/tools/registry.ts")), "0bdf5cfd02efda7cab0c81976c7735bc7b46081b")
   assert.equal(gitBlobSha1(source("../src/runtime/orchestrator.ts")), "b069da69909b282fdbdc2c62279e0297cbd430e9")
   assert.equal(gitBlobSha1(source("../src/session/model-visible-request.ts")), "0f4c7ef7ef0f4e4e1baa90944c39639c1dfa07a6")
-  assert.equal(gitBlobSha1(source("../src/session/model-visible-history.ts")), "06909401c6ddf2880154eb3d5fb1fe646d12d7fb")
+
+  const historySource = source("../src/session/model-visible-history.ts")
+  assert.match(historySource, /model\.history\.tool_result_pruning\.applied/)
+  assert.match(historySource, /pruneModelVisibleToolResults/)
+  assert.doesNotMatch(historySource, /guarded-tool-pipeline|guarded-tool-plan|reduceGuardedToolPipeline|reduceGuardedToolExposure|reduceGuardedToolCallWithPlan/)
+  assert.doesNotMatch(historySource, /tool\.guard\.evaluated|tool\.guard\.execution_observed|ExecutionGateway|RuntimeOrchestrator|DoneGate/)
+
+  const turnSource = source("../src/model/turn.ts")
+  assert.match(turnSource, /finalCallIdentity/)
+  assert.match(turnSource, /tool\.guard\.evaluated/)
+  assert.match(turnSource, /tool\.guard\.execution_observed/)
+  assert.equal(turnSource.includes("tool-result-pruning"), false)
+  assert.equal(turnSource.includes("pruneModelVisibleToolResults"), false)
+
   assert.equal(gitBlobSha1(source("../src/trust/policy.ts")), "b4134e430204123bebe053ffc9105f05fca611c9")
   assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "ecf9cc9d3eda6a2280a280ed2f9a2e472f397560")
   assert.equal(gitBlobSha1(source("../src/verification/done-gate.ts")), "067e147569fa52cc2b04c5df26fbe20a01e958e9")

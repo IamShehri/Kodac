@@ -400,11 +400,15 @@ test("H2-R2 projector source has no new ambient execution or persistence authori
   const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)].map((match) => match[1]).sort()
   assert.deepEqual(imports, [
     "../agent/repeat-call-signal.ts",
+    "../agent/tool-result-pruning.ts",
     "../model/provider.ts",
     "../protocol/event.ts",
     "./model-visible-request.ts",
     "node:crypto",
+    "node:util",
   ])
+  assert.match(source, /pruneModelVisibleToolResults/)
+  assert.match(source, /utilTypes\.isProxy/)
   assert.doesNotMatch(source, /\bfetch\s*\(/)
   assert.doesNotMatch(source, /from\s+["']node:(?:fs|fs\/promises|child_process|net|http|https)["']/)
   assert.doesNotMatch(source, /\bExecutionGateway\b|\bRuntimeOrchestrator\b|\bDoneGate\b/)

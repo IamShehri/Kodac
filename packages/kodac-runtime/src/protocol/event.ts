@@ -18,6 +18,7 @@ export type KodacEventType =
   | "model.request.snapshot"
   | "model.history.message.appended"
   | "model.history.repeat_call_advisory.appended"
+  | "model.history.tool_result_pruning.applied"
   | "model.requested"
   | "model.responded"
   | "model.failed"

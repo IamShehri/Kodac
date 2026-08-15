@@ -2,6 +2,10 @@ import { createHash } from "node:crypto"
 import type { ModelMessage, ModelToolCall } from "../model/provider.ts"
 import type { AgentTurnRunner, AgentTurnResult } from "../model/turn.ts"
 import {
+  createToolResultPruningPolicy,
+  pruneModelVisibleToolResults,
+} from "./tool-result-pruning.ts"
+import {
   KDO_H5_R2A_CALL_VERSION,
   KDO_H5_R2A_POLICY_VERSION,
   advanceRepeatCallSignal,
@@ -10,6 +14,7 @@ import {
   KDO_H2_R2_LIMITS,
   createModelHistoryMessageRecord,
   createRepeatCallAdvisoryHistoryRecord,
+  createToolResultPruningHistoryRecord,
   projectModelVisibleHistory,
 } from "../session/model-visible-history.ts"
 import type { RuntimeSession } from "../session/session.ts"
@@ -46,6 +51,7 @@ export interface AgentLoopInput {
   model: string
   messages: ModelMessage[]
   guardPlanJson?: string
+  toolResultPruningMaxBytes?: number
   limits?: Partial<AgentLoopLimits>
   signal?: AbortSignal
 }
@@ -268,7 +274,7 @@ function observeRepeatBatch(input: {
       if (transition.advisorySignal !== null && transition.advisorySignalJson !== null) {
         pending = {
           signalJson: transition.advisorySignalJson,
-          callFingerprint: transition.advisorySignal.callFingerprint,
+          callFingerprint: transition.nextState.callFingerprint,
           toolCallId: call.id,
         }
       }
@@ -298,6 +304,13 @@ export class BoundedAgentLoop {
 
   private async runExclusive(input: AgentLoopInput): Promise<AgentLoopResult> {
     const limits = resolveLimits(input.limits)
+    let pruningPolicy: ReturnType<typeof createToolResultPruningPolicy> | undefined
+    if (input.toolResultPruningMaxBytes !== undefined) {
+      if (typeof input.toolResultPruningMaxBytes !== "number") {
+        throw new TypeError("toolResultPruningMaxBytes must be a primitive number")
+      }
+      pruningPolicy = createToolResultPruningPolicy({ maxToolResultBytes: input.toolResultPruningMaxBytes })
+    }
     const repeatObservationEnabled = limits.maxIdenticalToolCalls >= 2
     const startedAt = this.clock()
     const runStartSequence = this.session.eventsSnapshot().at(-1)?.sequence ?? 0
@@ -332,11 +345,20 @@ export class BoundedAgentLoop {
       return remaining
     }
 
-    const messagesForNextTurn = (): ModelMessage[] => {
-      const projection = projectModelVisibleHistory(runEvents())
-      return projection.anchorRequestIdentity === undefined
-        ? bootstrapMessages.map(cloneBootstrapMessage)
-        : projection.messages
+    const messagesForNextTurn = async (): Promise<ModelMessage[]> => {
+      let projection = projectModelVisibleHistory(runEvents())
+      if (projection.anchorRequestIdentity === undefined) return bootstrapMessages.map(cloneBootstrapMessage)
+      if (pruningPolicy === undefined) return projection.messages
+      const pruning = pruneModelVisibleToolResults(projection.messages, pruningPolicy)
+      if (pruning.changes.length === 0) return projection.messages
+      const record = createToolResultPruningHistoryRecord({
+        afterRequestIdentity: projection.anchorRequestIdentity,
+        messages: projection.messages,
+        policy: pruningPolicy,
+      })
+      await this.session.emit("model.history.tool_result_pruning.applied", record)
+      projection = projectModelVisibleHistory(runEvents())
+      return projection.messages
     }
 
     const appendHistoryBatch = async (
@@ -403,7 +425,7 @@ export class BoundedAgentLoop {
       const serializedInputs = new Map<string, string>()
       const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remaining)))
       const turnSignal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal
-      const turnMessages = messagesForNextTurn()
+      const turnMessages = await messagesForNextTurn()
 
       let result: AgentTurnResult
       try {
