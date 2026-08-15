@@ -193,7 +193,7 @@ function ownArrayDataValues(value: unknown, label: string): unknown[] {
     if (descriptor.value === undefined) throw new TypeError(`${label} contains undefined item: ${key}`)
     output.push(descriptor.value)
   }
-  const lengthDescriptor = descriptors.length
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length")
   if (!lengthDescriptor || lengthDescriptor.enumerable || !("value" in lengthDescriptor)) {
     throw new TypeError(`${label}.length must be the canonical non-enumerable data property`)
   }
