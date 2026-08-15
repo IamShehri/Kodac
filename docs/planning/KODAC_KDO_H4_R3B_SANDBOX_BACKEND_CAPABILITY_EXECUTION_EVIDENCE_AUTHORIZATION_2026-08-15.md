@@ -43,14 +43,16 @@ H6:
 NOT AUTHORIZED
 ```
 
-R3B closes one structural prerequisite only:
+R3B establishes only the language needed for a later trusted backend adapter to bind:
 
 ```text
-A FUTURE SANDBOX BACKEND ADAPTER MUST HAVE A CONTENT-IDENTITY-BOUND,
-FAIL-CLOSED WAY TO EXPRESS WHAT K2 REQUIRED, WHAT A BACKEND CLAIMS TO
-SUPPORT, WHAT A TRUSTED OBSERVER ACTUALLY OBSERVED, AND WHETHER THOSE
-FACTS MATCH — WITHOUT TREATING REQUESTED CONFIGURATION OR "RUNNING"
-STATUS AS ENFORCEMENT PROOF.
+exact R3A workload requirement
+        !=
+backend capability declaration
+        !=
+backend observation
+        !=
+physical enforcement proof
 ```
 
 R3B does not create, start, inspect, stop, or mutate any sandbox.
@@ -59,35 +61,23 @@ R3B does not create, start, inspect, stop, or mutate any sandbox.
 
 ## 2. Why R3B exists
 
-Canonical H4-R3A proves:
+Canonical H4-R3A proves only:
 
 ```text
 KODAC_CONTENT_ADDRESSED_SANDBOX_WORKLOAD_IDENTITY_CONTRACT_PROVEN
 ```
 
-The R3A workload is self-contained and binds:
-
-- immutable OCI `sha256:<64 lowercase hex>` source digest;
-- absolute canonical entrypoint + args;
-- resource policy;
-- deny-all network policy;
-- canonical H4-R2A confinement request and lineage;
-- null credential binding;
-- exact workload identity.
+That contract binds an immutable OCI digest, canonical entrypoint, exact resource policy, deny-all network policy, canonical H4-R2A confinement request and lineage, null credentials, and one deterministic workload identity.
 
 R3A intentionally grants no execution authority.
 
-The remaining H4 problem is not merely "start a container." A later K2 path must be able to prove, for the exact R3A workload, that the backend which executed it actually matched the required runtime isolation, source digest, deny-all network posture, resource policy, and no-downgrade policy.
-
-Therefore the next slice must establish the evidence language before any physical backend adapter is permitted.
+The remaining structural problem is therefore not "start a container." A later K2 path needs a deterministic fail-closed contract that can say what the exact R3A workload required, what a backend declares it can support, what a future trusted observer reports it observed, and whether those structures match exactly.
 
 ---
 
 ## 3. Canonical predecessor chain
 
 ### H4-R1 — one-shot approval
-
-Current approval surface:
 
 ```text
 packages/kodac-runtime/src/trust/approval.ts
@@ -103,7 +93,7 @@ packages/kodac-runtime/src/trust/confinement.ts
 873f235120645c0a12f10a5bff7e9591db6bb341
 ```
 
-Canonical theorem retained by R3B:
+The theorem remains:
 
 ```text
 requested confinement != observed enforcement
@@ -117,9 +107,6 @@ packages/kodac-runtime/src/trust/confinement-linux-landlock.ts
 
 packages/kodac-runtime/src/trust/confinement-runtime.ts
 1ca0313fb25c62e549445ebcf1aef029b18e6b86
-
-packages/kodac-runtime/src/execution/gateway.ts
-ecf9cc9d3eda6a2280a280ed2f9a2e472f397560
 ```
 
 R3B does not modify or invoke those surfaces.
@@ -146,11 +133,48 @@ docs/planning/KODAC_KDO_H4_R3A_ATTESTED_SANDBOX_WORKLOAD_IDENTITY_EVIDENCE_2026-
 9386b0220b25e8ac2aac1d9d3af9d07a150c452b
 ```
 
-R3B must consume the validated R3A workload contract rather than create a parallel workload identity format.
+R3B must consume and revalidate the full canonical R3A workload object. It may not create a parallel workload identity format.
 
 ---
 
-## 4. OpenSandbox pinned implementation differential
+## 4. Historical authority-transition record
+
+The phrase "protected and byte-identical" in this authorization is relative to the exact R3B canonical base `b8281d08...`; it is **not** a claim that all protected files have had the same blob since H4-R2A.
+
+At the original H4-R2A authorization base `344c9616...`, the protected K2 blobs included:
+
+```text
+packages/kodac-runtime/src/execution/gateway.ts
+8b481c226276d0b06fabc8d614c1295cd0881a6a
+
+packages/kodac-runtime/src/evidence/receipt.ts
+bc11267496f8c8a2ca1dac713baccf88ec962b19
+```
+
+H4-R2C later explicitly authorized and proved the K2 Linux Landlock read-only integration. Its accepted changed-path set included both `gateway.ts` and `receipt.ts`, and its evidence records the resulting blobs:
+
+```text
+packages/kodac-runtime/src/execution/gateway.ts
+ecf9cc9d3eda6a2280a280ed2f9a2e472f397560
+
+packages/kodac-runtime/src/evidence/receipt.ts
+214403398751c9d22bf695786c7fd7c6fd7e35e1
+```
+
+Therefore those are authorized predecessor transitions, not unexplained drift.
+
+`packages/kodac-runtime/src/agent/loop.ts` was subsequently changed under the separately authorized H5 family. H5-R4B explicitly includes `agent/loop.ts` in its six-path accepted scope and records the current blob:
+
+```text
+packages/kodac-runtime/src/agent/loop.ts
+576ad425db7e845b9705c982e95dd4f7522f8c43
+```
+
+R3B grants no authority to repeat or extend any of those historical changes. It freezes the current R3B-base blobs listed in §8.
+
+---
+
+## 5. OpenSandbox pinned implementation differential
 
 Donor:
 
@@ -158,15 +182,10 @@ Donor:
 opensandbox-group/OpenSandbox
 ```
 
-Pinned commit:
+Pinned commit / tree:
 
 ```text
 f8ed8734ce1fda69f0979f912160fb933b9bfa0c
-```
-
-Pinned tree:
-
-```text
 cf033b4f880b7e84b563dcf7f63722582ea48762
 ```
 
@@ -184,7 +203,7 @@ STUDY + REIMPLEMENT GENERIC CONTRACT IDEAS
 
 No OpenSandbox production code is copied and no donor dependency is added.
 
-### 4.1 Pinned implementation surfaces inspected
+Pinned implementation surfaces inspected:
 
 ```text
 oseps/0004-secure-container-runtime.md
@@ -203,45 +222,18 @@ server/opensandbox_server/services/docker/networking.py
 7509c788ab9712f26207d7a02cdd5a99b8f690b7
 ```
 
-### 4.2 What the donor proves useful
+Useful donor ideas include secure-runtime configuration, startup availability checks, host resource configuration, network-policy machinery, and lifecycle failure propagation.
 
-OpenSandbox contains reusable implementation ideas:
+Direct adoption is nevertheless **NO-GO in R3B** because the pinned implementation does not by itself prove Kodac's post-R3A theorem:
 
-- explicit secure-runtime configuration;
-- Docker runtime injection into host configuration;
-- startup availability validation;
-- CPU / memory / PID and related host configuration;
-- network-policy validation and sidecar enforcement machinery;
-- lifecycle management and fail-start error propagation.
+1. secure-runtime selection is server-global rather than bound to one exact R3A workload;
+2. unconfigured secure runtime defaults to standard `runc` in the donor design;
+3. image URI lookup/pull is not proof that the executed container used the exact R3A digest;
+4. successful start / `Running` is not an observed proof of runtime, image digest, network posture, or resource enforcement;
+5. Docker host-config values are not automatically equivalent to R3A resource semantics;
+6. donor egress / credential features are broader authority than R3B v1 permits.
 
-Those ideas are useful donor inputs for later physical adapters.
-
-### 4.3 Why direct OpenSandbox / Docker adapter integration is NO-GO in R3B
-
-The pinned implementation does not by itself prove the K2 theorem required after R3A:
-
-1. **Runtime selection is server-global, not workload-bound.**
-   The secure runtime is selected from server configuration. R3B requires a requirement bound to the exact R3A workload identity.
-
-2. **Standard `runc` is the donor default when no secure runtime is configured.**
-   Kodac must not silently accept absence of the required secure runtime. A later adapter must fail closed if the exact required isolation class cannot be proved.
-
-3. **Requested image reference is not execution-byte proof.**
-   The Docker implementation accepts an image URI, resolves cached/pulled images by that reference, and does not establish a K2 evidence theorem that the observed running container image digest equals the R3A source digest.
-
-4. **Successful start / `Running` is not observed enforcement evidence.**
-   The create response reports successful container start but does not return a self-contained proof of observed runtime class, observed immutable image digest, observed network mode, and observed resource enforcement.
-
-5. **Resource semantics do not automatically equal the R3A policy semantics.**
-   Mapping a request into Docker host configuration is not sufficient proof that the exact R3A resource policy was enforced as intended.
-
-6. **Network policy is a separate authority surface.**
-   OpenSandbox supports dynamic egress machinery and credential-proxy features. R3B v1 must stay at deny-all + no credentials and may not widen that authority.
-
-7. **Server configuration and status are claims, not K2 receipts.**
-   A later trusted adapter must independently observe backend facts and bind them to the exact requirement before K2 may treat them as evidence.
-
-Therefore:
+Decision:
 
 ```text
 DIRECT OPENSANDBOX SERVER ADOPTION:
@@ -256,9 +248,9 @@ GO
 
 ---
 
-## 5. R3B core trust theorem
+## 6. Core trust model
 
-R3B must preserve four distinct layers:
+R3B preserves four distinct layers:
 
 ```text
 R3A SandboxWorkloadRequest
@@ -275,56 +267,20 @@ SandboxBackendObservation
 SandboxExecutionEvidence
 ```
 
-Their meanings are deliberately different.
+Meanings:
 
-### 5.1 Requirement
+- **Requirement**: what Kodac requires for this exact validated R3A workload.
+- **Capability declaration**: what a backend/adapter claims it can support. This is not execution proof.
+- **Observation**: what a future observer reports it observed. R3B validates structure only; it does not make that observer trusted.
+- **Evidence**: a deterministic match between the validated requirement, capability declaration, and supplied observation. It is not physical enforcement proof unless a later separately proven adapter establishes trustworthy observation.
 
-`SandboxExecutionRequirement` means:
-
-```text
-WHAT KODAC REQUIRES FOR THIS EXACT R3A WORKLOAD
-```
-
-It is deterministic and content-identity-bound.
-
-### 5.2 Capability declaration
-
-`SandboxBackendCapabilityDeclaration` means:
-
-```text
-WHAT A BACKEND / ADAPTER DECLARES IT CAN SUPPORT
-```
-
-A capability declaration is **not proof** that a later execution actually used those capabilities.
-
-### 5.3 Observation
-
-`SandboxBackendObservation` means:
-
-```text
-WHAT A FUTURE TRUSTED BACKEND OBSERVER REPORTS IT OBSERVED
-```
-
-R3B only defines and validates the structure. R3B does not make the observer trusted and does not perform observation itself.
-
-### 5.4 Evidence
-
-`SandboxExecutionEvidence` means:
-
-```text
-A DETERMINISTIC, IDENTITY-BOUND MATCH BETWEEN THE REQUIREMENT,
-THE DECLARED CAPABILITY, AND THE SUPPLIED OBSERVATION
-```
-
-R3B evidence is not, by itself, physical enforcement proof. Physical truth requires a later authorized adapter whose observation method is separately proven.
-
-This distinction is mandatory.
+The implementation must never expose or document a purpose-equivalent function named `proveSandboxIsSecure`.
 
 ---
 
-## 6. Authorized implementation paths
+## 7. Authorized implementation paths
 
-If this authorization becomes canonical, exactly these pre-ledger paths are authorized:
+If this authorization becomes canonical, exactly four pre-ledger paths are authorized:
 
 ```text
 1. packages/kodac-runtime/src/trust/sandbox-backend-evidence.ts
@@ -341,54 +297,13 @@ Only after fresh pre-ledger PASS may this fifth path be created:
 
 No other path is authorized.
 
-The evidence ledger must remain absent until pre-ledger PASS is established externally from exact repository state / changed paths.
-
-A permanent runtime assertion that the future ledger file does not exist is not authorized.
+Ledger absence must be proven externally from exact repository state / changed paths. A permanent runtime assertion that the future ledger does not exist is forbidden.
 
 ---
 
-## 7. Pure-module dependency boundary
+## 8. Protected R3B-base authority surfaces
 
-The new module may import only deterministic standard-library helpers required for canonical validation / hashing and the canonical R3A workload contract.
-
-Allowed production imports are limited to purpose-equivalents of:
-
-```text
-node:crypto
-node:util
-./sandbox-workload.ts
-```
-
-No other Kodac authority module is required.
-
-Explicitly prohibited imports / dependencies include:
-
-```text
-node:fs
-node:child_process
-node:net
-node:http
-node:https
-Docker SDK / dockerode
-Kubernetes SDK
-OpenSandbox SDK / server
-OCI registry clients
-approval.ts
-confinement-runtime.ts
-confinement-linux-landlock.ts
-gateway.ts
-receipt.ts
-done-gate.ts
-agent loop
-```
-
-The implementation must perform no filesystem, network, process, container, registry, credential, approval, or K2 side effect.
-
----
-
-## 8. Protected authority surfaces
-
-The implementation must keep these canonical inputs / authority surfaces byte-identical:
+The implementation must keep these exact blobs byte-identical to canonical base `b8281d08...`:
 
 ```text
 packages/kodac-runtime/src/trust/sandbox-workload.ts
@@ -428,59 +343,70 @@ packages/kodac-runtime/THIRD_PARTY_NOTICES.md
 aaa1ce56d27f5b7dd185f9aaa257d978c2a56c76
 ```
 
-`packages/kodac-runtime/src/index.ts` is the only existing production file authorized to change, solely for additive exports of the new pure R3B contract.
+`packages/kodac-runtime/src/index.ts` is the only existing production file authorized to change, solely for an additive export of the new pure R3B module.
 
 ---
 
-## 9. Historical regression assertion audit
+## 9. Pure-module dependency boundary
 
-Authorization-time repository search found no current test that byte-pins the R3A `src/index.ts` blob as an immutable historical runtime requirement. Existing references are documentary evidence / historical planning surfaces.
-
-Therefore R3B authorizes **no historical-test reconciliation path**.
-
-If full CI later exposes a genuine historical assertion that conflicts with the authorized additive export, implementation must stop and use a separate docs-only reconciliation before modifying that historical test.
-
-No skip, `.only`, `.todo`, deletion, weakened assertion, CI-only conditional, or bypass is authorized.
-
----
-
-## 10. Contract versions
-
-Recommended fixed v1 literals:
+The new production module may import only purpose-equivalents of:
 
 ```text
-Backend capability:
-kodac-h4-r3b-backend-capability-v1
-
-Execution requirement:
-kodac-h4-r3b-execution-requirement-v1
-
-Backend observation:
-kodac-h4-r3b-backend-observation-v1
-
-Execution evidence:
-kodac-h4-r3b-execution-evidence-v1
+node:crypto
+node:util
+./sandbox-workload.ts
 ```
 
-Domain-separated SHA-256 identities must be used for each top-level contract family.
+It must not import or call:
 
-R3A workload identities and OCI digests retain their existing formats and must be revalidated through the R3A validators rather than accepted as unparsed strings where the full R3A object is supplied.
+```text
+node:fs
+node:child_process
+node:net
+node:http
+node:https
+Docker / dockerode
+Kubernetes SDK
+OpenSandbox SDK / server
+OCI registry client
+approval.ts
+confinement-runtime.ts
+confinement-linux-landlock.ts
+gateway.ts
+receipt.ts
+done-gate.ts
+agent loop
+```
+
+No filesystem, network, process, container, registry, credential, approval, K2, receipt, or Done-Gate side effect is authorized.
 
 ---
 
-## 11. Semantic runtime classes
+## 10. Mandatory version literals and enums
 
-R3B is provider-neutral. It must not encode Docker runtime flag names or Kubernetes RuntimeClass object names as authority.
+These literals are **required exactly**, not recommendations:
 
-The v1 semantic isolation classes are limited to:
+```text
+KDO_H4_R3B_BACKEND_CAPABILITY_VERSION = "kodac-h4-r3b-backend-capability-v1"
+KDO_H4_R3B_EXECUTION_REQUIREMENT_VERSION = "kodac-h4-r3b-execution-requirement-v1"
+KDO_H4_R3B_BACKEND_OBSERVATION_VERSION = "kodac-h4-r3b-backend-observation-v1"
+KDO_H4_R3B_EXECUTION_EVIDENCE_VERSION = "kodac-h4-r3b-execution-evidence-v1"
+
+BACKEND_FAMILY = "oci-container"
+CREDENTIAL_MODE = "none"
+DOWNGRADE_POLICY = "forbid"
+NETWORK_MODE = "deny-all"
+```
+
+Allowed semantic runtime classes are exactly:
 
 ```text
 gvisor
-kata-qemu
 kata-firecracker
+kata-qemu
 ```
 
-Explicitly not admitted as an H4 secure-runtime requirement:
+Explicitly forbidden as required runtime classes:
 
 ```text
 runc
@@ -489,27 +415,163 @@ unknown
 fallback
 ```
 
-A later physical adapter may map a semantic class to a provider-specific mechanism only under separate authorization, for example:
-
-```text
-gvisor -> Docker runtime "runsc"
-gvisor -> a validated Kubernetes RuntimeClass handler
-kata-firecracker -> a validated Kata / Firecracker handler
-```
-
-That mapping is not R3B execution authority.
+Provider-specific spellings such as Docker `runsc` or Kubernetes RuntimeClass handlers are not R3B authority.
 
 ---
 
-## 12. Backend capability declaration
+## 11. Canonical runtime-class ordering
 
-The implementation should expose a deterministic immutable structure purpose-equivalent to:
+`semanticRuntimeClasses` must be a dense, unique, non-empty plain array with 1 through 3 items.
+
+Canonical order is defined by this explicit rank table:
+
+```text
+0 = gvisor
+1 = kata-firecracker
+2 = kata-qemu
+```
+
+No locale comparator, platform comparator, caller order, or implicit JavaScript sort order is authoritative.
+
+An input array is canonical only when each next item has a strictly larger rank than the previous item.
+
+Literal multi-class vector:
+
+```text
+conceptual supported set:
+{ kata-qemu, gvisor, kata-firecracker }
+
+canonical serialized array:
+["gvisor","kata-firecracker","kata-qemu"]
+```
+
+Duplicates, permutations such as `["kata-qemu","gvisor"]`, sparse arrays, array extra properties, and unknown classes must fail closed rather than be silently sorted or deduplicated.
+
+---
+
+## 12. New R3B limits
+
+R3B introduces only one free-form textual field: `providerId`. All other new identity fields are fixed-size SHA-256 identities or fixed enums.
+
+Required limits:
+
+```text
+providerId:
+1..128 ASCII bytes
+pattern: ^[a-z0-9][a-z0-9._-]{0,127}$
+NUL forbidden implicitly by ASCII grammar
+
+semanticRuntimeClasses:
+1..3 items
+
+implementationIdentity:
+exactly 64 lowercase hexadecimal ASCII characters
+
+observerIdentity:
+exactly 64 lowercase hexadecimal ASCII characters
+
+executionInstanceIdentity:
+exactly 64 lowercase hexadecimal ASCII characters
+
+capabilityIdentity:
+exactly 64 lowercase hexadecimal ASCII characters
+
+requirementIdentity:
+exactly 64 lowercase hexadecimal ASCII characters
+
+observationIdentity:
+exactly 64 lowercase hexadecimal ASCII characters
+
+evidenceIdentity:
+exactly 64 lowercase hexadecimal ASCII characters
+
+observedSourceDigest:
+exactly "sha256:" + 64 lowercase hexadecimal ASCII characters
+```
+
+R3B must reuse R3A validation and R3A constants for nested workload/policy values, including:
+
+```text
+KDO_H4_R3A_LIMITS.maxRepositoryBytes = 512
+KDO_H4_R3A_LIMITS.maxExecutableBytes = 4096
+KDO_H4_R3A_LIMITS.maxArgs = 256
+KDO_H4_R3A_LIMITS.maxArgBytes = 8192
+KDO_H4_R3A_LIMITS.maxArgsBytes = 65536
+KDO_H4_R3A_LIMITS.maxCpuMillis = 256000
+KDO_H4_R3A_LIMITS.maxMemoryBytes = 1099511627776
+KDO_H4_R3A_LIMITS.maxTtlMs = 86400000
+KDO_H4_R3A_LIMITS.maxOutputBytes = 16777216
+```
+
+R3B may not silently introduce different bounds for the same nested R3A semantics.
+
+---
+
+## 13. Normative identity encoding
+
+All four R3B top-level identities use the same byte-level algorithm.
+
+### 13.1 Prefix
+
+For domain label `DOMAIN`, the prefix bytes are exactly:
+
+```text
+ASCII("KODAC-H4-R3B")
+|| 0x00
+|| ASCII(DOMAIN)
+|| 0x00
+|| ASCII("V1")
+|| 0x00
+```
+
+Required domain labels:
+
+```text
+BACKEND_CAPABILITY
+EXECUTION_REQUIREMENT
+BACKEND_OBSERVATION
+EXECUTION_EVIDENCE
+```
+
+### 13.2 Payload serialization
+
+The payload is UTF-8 of one compact JSON object whose key order is exactly the order specified in §§14–17.
+
+Normative rules:
+
+```text
+no BOM
+no whitespace outside JSON string contents
+keys exactly in the specified order
+strings use JSON double-quoted syntax
+all R3B preimage strings are ASCII by grammar or are inherited digest/identity ASCII tokens
+arrays preserve the explicit canonical order
+booleans serialize exactly as true / false
+null serializes exactly as null
+integers are base-10 ASCII, no leading zero except 0, no exponent, no fraction
+all numeric values must already satisfy Number.isSafeInteger and the inherited R3A positive bounds
+unknown fields are impossible in a valid preimage
+```
+
+The identity is:
+
+```text
+lowercase_hex(SHA256(prefix || payload_utf8))
+```
+
+No implementation may hash a language-native object representation, pretty JSON, reordered keys, omitted `null`, floating-point spelling, or provider-specific structure.
+
+---
+
+## 14. Backend capability declaration
+
+Purpose-equivalent type:
 
 ```text
 SandboxBackendCapabilityDeclaration
 ```
 
-with semantic fields sufficient to bind:
+Exact semantic fields:
 
 ```text
 version
@@ -528,7 +590,7 @@ downgradePolicy
 capabilityIdentity
 ```
 
-Required v1 invariants:
+Required fixed values:
 
 ```text
 backendFamily = "oci-container"
@@ -536,64 +598,112 @@ credentialMode = "none"
 downgradePolicy = "forbid"
 ```
 
-`semanticRuntimeClasses` must be a canonical dense sorted unique non-empty subset of the v1 semantic runtime classes.
+Capability booleans may be `false`; an insufficient declaration is valid data. Evidence creation must reject insufficiency rather than rewrite it.
 
-Capability booleans may truthfully be `false`; a capability declaration can describe an insufficient backend. The requirement/evidence matcher must then fail closed rather than rewriting the declaration to `true` or silently degrading the requirement.
+`providerId` is descriptive identity only, not permission authority.
 
-`providerId` is descriptive backend identity, not permission authority.
+`implementationIdentity` is a SHA-256 identity for the future adapter/backend implementation artifact identity supplied by a later authorized slice. In R3B it is inert fixture/data only.
 
-`implementationIdentity` must be a lowercase SHA-256 identity for the future adapter/backend implementation artifact identity admitted by a later slice. In R3B tests it is fixture data only.
+Capability preimage key order is exactly:
+
+```text
+version
+backendFamily
+providerId
+implementationIdentity
+semanticRuntimeClasses
+supportsImmutableImageDigestObservation
+supportsDenyAllNetworkObservation
+supportsCpuBudgetObservation
+supportsMemoryLimitObservation
+supportsTtlObservation
+supportsOutputLimitObservation
+credentialMode
+downgradePolicy
+```
 
 ---
 
-## 13. Execution requirement
+## 15. Execution requirement — full canonical R3A input only
 
-The implementation should expose a deterministic immutable structure purpose-equivalent to:
+Purpose-equivalent type:
 
 ```text
 SandboxExecutionRequirement
 ```
 
-constructed from:
+Construction input is exactly:
 
 ```text
-validated SandboxWorkloadRequest
-required semantic runtime class
+full SandboxWorkloadRequest
+requiredSemanticRuntimeClass
 ```
 
-The requirement must carry or self-contain enough canonical R3A data to recompute all security-relevant bindings rather than trust caller-duplicated strings.
+The full workload **must** pass `validateSandboxWorkloadRequest` before any R3B identity is accepted.
 
-At minimum the requirement identity must bind:
+R3B does not authorize authoritative lookup, network lookup, registry lookup, identity-only input, partial workload input, or caller-supplied duplicate fields.
+
+The constructor must reject any purpose-equivalent input that tries to separately supply:
 
 ```text
-R3A workloadIdentity
-R3A source digest
-R3A executionIntentIdentity
-R3A confinementRequestIdentity
-required semantic runtime class
-required deny-all network policy identity
-required resource policy identity / values
-credentialBindingIdentity = null
-downgradePolicy = forbid
+workloadIdentity
+sourceDigest
+executionIntentIdentity
+confinementRequestIdentity
+networkPolicyIdentity
+resourcePolicyIdentity
+resource values
+credentialBindingIdentity
 ```
 
-A requirement must not accept `runc`, empty, unknown, or caller-defined fallback runtime classes.
+All of those values are derived only from the validated nested R3A workload.
 
-Changing any bound R3A field or the required runtime class must change `requirementIdentity`.
+The resulting requirement structure should self-contain:
+
+```text
+version
+workload                  # full validated/frozen R3A workload
+requiredSemanticRuntimeClass
+downgradePolicy = "forbid"
+requirementIdentity
+```
+
+The normative requirement preimage is a derived compact record with exact key order:
+
+```text
+version
+workloadIdentity
+sourceDigest
+executionIntentIdentity
+confinementRequestIdentity
+networkPolicyIdentity
+resourcePolicyIdentity
+cpuMillis
+memoryBytes
+ttlMs
+maxOutputBytes
+credentialBindingIdentity
+requiredSemanticRuntimeClass
+downgradePolicy
+```
+
+Every field except the required runtime and fixed downgrade policy is derived from the full revalidated workload. `credentialBindingIdentity` must be exactly `null`.
+
+No `runc`, fallback, empty, unknown, or caller-defined runtime token is admitted.
 
 ---
 
-## 14. Backend observation
+## 16. Backend observation
 
-The implementation should expose a deterministic immutable structure purpose-equivalent to:
+Purpose-equivalent type:
 
 ```text
 SandboxBackendObservation
 ```
 
-A future adapter will populate this from trusted backend inspection. R3B itself only validates the supplied structure.
+R3B only validates supplied structure. A later separately authorized adapter must prove how it obtains trustworthy observations.
 
-The observation must bind, at minimum:
+The observation structure should self-contain exactly:
 
 ```text
 version
@@ -604,95 +714,288 @@ observerIdentity
 executionInstanceIdentity
 observedSourceDigest
 observedSemanticRuntimeClass
-observedNetworkMode
-observedResourcePolicyIdentity / exact observed policy values
+observedNetworkPolicy       # full R3A SandboxNetworkPolicy
+observedResourcePolicy      # full R3A SandboxResourcePolicy
 observedCredentialBindingIdentity
 downgradeOccurred
 observationIdentity
 ```
 
-Required v1 values include:
+Mandatory invariants:
 
 ```text
-observedNetworkMode = "deny-all"
+observedNetworkPolicy must pass validateSandboxNetworkPolicy
+observedNetworkPolicy.mode = "deny-all"
+observedNetworkPolicy.networkPolicyIdentity must recompute
+
+observedResourcePolicy must pass validateSandboxResourcePolicy
+all four resource values and resourcePolicyIdentity must recompute
+
 observedCredentialBindingIdentity = null
 downgradeOccurred = false
 ```
 
-`executionInstanceIdentity` must be a content identity / deterministic digest field, not a raw mutable container name used as authority.
+This explicitly binds the **observed deny-all network-policy identity**; the string `observedNetworkMode = "deny-all"` alone is insufficient and is not the v1 observation design.
 
-`observerIdentity` identifies the future trusted observer implementation. R3B does not declare any observer trusted.
+`executionInstanceIdentity` is a deterministic SHA-256 identity supplied by a future observer, not a raw container name used as authority.
 
-A supplied observation saying `Running`, `started`, `healthy`, or equivalent must not substitute for the fields above.
+`observerIdentity` identifies a future observer implementation. R3B does not declare any observer trusted.
+
+The normative observation preimage is a derived compact record with exact key order:
+
+```text
+version
+requirementIdentity
+workloadIdentity
+capabilityIdentity
+observerIdentity
+executionInstanceIdentity
+observedSourceDigest
+observedSemanticRuntimeClass
+observedNetworkPolicyIdentity
+observedResourcePolicyIdentity
+cpuMillis
+memoryBytes
+ttlMs
+maxOutputBytes
+observedCredentialBindingIdentity
+downgradeOccurred
+```
+
+The network/resource identities and numeric values are derived only from the validated nested observed policy objects.
+
+A backend status such as `Running`, `started`, or `healthy` is not admitted as a substitute for these fields.
 
 ---
 
-## 15. Execution evidence
+## 17. Execution evidence
 
-The implementation should expose a deterministic immutable structure purpose-equivalent to:
+Purpose-equivalent type:
 
 ```text
 SandboxExecutionEvidence
 ```
 
-Creation / validation must fail closed unless all of the following are exact:
+Construction input must contain the full validated:
 
-1. requirement revalidates against the canonical R3A workload;
-2. capability identity recomputes correctly;
-3. required semantic runtime class is declared supported;
-4. all capability booleans needed by the requirement are `true`;
-5. observed workload identity equals required workload identity;
-6. observed source digest equals the R3A immutable source digest;
-7. observed semantic runtime class equals the required semantic runtime class;
-8. observed network mode is exactly deny-all;
-9. observed resource policy identity and exact policy values equal the R3A requirement;
-10. observed credential binding is exactly null;
-11. downgrade policy is `forbid` and `downgradeOccurred` is exactly false;
-12. observation is bound to the same capability and requirement identities;
-13. all nested identities recompute from canonical preimages;
-14. no unknown / extra semantic field survives validation.
+```text
+requirement
+capability
+observation
+```
 
-If any item differs:
+The resulting evidence should self-contain:
+
+```text
+version
+requirement
+capability
+observation
+evidenceIdentity
+```
+
+Creation / validation must fail closed unless all of these are exact:
+
+1. requirement's full R3A workload revalidates;
+2. requirement identity recomputes from the normative §15 preimage;
+3. capability identity recomputes from the normative §14 preimage;
+4. required runtime class is present in the canonical capability array;
+5. all six observation-capability booleans required by this v1 theorem are `true`;
+6. observation requirement identity equals the exact requirement identity;
+7. observation capability identity equals the exact capability identity;
+8. observation workload identity equals the exact validated R3A workload identity;
+9. observed source digest equals `requirement.workload.source.digest`;
+10. observed semantic runtime class equals the exact required runtime class;
+11. observed network policy revalidates and its identity equals `requirement.workload.networkPolicy.networkPolicyIdentity`;
+12. observed resource policy revalidates and its identity **and all four exact values** equal `requirement.workload.resourcePolicy`;
+13. observed credential binding is exactly `null`;
+14. capability downgrade policy is `forbid` and observation `downgradeOccurred` is exactly `false`;
+15. every nested identity recomputes from its normative preimage;
+16. no extra semantic field survives validation.
+
+Any mismatch means:
 
 ```text
 THROW / REJECT
 ```
 
-There is no partial success, warning-only match, compatibility fallback, weaker-runtime substitution, or inferred equivalence.
+There is no partial success, warning-only compatibility, inferred equivalence, weaker-runtime substitution, or fallback.
 
----
-
-## 16. Requested vs declared vs observed truth
-
-R3B must encode this rule in both API semantics and tests:
+Evidence preimage key order is exactly:
 
 ```text
-REQUIREMENT != CAPABILITY DECLARATION != OBSERVATION != PHYSICAL PROOF
+version
+requirementIdentity
+capabilityIdentity
+observationIdentity
 ```
 
-In particular:
-
-- requirement does not prove execution;
-- capability declaration does not prove availability;
-- observation structure does not prove observer trust;
-- successful deterministic matching does not prove the observation source was honest;
-- a later adapter must prove how its observations are obtained from a backend.
-
-R3B therefore must not expose a function name or documentation claim such as `proveSandboxIsSecure()`.
-
-Purpose-equivalent names such as `createSandboxExecutionEvidence` / `validateSandboxExecutionEvidence` are acceptable only with the bounded semantics above.
+Those three nested identities must be freshly revalidated before hashing.
 
 ---
 
-## 17. Input-shape and canonicalization requirements
+## 18. Fixed normative identity vectors
 
-R3B must follow the fail-closed hostile-input discipline already proven by R3A.
+These vectors are specification constants for the future implementation tests. Tests must assert the literal values below rather than derive expected outputs by calling the implementation under test.
 
-At minimum focused tests must reject:
+### 18.1 R3A fixture inputs reused
 
 ```text
-null / primitive instead of record
-proxy objects
+workloadIdentity:
+7e148da8275b34e873bd6fdd33cc5d4977c6577a4f3631ca988c3b9c227801c3
+
+sourceDigest:
+sha256:1111111111111111111111111111111111111111111111111111111111111111
+
+executionIntentIdentity:
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+confinementRequestIdentity:
+a22b2611b230d184748ab77f59155127a5e7a6c6bfe469df6cb3cbffc7351ee5
+
+networkPolicyIdentity:
+c17924ecbb8bfaa005dd6c8b0b321adf7f606b19b39672de51ac5b53c14ad3d6
+
+resourcePolicyIdentity:
+cf0077cf2277c1800a5bb08f1780abb2504255fa7b58eec369cc2a27811fb510
+
+cpuMillis = 1000
+memoryBytes = 536870912
+ttlMs = 60000
+maxOutputBytes = 1048576
+credentialBindingIdentity = null
+```
+
+### 18.2 Capability vector
+
+```text
+providerId = fixture-secure-oci
+implementationIdentity = cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+semanticRuntimeClasses = ["gvisor","kata-firecracker","kata-qemu"]
+all six support booleans = true
+credentialMode = none
+downgradePolicy = forbid
+
+capabilityIdentity:
+b23c759edd03197380e0c9e5a1382c364eba4ed68ec33cada226d6878248f7c1
+```
+
+The capability identity above is the required multi-class ordering vector.
+
+### 18.3 Requirement vector
+
+```text
+requiredSemanticRuntimeClass = gvisor
+downgradePolicy = forbid
+
+requirementIdentity:
+46a11674fd3d973204bdaa8aa140076b5e45b84c276cb66cbb453c0b0b4cbc7f
+```
+
+### 18.4 Observation vector
+
+```text
+observerIdentity = dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+executionInstanceIdentity = eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+observedSourceDigest = exact fixture source digest
+observedSemanticRuntimeClass = gvisor
+observedNetworkPolicy = exact validated R3A deny-all fixture policy
+observedResourcePolicy = exact validated R3A fixture resource policy
+observedCredentialBindingIdentity = null
+downgradeOccurred = false
+
+observationIdentity:
+96031bfde14a9826978c7eb65f59463aab24d395b955bd5e07ea69c9d191dac7
+```
+
+### 18.5 Evidence vector
+
+```text
+evidenceIdentity:
+baae3419934f5862c458e376999c2fe962ce2aca2745fd2a794e4007761c5e9f
+```
+
+If implementation preimages differ from §§13–17, these vectors must fail and implementation must be corrected; the vectors must not be regenerated merely to fit implementation output.
+
+---
+
+## 19. Resource-policy rule
+
+R3B must not invent provider-specific equivalence such as:
+
+```text
+R3A cpuMillis == Docker nano_cpus
+```
+
+The requirement binds the exact validated R3A policy.
+
+The observation carries the same provider-neutral R3A policy structure as an observed semantic claim.
+
+The matcher requires exact policy identity and exact numeric equality.
+
+A later physical adapter must separately define and prove any Docker/cgroup/Kubernetes translation before it may populate the observation.
+
+---
+
+## 20. Network-policy rule
+
+R3B v1 admits only the validated R3A network policy:
+
+```text
+mode = deny-all
+networkPolicyIdentity = c17924ec... for the canonical fixture vector
+```
+
+The actual matcher must compare the full revalidated observed policy identity against the exact workload policy identity; it must not special-case only the fixture value.
+
+No allowlist, DNS policy, proxy rule, credential broker, egress sidecar authority, or dynamic network mutation is admitted.
+
+---
+
+## 21. Credential and downgrade rules
+
+Credential v1 is exactly:
+
+```text
+capability credentialMode = none
+workload credentialBindingIdentity = null
+observation observedCredentialBindingIdentity = null
+```
+
+No secret reference, environment credential, credential vault, proxy injection, cloud workload identity, token exchange, or broker is authorized.
+
+No-downgrade theorem:
+
+```text
+required runtime unavailable
+=> fail closed
+
+observed runtime != required runtime
+=> fail closed
+
+backend does not declare required runtime
+=> fail closed
+
+required observation capability is false
+=> fail closed
+
+downgradeOccurred = true
+=> fail closed
+```
+
+No `runc` fallback exists in the R3B theorem.
+
+---
+
+## 22. Hostile-input and immutability requirements
+
+R3B must follow the fail-closed hostile-object discipline already proven by R3A.
+
+Focused runtime validation must reject at minimum:
+
+```text
+null / primitive where record required
+Proxy objects
 custom prototypes
 accessor properties
 non-enumerable semantic fields
@@ -702,150 +1005,104 @@ undefined required values
 sparse arrays
 array extra properties
 duplicate runtime classes
-unsorted runtime classes
+non-canonical runtime-class ordering
 invalid SHA-256 identities
 invalid sha256: digests
-NUL-containing bounded strings
-oversized strings / arrays
-non-safe integers
-negative / zero values where forbidden
-unknown semantic runtime class
+oversized providerId
+providerId outside ASCII grammar
+non-safe integers in any observed nested resource object
+unknown runtime class
 runc / fallback runtime class
-credential identity other than null
-downgradeOccurred = true when constructing evidence
+credential value other than null
+downgradeOccurred = true for evidence acceptance
 ```
 
-All returned structures and nested collections must be immutable / frozen to the same practical standard as R3A.
+Constructors must detach caller-owned arrays and return frozen structures. Nested R3A validators must be used rather than trusting caller-frozen objects.
 
 ---
 
-## 18. Resource-policy rule
+## 23. JSON Schema requirements
 
-R3B must not invent provider-specific equivalence such as:
+The schema must mirror the runtime structure without claiming to model JavaScript-only hostile-object semantics.
 
-```text
-R3A cpuMillis == Docker nano_cpus
-```
+It must include:
 
-unless a later adapter slice explicitly defines and proves that translation.
-
-For R3B the rule is simpler:
-
-```text
-THE REQUIREMENT BINDS THE EXACT R3A RESOURCE POLICY.
-THE OBSERVATION BINDS AN EXACT OBSERVED POLICY IN THE SAME R3B SEMANTIC FORM.
-THE MATCHER REQUIRES EQUALITY.
-```
-
-Provider translation is deferred.
-
----
-
-## 19. Network-policy rule
-
-R3B v1 admits only:
-
-```text
-deny-all
-```
-
-No allowlist, DNS policy, proxy rule, credential broker, egress sidecar authority, or dynamic policy mutation is admitted.
-
-A future adapter must prove deny-all from backend observation under separate authorization.
-
----
-
-## 20. Credential rule
-
-R3B v1 admits:
-
-```text
-credential mode = none
-credential binding identity = null
-```
-
-No secret reference, environment credential, credential vault, proxy injection, cloud workload identity, token exchange, or credential broker is authorized.
-
----
-
-## 21. No-downgrade rule
-
-The no-downgrade theorem is mandatory:
-
-```text
-REQUIRED RUNTIME UNAVAILABLE
-=> FAIL CLOSED
-
-OBSERVED RUNTIME != REQUIRED RUNTIME
-=> FAIL CLOSED
-
-BACKEND DECLARES ONLY WEAKER / DIFFERENT RUNTIME
-=> FAIL CLOSED
-
-OBSERVATION REPORTS downgradeOccurred = true
-=> FAIL CLOSED
-```
-
-There is no `runc` fallback path in the R3B evidence theorem.
-
----
-
-## 22. Schema requirements
-
-The JSON Schema must mirror the runtime contract precisely enough to catch obvious shape divergence, including:
-
-- fixed version literals;
+- exact four version literals;
 - exact required properties;
 - `additionalProperties: false` throughout semantic records;
-- lowercase SHA-256 identity patterns;
-- `sha256:` digest pattern;
-- allowed semantic runtime enums;
-- deny-all network literal;
-- null credential binding;
-- boolean capability fields;
-- no-downgrade literal / false observation;
-- bounded arrays and strings where runtime limits are defined.
+- SHA-256 identity and digest patterns;
+- `providerId` ASCII pattern and `maxLength: 128` (safe because the grammar is ASCII-only);
+- canonical runtime enum and `maxItems: 3` / `minItems: 1` / `uniqueItems: true`;
+- fixed backend/credential/downgrade literals;
+- nested full R3A workload requirement shape or a schema reference that resolves deterministically in repository validation;
+- nested full R3A deny-all network policy shape;
+- nested full R3A resource policy shape and inherited numeric maxima;
+- observation credential `null` and `downgradeOccurred: false`;
+- evidence nesting with exact keys.
 
-Runtime validation remains authoritative for hostile JavaScript object semantics that JSON Schema cannot model, such as proxies, accessors, descriptors, prototypes, symbols, and sparse arrays.
+JSON Schema cannot prove Proxy/accessor/prototype/symbol/sparse-array properties; runtime validation remains authoritative for those.
 
 ---
 
-## 23. Focused proof requirements
+## 24. Focused proof requirements
 
-The focused test must contain literal fixed vectors rather than deriving expected identities by calling the implementation under test.
+The focused test must use the literal fixed vectors in §18.
 
-It must prove at minimum:
+It must prove:
 
-### 23.1 Happy path
+### Happy path
 
-- canonical R3A fixture workload validates;
-- sufficient backend capability declaration validates;
-- requirement identity matches a literal vector;
-- observation identity matches a literal vector;
-- execution evidence identity matches a literal vector;
-- all output structures are frozen.
+- full canonical R3A workload revalidates;
+- sufficient capability validates;
+- requirement, observation, and evidence vectors match exactly;
+- all returned records and new collections are frozen.
 
-### 23.2 Runtime mismatch
+### Requirement-source integrity
 
-Each of these must fail closed independently:
+- identity-only and partial workload construction are not accepted APIs;
+- extra duplicate source/identity/policy fields fail exact-key validation;
+- nested R3A workload tampering fails before R3B requirement acceptance.
+
+### Runtime mismatch
+
+Each independently fails:
 
 ```text
 required gvisor / observed kata-qemu
 required kata-firecracker / observed gvisor
-runc requested
-fallback token requested
-unknown runtime token
+runc required
+fallback required
+unknown runtime
+permuted capability runtime-class array
 ```
 
-### 23.3 Source mismatch
+### Source mismatch
 
-Changing observed OCI digest by one hexadecimal digit must fail.
+One hexadecimal digit changed in observed OCI digest fails.
 
-A tag-only or non-sha256 observed source must fail.
+A non-`sha256:` digest fails.
 
-### 23.4 Workload / lineage mismatch
+### Network mismatch
 
-Tampering any of:
+- wrong observed network-policy identity fails;
+- tampered observed network policy fails R3A revalidation;
+- any non-deny-all shape fails.
+
+### Resource mismatch
+
+Each of `cpuMillis`, `memoryBytes`, `ttlMs`, and `maxOutputBytes` must be independently tampered and rejected; a forged resource identity must fail recomputation.
+
+### Capability insufficiency
+
+Each required support boolean set false must independently cause evidence creation to fail.
+
+### Credential / downgrade
+
+Non-null credential binding and `downgradeOccurred = true` fail.
+
+### Lineage
+
+Tampering nested workload:
 
 ```text
 workloadIdentity
@@ -855,80 +1112,82 @@ networkPolicyIdentity
 resourcePolicyIdentity
 ```
 
-must fail through R3A revalidation or R3B binding.
+fails through R3A revalidation or exact R3B matching.
 
-### 23.5 Capability insufficiency
+### Hostile shapes
 
-If any capability needed to satisfy the requirement is false, evidence creation must fail.
+Proxy/accessor/symbol/prototype/unknown-field/sparse-array cases fail before semantic acceptance.
 
-### 23.6 Network / credentials / downgrade
+### Purity
 
-Any non-deny-all observation, non-null credential binding, or downgrade occurrence must fail.
+The new production module contains no prohibited authority import or callable backend dependency.
 
-### 23.7 Resource mismatch
+### Protected blobs
 
-Each bound resource field must be independently tamper-tested.
-
-### 23.8 Hostile object shapes
-
-Proxy / accessor / symbol / prototype / unknown-field / sparse-array cases must fail before semantic acceptance.
-
-### 23.9 Purity
-
-The focused proof must establish that the new production module contains no prohibited authority import or callable backend dependency.
-
-### 23.10 Protected blobs
-
-The focused proof must assert the protected canonical inputs remain byte-identical where repository-test conventions permit this without creating a ledger lifecycle contradiction.
+The focused proof may assert protected canonical source blobs where repository-test conventions permit it, but it must not create a permanent assertion that the future evidence ledger is absent.
 
 ---
 
-## 24. Pre-ledger certification gate
+## 25. Historical regression assertion audit
 
-Before the evidence ledger exists, all of the following must be true on one exact candidate head:
+Authorization-time repository search found no current historical test that permanently byte-pins `packages/kodac-runtime/src/index.ts` in a way that conflicts with the additive R3B export.
+
+Therefore no historical-test reconciliation path is authorized.
+
+If full CI later exposes a genuine older assertion that conflicts with the authorized additive export, implementation must stop and use a separate docs-only reconciliation before modifying that historical test.
+
+No skip, `.only`, `.todo`, deletion, weakened assertion, or CI-only conditional is authorized.
+
+---
+
+## 26. Pre-ledger certification gate
+
+Before the evidence ledger exists, one exact candidate head must prove:
 
 ```text
-EXACT CHANGED PATHS:
-4 / 4 AUTHORIZED PRE-LEDGER PATHS ONLY
+CHANGED PATHS:
+exactly 4 / 4 authorized pre-ledger paths
 
 LEDGER:
-ABSENT — PROVED EXTERNALLY FROM EXACT REPOSITORY STATE
+absent — external exact-head repository-state proof
 
 TYPECHECK:
-PASS ON ALL REQUIRED OS JOBS
+PASS on all required OS jobs
 
 FULL TEST SUITE:
-PASS ON ALL REQUIRED OS JOBS
+PASS on all required OS jobs
 
-PATCH / BENCHMARK GATE:
-PASS WHERE APPLICABLE
+PATCH / BENCHMARK REGRESSION:
+PASS where classifier applies
 
-K2 RUNTIME GATE:
+EXISTING K2 REGRESSION / CLASSIFIER GATE:
 PASS
 
-K3-R4 / K3-R5:
-PASS WHERE CLASSIFIER REQUIRES THEM
+K3-R4 / K3-R5 REGRESSION:
+PASS where classifier applies
 
 GOVERNANCE / PROVENANCE / LEGACY:
 PASS
 
-REVIEW THREADS:
-0 UNRESOLVED
+REVIEW:
+0 unresolved actionable threads
 
-PROTECTED AUTHORITY BLOBS:
-BYTE-IDENTICAL
+PROTECTED R3B-BASE BLOBS:
+byte-identical
 
 MANUAL TRUST REVIEW:
 PASS
 ```
 
-No evidence ledger may be created before that exact-head gate passes.
+The phrase **existing K2 regression / classifier gate** is not R3B execution authority. CI may compile/test existing K2 code and enforce repository runtime-change rules. R3B production code remains prohibited from importing, invoking, mutating, or extending K2 execution. No sandbox backend execution is authorized by the test gate.
+
+Only after this exact-head gate passes may the ledger be created.
 
 ---
 
-## 25. Ledger gate
+## 27. Ledger and post-ledger gate
 
-Only after pre-ledger PASS may the evidence file be created:
+Only after pre-ledger PASS may this path be created:
 
 ```text
 docs/planning/KODAC_KDO_H4_R3B_SANDBOX_BACKEND_CAPABILITY_EXECUTION_EVIDENCE_2026-08-15.md
@@ -936,56 +1195,47 @@ docs/planning/KODAC_KDO_H4_R3B_SANDBOX_BACKEND_CAPABILITY_EXECUTION_EVIDENCE_202
 
 The ledger commit must be ledger-only.
 
-The ledger may record pre-ledger facts but must mark post-ledger certification as pending until fresh post-ledger checks pass on the ledger-bearing head.
+It may record pre-ledger facts but must mark post-ledger certification pending.
 
-The four pre-ledger implementation/schema/test/export blobs must remain byte-identical across the ledger-only commit.
+Across that ledger-only commit, the four pre-ledger implementation/schema/test/export blobs must remain byte-identical.
 
----
-
-## 26. Post-ledger certification gate
-
-After the ledger-only commit, all certification must be rerun on the new exact head.
-
-Required proof includes:
+Fresh post-ledger certification on the new exact head must rerun:
 
 ```text
-ledger-only delta from accepted pre-ledger head
-implementation blobs unchanged
-schema blob unchanged
-focused-test blob unchanged
-index export blob unchanged
-full required CI PASS
-K2/K3/governance PASS
-review state clean
-manual trust review PASS
+full required CI
+existing K2 regression/classifier gate
+K3 regression gates where applicable
+governance/provenance/legacy
+review state
+manual trust review
 ```
 
-Only then may the implementation PR become ready for merge.
+Again, the K2 item is regression checking only; it does not permit R3B code to execute through K2 or a sandbox backend.
+
+Only then may an implementation PR become ready for merge.
 
 ---
 
-## 27. What R3B explicitly does not authorize
+## 28. Explicit non-authority
 
 R3B does **not** authorize:
 
-- Docker daemon access;
-- Docker socket access;
-- dockerode or another Docker SDK;
-- OpenSandbox server or SDK integration;
+- Docker daemon/socket access;
+- Docker SDK / dockerode;
+- OpenSandbox server or SDK;
 - Kubernetes integration;
 - gVisor installation or invocation;
 - Kata / Firecracker installation or invocation;
-- container creation / start / exec / kill / remove;
+- container create/start/exec/kill/remove;
 - image pull or registry resolution;
-- `RepoDigests` inspection;
+- Docker `RepoDigests` inspection;
 - runtime-class inspection;
-- cgroup inspection;
-- namespace inspection;
-- firewall / network namespace inspection;
+- cgroup / namespace / firewall inspection;
+- any trusted observer implementation;
 - Landlock changes;
-- workspace-write confinement;
-- dynamic network allowlists;
-- credential proxy / vault integration;
+- workspace-write K2 integration;
+- network allowlists or dynamic egress;
+- credential proxy/vault/broker integration;
 - external-process `ask` re-enable;
 - K2 gateway changes;
 - receipt changes;
@@ -993,24 +1243,25 @@ R3B does **not** authorize:
 - H4 closure;
 - H6 work.
 
-Any one of those requires a later explicit authorization.
+Each requires later explicit authorization.
 
 ---
 
-## 28. Expected bounded claim if implementation later passes
+## 29. Maximum bounded claim after later proof
 
-If a future R3B implementation passes its complete pre-ledger and post-ledger gates, the maximum claim is:
+If a future R3B implementation passes complete pre-ledger and post-ledger gates, the maximum claim is:
 
 ```text
 KODAC_SANDBOX_BACKEND_REQUIREMENT_OBSERVATION_EVIDENCE_CONTRACT_PROVEN
 ```
 
-This claim means only:
+Meaning only:
 
 ```text
-Kodac has a deterministic pure contract that can bind an exact R3A workload
-requirement to a backend capability declaration and supplied observation,
-rejecting runtime/source/network/resource/credential/downgrade mismatches.
+Kodac has a deterministic pure contract that binds an exact validated R3A
+workload requirement to a backend capability declaration and supplied
+observation, rejecting runtime/source/network/resource/credential/downgrade
+mismatches under fixed normative identity encodings.
 ```
 
 It does **not** mean:
@@ -1020,44 +1271,42 @@ Docker confinement proven
 OpenSandbox integration proven
 gVisor confinement proven
 Kata / Firecracker confinement proven
-backend observations are trusted
+backend observations trusted
+physical network isolation proven
 external process execution authorized
 external-process ask enabled
 workspace-write K2 integration proven
-network isolation physically proven
 H4 complete
 H6 authorized
 ```
 
 ---
 
-## 29. Expected next decision after R3B proof
+## 30. Expected later sequence
 
-If R3B later becomes proven, the next slice must still be separately authorized.
+If R3B later becomes canonical/proven, the next slice must still be separately authorized.
 
-The preferred next candidate is a **single physical backend observation adapter** whose only job is to prove that one exact backend execution can produce trustworthy observations matching R3B.
+A likely next candidate is one **single physical backend observation adapter**, potentially Linux Docker + gVisor, but this document does not authorize that choice.
 
-A likely candidate may be a Linux Docker + gVisor adapter, but that choice is **not authorized by this document** and must be selected only after a fresh implementation differential.
-
-That later slice must independently prove at least:
+A later adapter must independently prove at minimum:
 
 ```text
 exact immutable image digest observed
 exact semantic runtime class observed
 no runtime downgrade
-exact deny-all network posture observed
-resource-policy translation + observation proven
+exact deny-all network-policy identity observed
+resource translation + observed provider-neutral policy proven
 exact execution instance bound to R3A workload identity
 trusted observer implementation identity
-fail-closed behavior when any required fact is unavailable
+fail closed when any required fact is unavailable
 ```
 
 ---
 
-## 30. Final authorization boundary
+## 31. Final authorization boundary
 
 ```text
-AUTHORIZED:
+AUTHORIZED AFTER THIS DOCUMENT BECOMES CANONICAL:
 PURE PROVIDER-NEUTRAL REQUIREMENT / CAPABILITY / OBSERVATION / EVIDENCE CONTRACT ONLY
 
 NOT AUTHORIZED:
@@ -1069,4 +1318,4 @@ ANY H4 CLOSURE CLAIM
 ANY H6 WORK
 ```
 
-This boundary is intentionally narrow. It converts the OpenSandbox differential into a testable evidence theorem without importing the donor's server-global authority model or mistaking backend configuration/status for execution truth.
+This boundary converts the donor differential into a deterministic evidence theorem without importing the donor's server-global authority model or mistaking configuration/status for execution truth.
