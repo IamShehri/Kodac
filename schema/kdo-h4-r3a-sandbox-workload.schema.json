@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kodac.dev/schema/kdo-h4-r3a-sandbox-workload.schema.json",
+  "title": "Kodac H4-R3A Sandbox Workload Identity",
+  "description": "Structural schema for content-addressed sandbox workload requests and inert attestation references. Runtime validation remains authoritative for UTF-8 byte limits, Proxy/accessor rejection, canonical locator/path grammar, deep immutability, confinement identity recomputation, and other derived identities.",
+  "oneOf": [
+    { "$ref": "#/$defs/workload" },
+    { "$ref": "#/$defs/attestationReference" }
+  ],
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ociSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "repository", "digest", "sourceIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r3a-oci-image-source-v1" },
+        "repository": { "type": "string", "pattern": "^[a-z0-9.-]+(?::[1-9][0-9]{0,4})?/[a-z0-9._/-]+$" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "sourceIdentity": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "entrypoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "executable", "args", "entrypointIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r3a-entrypoint-v1" },
+        "executable": { "type": "string", "pattern": "^/" },
+        "args": { "type": "array", "maxItems": 256, "items": { "type": "string" } },
+        "entrypointIdentity": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "resourcePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "cpuMillis", "memoryBytes", "ttlMs", "maxOutputBytes", "resourcePolicyIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r3a-resource-policy-v1" },
+        "cpuMillis": { "type": "integer", "minimum": 1, "maximum": 256000 },
+        "memoryBytes": { "type": "integer", "minimum": 1, "maximum": 1099511627776 },
+        "ttlMs": { "type": "integer", "minimum": 1, "maximum": 86400000 },
+        "maxOutputBytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+        "resourcePolicyIdentity": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "mode", "networkPolicyIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r3a-network-policy-v1" },
+        "mode": { "const": "deny-all" },
+        "networkPolicyIdentity": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "confinementScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readPaths", "writePaths"],
+      "properties": {
+        "readPaths": { "type": "array", "maxItems": 256, "items": { "type": "string" } },
+        "writePaths": { "type": "array", "maxItems": 256, "items": { "type": "string" } }
+      }
+    },
+    "confinementRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "requestIdentity", "mode", "workspaceIdentity", "executionIntentIdentity", "scope"],
+      "properties": {
+        "version": { "const": "kodac-h4-r2a-confinement-v1" },
+        "requestIdentity": { "$ref": "#/$defs/identity" },
+        "mode": { "enum": ["read-only", "workspace-write", "danger-full-access"] },
+        "workspaceIdentity": { "$ref": "#/$defs/identity" },
+        "executionIntentIdentity": { "$ref": "#/$defs/identity" },
+        "scope": { "$ref": "#/$defs/confinementScope" }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "source",
+        "entrypoint",
+        "resourcePolicy",
+        "networkPolicy",
+        "confinement",
+        "executionIntentIdentity",
+        "workspaceIdentity",
+        "confinementRequestIdentity",
+        "credentialBindingIdentity",
+        "workloadIdentity"
+      ],
+      "properties": {
+        "version": { "const": "kodac-h4-r3a-sandbox-workload-v1" },
+        "source": { "$ref": "#/$defs/ociSource" },
+        "entrypoint": { "$ref": "#/$defs/entrypoint" },
+        "resourcePolicy": { "$ref": "#/$defs/resourcePolicy" },
+        "networkPolicy": { "$ref": "#/$defs/networkPolicy" },
+        "confinement": { "$ref": "#/$defs/confinementRequest" },
+        "executionIntentIdentity": { "$ref": "#/$defs/identity" },
+        "workspaceIdentity": { "$ref": "#/$defs/identity" },
+        "confinementRequestIdentity": { "$ref": "#/$defs/identity" },
+        "credentialBindingIdentity": { "type": "null" },
+        "workloadIdentity": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "attestationReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "workloadIdentity",
+        "subjectDigest",
+        "attestationKind",
+        "attestationDigest",
+        "issuer",
+        "producerIdentity",
+        "attestationReferenceIdentity"
+      ],
+      "properties": {
+        "version": { "const": "kodac-h4-r3a-workload-attestation-ref-v1" },
+        "workloadIdentity": { "$ref": "#/$defs/identity" },
+        "subjectDigest": { "$ref": "#/$defs/digest" },
+        "attestationKind": { "const": "sigstore-bundle" },
+        "attestationDigest": { "$ref": "#/$defs/digest" },
+        "issuer": { "type": "string" },
+        "producerIdentity": { "type": "string" },
+        "attestationReferenceIdentity": { "$ref": "#/$defs/identity" }
+      }
+    }
+  }
+}
