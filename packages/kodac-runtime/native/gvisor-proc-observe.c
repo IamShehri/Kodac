@@ -22,7 +22,7 @@
 #ifdef __NR_pidfd_open
 #define SYS_pidfd_open __NR_pidfd_open
 #else
-#define SYS_pidfd_open 434
+#error "pidfd_open syscall number unavailable"
 #endif
 #endif
 
