@@ -399,6 +399,7 @@ test("H2-R2 projector source has no new ambient execution or persistence authori
   const source = readFileSync(new URL("../src/session/model-visible-history.ts", import.meta.url), "utf8")
   const imports = [...source.matchAll(/from\s+["']([^"']+)["']/g)].map((match) => match[1]).sort()
   assert.deepEqual(imports, [
+    "../agent/repeat-call-signal.ts",
     "../model/provider.ts",
     "../protocol/event.ts",
     "./model-visible-request.ts",

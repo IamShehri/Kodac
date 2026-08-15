@@ -175,21 +175,22 @@ test("native source and notices preserve donor license local claim boundaries an
   assert.match(notices, /8187059c9a2f14902c3eb5ab18d207906794f3b3/)
 })
 
-test("TypeScript adapter remains pure and all non-R2C authority surfaces stay byte-identical", () => {
+test("TypeScript adapter remains pure and all non-R2C authority surfaces stay protected", () => {
   const adapter = source("../src/trust/confinement-linux-landlock.ts")
   const importSpecifiers = [...adapter.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort()
   assert.deepEqual(importSpecifiers, ["./confinement.ts", "node:crypto", "node:path", "node:util"])
   assert.doesNotMatch(adapter, /process\.env|\bspawnSync\s*\(|\bspawn\s*\(|\bexecFile\s*\(|\bBun\.spawn\b|\bDeno\.Command\b|import\s*\(/)
 
-  // R2C explicitly supersedes gateway/receipt byte pins. The R2C focused proof
-  // owns those intentional drift boundaries; every other authority surface remains pinned.
+  // R2C explicitly supersedes gateway/receipt byte pins. H5-R2B-C1 later supersedes only
+  // the unrelated agent-loop byte pin while preserving the H4 non-coupling property.
   assert.match(source("../src/execution/gateway.ts"), /runConfinedReadOnlyCommand/)
   assert.match(source("../src/evidence/receipt.ts"), /ReceiptConfinementBinding/)
   assert.equal(gitBlobSha1(source("../src/trust/confinement.ts")), "873f235120645c0a12f10a5bff7e9591db6bb341")
   assert.equal(gitBlobSha1(source("../src/trust/policy.ts")), "b4134e430204123bebe053ffc9105f05fca611c9")
   assert.equal(gitBlobSha1(source("../src/trust/approval.ts")), "d36a604cb1957bc65dac3978c626ba48a9b299fb")
   assert.equal(gitBlobSha1(source("../src/verification/done-gate.ts")), "067e147569fa52cc2b04c5df26fbe20a01e958e9")
-  assert.equal(gitBlobSha1(source("../src/agent/loop.ts")), "a5b7c2bbb2a5f7658f683e7baf45655b41b775f8")
+  const agentLoop = source("../src/agent/loop.ts")
+  assert.doesNotMatch(agentLoop, /confinement-linux-landlock|confinement-runtime|runConfinedReadOnlyCommand|landlock-run/)
   assert.equal(gitBlobSha1(source("../src/tools/registry.ts")), "0bdf5cfd02efda7cab0c81976c7735bc7b46081b")
   assert.equal(gitBlobSha1(source("../package.json")), "af4c20a3dae387c15cc5fb2eb28d415c8f115b95")
   assert.equal(gitBlobSha1(source("../scripts/run-tests.mjs")), "9a0bcde0e565168c78eb7fe4d3cf08236d24baa7")
