@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -18,7 +19,7 @@ import { NodeWorkspaceFileSystem } from "../src/edit/filesystem.ts"
 import { ExecutionGateway } from "../src/execution/gateway.ts"
 import { FixtureModelProvider } from "../src/model/fixture.ts"
 import { ProviderRegistry, type ModelProvider } from "../src/model/provider.ts"
-import { AgentTurnRunner } from "../src/model/turn.ts"
+import { AgentTurnRunner, GuardedToolCallBlockedError } from "../src/model/turn.ts"
 import { InMemoryEventSink } from "../src/protocol/event.ts"
 import { RuntimeOrchestrator } from "../src/runtime/orchestrator.ts"
 import {
@@ -53,6 +54,12 @@ function withProtoMember(value: unknown): Record<string, unknown> {
     configurable: true,
   })
   return record
+}
+
+function gitTextBlobSha1(text: string): string {
+  const canonical = text.replace(/\r\n/g, "\n")
+  const body = Buffer.from(canonical, "utf8")
+  return createHash("sha1").update(`blob ${body.byteLength}\0`).update(body).digest("hex")
 }
 
 function guardDecision(kind: string, id: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -95,6 +102,22 @@ function guardPlan(input: {
     callRules: input.callRules ?? [],
   })
 }
+
+test("R3B canonical predecessor authorization evidence base and proven-claim identities are exact", async () => {
+  const r3aAuthorization = await readFile(new URL("../../../docs/planning/KODAC_KDO_H5_R3A_MONOTONIC_GUARDED_TOOL_PIPELINE_PRIMITIVE_AUTHORIZATION_2026-08-15.md", import.meta.url), "utf8")
+  const r3aEvidence = await readFile(new URL("../../../docs/planning/KODAC_KDO_H5_R3A_MONOTONIC_GUARDED_TOOL_PIPELINE_PRIMITIVE_EVIDENCE_2026-08-15.md", import.meta.url), "utf8")
+  const r3bAuthorization = await readFile(new URL("../../../docs/planning/KODAC_KDO_H5_R3B_ACTIVE_MONOTONIC_GUARDED_TOOL_PIPELINE_AUTHORIZATION_2026-08-15.md", import.meta.url), "utf8")
+
+  assert.equal(gitTextBlobSha1(r3aAuthorization), "39d4786f37a5a7dd71ab872314364bf15726d423")
+  assert.equal(gitTextBlobSha1(r3aEvidence), "1ef5fbcf31853727de1b0ef0eb738664d18ff066")
+  assert.equal(gitTextBlobSha1(r3bAuthorization), "305b517f6ceec32e172e043d43fb54088cd14016")
+  assert.match(r3bAuthorization, /CANONICAL AUTHORIZATION BASE:\nf6b1a1686466c6e72dde0255c0daac5a5e902194/)
+  assert.match(r3bAuthorization, /CANONICAL AUTHORIZATION BASE TREE:\n5e569b39cd043d767790f5ec90ffaf4f2578020d/)
+  assert.match(r3bAuthorization, /CANONICAL PREDECESSOR CLAIM:\nKODAC_MONOTONIC_GUARDED_TOOL_PIPELINE_PRIMITIVE_PROVEN/)
+  assert.match(r3bAuthorization, /blob 39d4786f37a5a7dd71ab872314364bf15726d423/)
+  assert.match(r3bAuthorization, /blob 1ef5fbcf31853727de1b0ef0eb738664d18ff066/)
+  assert.match(r3aEvidence, /KODAC_MONOTONIC_GUARDED_TOOL_PIPELINE_PRIMITIVE_PROVEN/)
+})
 
 test("runs a deterministic model turn with reconstructable request evidence and coarse response evidence", async () => {
   const { runner, sink } = harness(
@@ -259,6 +282,7 @@ test("R3B no-plan request exposes every registry descriptor exactly", async () =
   const snapshot = sink.events.find((event) => event.type === "model.request.snapshot")
   assert.deepEqual((snapshot?.payload as { tools: unknown[] }).tools, expected)
   assert.equal(sink.events.some((event) => event.type === "tool.guard.evaluated"), false)
+  assert.equal(sink.events.some((event) => event.type === "tool.guard.execution_observed"), false)
 })
 
 test("R3B supports an empty effective provider tool surface", async () => {
@@ -330,6 +354,68 @@ test("R3B plan limit and uniqueness boundaries fail closed at limit plus one", (
   })
   assert.ok(Buffer.byteLength(totalOverflow, "utf8") <= KDO_H5_R3B_PLAN_LIMITS.maxPlanJsonBytes)
   assert.throws(() => reduceGuardedToolExposure(totalOverflow, JSON.stringify(tools)), /total decisions/)
+})
+
+test("R3B stale remove-tool plan fails before snapshot/provider and leaks no raw plan marker", async () => {
+  let providerCalls = 0
+  const provider: ModelProvider = {
+    name: "r3b-stale-remove",
+    async generate() { providerCalls += 1; return { assistant: "never", finishReason: "stop", toolCalls: [] } },
+  }
+  const tool: RuntimeTool = { name: "test.alpha", capability: "cap.alpha", async execute() { return null } }
+  const secret = "RAW_PLAN_SECRET_MARKER"
+  const plan = guardPlan({
+    toolDecisions: [guardDecision("remove_tool", secret, { toolName: "missing.tool", capability: "missing.cap" })],
+  })
+  const { runner, sink } = harness(provider, tool)
+  await assert.rejects(() => runner.run({ provider: provider.name, model: "fixture/model", messages: [{ role: "user", content: "run" }], guardPlanJson: plan }), /exact registered tool/)
+  assert.equal(providerCalls, 0)
+  assert.equal(sink.events.some((event) => event.type === "model.request.snapshot"), false)
+  assert.deepEqual(sink.events.map((event) => event.type), ["model.failed"])
+  assert.deepEqual(sink.events[0]?.payload, { provider: provider.name, stage: "tool_guard_plan", error: "guard plan rejected" })
+  assert.equal(JSON.stringify(sink.events).includes(secret), false)
+  assert.equal(JSON.stringify(sink.events).includes("missing.tool"), false)
+})
+
+test("R3B unsupported provider tool input fails before callback and execution", async () => {
+  let hooks = 0
+  let executions = 0
+  const provider: ModelProvider = {
+    name: "r3b-bigint-provider",
+    async generate() {
+      return { assistant: "", finishReason: "tool_calls", toolCalls: [{ id: "bigint", name: "test.bigint", input: { value: BigInt(1) } as never }] }
+    },
+  }
+  const tool: RuntimeTool = { name: "test.bigint", capability: "cap.bigint", async execute() { executions += 1; return null } }
+  const { runner, sink } = harness(provider, tool)
+  await assert.rejects(() => runner.run(
+    { provider: provider.name, model: "fixture/model", messages: [{ role: "user", content: "run" }] },
+    { beforeToolCall() { hooks += 1 } },
+  ), /JSON-compatible|bigint/i)
+  assert.equal(hooks, 0)
+  assert.equal(executions, 0)
+  assert.equal(sink.events.some((event) => event.type === "tool.started"), false)
+})
+
+test("R3B blocked guard event is structural and contains no raw provider input", async () => {
+  const rawMarker = "RAW_BLOCK_INPUT_MARKER"
+  const provider = new FixtureModelProvider([{
+    assistant: "",
+    finishReason: "tool_calls",
+    toolCalls: [{ id: "block-call", name: "test.block", input: { raw: rawMarker } }],
+  }])
+  const tool: RuntimeTool = { name: "test.block", capability: "cap.block", async execute() { assert.fail("blocked tool executed") } }
+  const plan = guardPlan({ callRules: [guardRule("block", tool.name, tool.capability, [guardDecision("block_call", "block-now")])] })
+  const { runner, sink } = harness(provider, tool)
+  await assert.rejects(() => runner.run({ provider: "fixture", model: "fixture/model", messages: [{ role: "user", content: "run" }], guardPlanJson: plan }),
+    (error: unknown) => error instanceof GuardedToolCallBlockedError && error.code === "guard_blocked")
+  const event = sink.events.find((candidate) => candidate.type === "tool.guard.evaluated")
+  assert.ok(event)
+  assert.equal((event.payload as { blocked: boolean }).blocked, true)
+  assert.equal(JSON.stringify(event.payload).includes(rawMarker), false)
+  assert.equal(Object.hasOwn(event.payload as object, "input"), false)
+  assert.equal(Object.hasOwn(event.payload as object, "output"), false)
+  assert.equal(Object.hasOwn(event.payload as object, "receipt"), false)
 })
 
 test("R3B guard evidence is deterministic bounded and never serves as gateway permission", async () => {
@@ -414,6 +500,16 @@ test("R3B rewritten bytes alone reach the real ExecutionGateway and policy path"
     assert.ok(types.indexOf("tool.guard.evaluated") < types.indexOf("tool.started"))
     assert.ok(types.indexOf("tool.started") < types.indexOf("tool.guard.execution_observed"))
     assert.equal(JSON.stringify(sink.events.filter((event) => event.type.startsWith("tool.guard."))).includes("ORIGINAL_K2_MARKER"), false)
+    const observed = sink.events.find((event) => event.type === "tool.guard.execution_observed")
+    assert.ok(observed)
+    assert.deepEqual(Object.keys(observed.payload as Record<string, unknown>).sort(), [
+      "callId", "capability", "finalCallIdentity", "pipelineResultIdentity", "planIdentity", "status", "tool", "version",
+    ].sort())
+    assert.equal((observed.payload as { status: string }).status, "completed")
+    assert.equal(Object.hasOwn(observed.payload as object, "input"), false)
+    assert.equal(Object.hasOwn(observed.payload as object, "output"), false)
+    assert.equal(Object.hasOwn(observed.payload as object, "receipt"), false)
+    assert.equal(Object.hasOwn(observed.payload as object, "policy"), false)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
