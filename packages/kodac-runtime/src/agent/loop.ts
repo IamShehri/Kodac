@@ -274,7 +274,7 @@ function observeRepeatBatch(input: {
       if (transition.advisorySignal !== null && transition.advisorySignalJson !== null) {
         pending = {
           signalJson: transition.advisorySignalJson,
-          callFingerprint: transition.advisorySignal.callFingerprint,
+          callFingerprint: transition.nextState.callFingerprint,
           toolCallId: call.id,
         }
       }
@@ -309,7 +309,7 @@ export class BoundedAgentLoop {
       if (typeof input.toolResultPruningMaxBytes !== "number") {
         throw new TypeError("toolResultPruningMaxBytes must be a primitive number")
       }
-      pruningPolicy = createToolResultPruningPolicy(input.toolResultPruningMaxBytes)
+      pruningPolicy = createToolResultPruningPolicy({ maxToolResultBytes: input.toolResultPruningMaxBytes })
     }
     const repeatObservationEnabled = limits.maxIdenticalToolCalls >= 2
     const startedAt = this.clock()
