@@ -205,7 +205,7 @@ test("H5-R1A fails closed on malformed or hostile structural inputs without exec
   assert.equal(policyProxyGets, 0)
 })
 
-test("H5-R1A production source is pure attributed and protected runtime authority remains byte-identical", () => {
+test("H5-R1A production source is pure attributed and R1B integration cannot widen runtime authority", () => {
   const production = source("../src/agent/tool-result-pruning.ts")
   const imports = [...production.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort()
   assert.deepEqual(imports, ["../session/model-visible-request.ts", "node:crypto", "node:util"])
@@ -215,15 +215,18 @@ test("H5-R1A production source is pure attributed and protected runtime authorit
   ]) {
     assert.equal(production.includes(forbidden), false, `production pruning source must not contain ${forbidden}`)
   }
+  assert.equal(gitBlobSha1(production), "66cfee69032c4c24331e8cb9098a86a1d7b9135e")
 
   const index = source("../src/index.ts")
   assert.match(index, /export \* from "\.\/agent\/tool-result-pruning\.ts"/)
   const loop = source("../src/agent/loop.ts")
-  assert.equal(loop.includes("tool-result-pruning"), false)
-  assert.equal(loop.includes("pruneModelVisibleToolResults"), false)
+  assert.match(loop, /createToolResultPruningPolicy/)
+  assert.match(loop, /pruneModelVisibleToolResults/)
+  assert.match(loop, /model\.history\.tool_result_pruning\.applied/)
   const history = source("../src/session/model-visible-history.ts")
-  assert.equal(history.includes("tool-result-pruning"), false)
-  assert.equal(history.includes("pruneModelVisibleToolResults"), false)
+  assert.match(history, /pruneModelVisibleToolResults/)
+  assert.match(history, /model\.history\.tool_result_pruning\.applied/)
+  assert.doesNotMatch(history, /\bExecutionGateway\b|\bRuntimeOrchestrator\b|\bDoneGate\b/)
   const turn = source("../src/model/turn.ts")
   assert.equal(turn.includes("tool-result-pruning"), false)
   assert.equal(turn.includes("pruneModelVisibleToolResults"), false)
