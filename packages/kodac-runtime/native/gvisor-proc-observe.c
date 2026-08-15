@@ -144,6 +144,16 @@ static int parse_proc_start_ticks(const char *buffer, size_t length, pid_t expec
   return -1;
 }
 
+static int open_and_stat_process_exe(const char *exe_path, struct stat *stat_out) {
+  int fd = open(exe_path, O_PATH | O_CLOEXEC);
+  if (fd < 0) return -1;
+  int result = fstat(fd, stat_out);
+  int saved_errno = errno;
+  close(fd);
+  errno = saved_errno;
+  return result;
+}
+
 int main(int argc, char **argv) {
   if (argc != 3 || strcmp(argv[1], "--pid") != 0) return fail("usage: kodac-gvisor-proc-observe --pid <decimal-positive-pid>");
 
@@ -176,20 +186,12 @@ int main(int argc, char **argv) {
     return fail("observed process executable path overflow");
   }
 
-  int exe_fd = open(exe_path, O_PATH | O_CLOEXEC);
-  if (exe_fd < 0) {
-    close(pidfd);
-    return fail("cannot open observed process executable");
-  }
-
   struct stat process_exe;
-  if (fstat(exe_fd, &process_exe) != 0) {
-    close(exe_fd);
+  if (open_and_stat_process_exe(exe_path, &process_exe) != 0) {
     close(pidfd);
-    return fail("cannot stat observed process executable");
+    return fail("cannot open/stat observed process executable");
   }
   if (!S_ISREG(process_exe.st_mode) || process_exe.st_dev != artifact_before.st_dev || process_exe.st_ino != artifact_before.st_ino || process_exe.st_size != artifact_before.st_size) {
-    close(exe_fd);
     close(pidfd);
     return fail("observed process executable does not match trusted runsc artifact fd 3");
   }
@@ -197,14 +199,12 @@ int main(int argc, char **argv) {
   char stat_path[64];
   written = snprintf(stat_path, sizeof(stat_path), "/proc/%ld/stat", (long)pid);
   if (written <= 0 || (size_t)written >= sizeof(stat_path)) {
-    close(exe_fd);
     close(pidfd);
     return fail("observed process stat path overflow");
   }
 
   int stat_fd = open(stat_path, O_RDONLY | O_CLOEXEC);
   if (stat_fd < 0) {
-    close(exe_fd);
     close(pidfd);
     return fail("cannot open observed process stat record");
   }
@@ -214,33 +214,37 @@ int main(int argc, char **argv) {
   int read_result = read_bounded_file(stat_fd, stat_buffer, sizeof(stat_buffer), &stat_length);
   close(stat_fd);
   if (read_result != 0) {
-    close(exe_fd);
     close(pidfd);
     return fail(read_result > 0 ? "observed process stat record exceeds bound" : "cannot read observed process stat record");
   }
 
   uint64_t start_ticks = 0;
   if (parse_proc_start_ticks(stat_buffer, stat_length, pid, &start_ticks) != 0) {
-    close(exe_fd);
     close(pidfd);
     return fail("cannot parse observed process start ticks");
   }
 
   struct stat artifact_after;
   if (fstat(KODAC_RUNSC_ARTIFACT_FD, &artifact_after) != 0 || !same_artifact_stat(&artifact_before, &artifact_after)) {
-    close(exe_fd);
     close(pidfd);
     return fail("trusted runsc artifact metadata changed during observation");
   }
 
+  struct stat process_exe_after;
+  if (open_and_stat_process_exe(exe_path, &process_exe_after) != 0 ||
+      process_exe_after.st_dev != artifact_before.st_dev ||
+      process_exe_after.st_ino != artifact_before.st_ino ||
+      process_exe_after.st_size != artifact_before.st_size) {
+    close(pidfd);
+    return fail("observed process executable changed during inspection");
+  }
+
   alive = pidfd_is_alive(pidfd);
   if (alive <= 0) {
-    close(exe_fd);
     close(pidfd);
     return fail(alive == 0 ? "observed process exited during inspection" : "cannot repoll observed process pidfd");
   }
 
-  close(exe_fd);
   close(pidfd);
 
   if (printf("kodac-gvisor-proc-v1 pid=%ld start-ticks=%" PRIu64 " exe-dev=%ju exe-ino=%ju exe-size=%ju\n",
