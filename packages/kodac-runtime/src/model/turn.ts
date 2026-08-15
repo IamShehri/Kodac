@@ -67,6 +67,23 @@ export class GuardedToolCallBlockedError extends Error {
   }
 }
 
+interface PreparedToolCall {
+  readonly effectiveCall: Readonly<ModelToolCall>
+  readonly capability: string
+  readonly guard?: Readonly<{
+    planIdentity: string
+    pipelineResultIdentity: string
+    baseToolSetIdentity: string
+    effectiveToolSetIdentity: string
+    originalCallIdentity: string
+    finalCallIdentity: string
+    blocked: boolean
+    blockCode: string | null
+    inputChanged: boolean
+    requiresK2Reevaluation: boolean
+  }>
+}
+
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex")
 }
@@ -76,7 +93,7 @@ function throwIfAborted(signal?: AbortSignal): void {
   throw signal.reason instanceof Error ? signal.reason : new Error("Operation aborted")
 }
 
-function validateResponse(response: ModelProviderResponse): void {
+function normalizeProviderResponse(response: ModelProviderResponse): ModelProviderResponse {
   if (typeof response.assistant !== "string") throw new Error("Provider response assistant must be a string")
   if (!Array.isArray(response.toolCalls)) throw new Error("Provider response toolCalls must be an array")
   if (response.finishReason === "stop" && response.toolCalls.length > 0) {
@@ -86,23 +103,18 @@ function validateResponse(response: ModelProviderResponse): void {
     throw new Error("Provider response finishReason=tool_calls requires at least one tool call")
   }
 
-  const ids = new Set<string>()
-  for (const call of response.toolCalls) {
-    if (!call.id || !call.name) throw new Error("Provider tool call id and name must not be empty")
-    if (ids.has(call.id)) throw new Error(`Duplicate provider tool call id: ${call.id}`)
-    ids.add(call.id)
-  }
-}
-
-function normalizeProviderToolCall(call: ModelToolCall): Readonly<ModelToolCall> {
-  const message = validateModelVisibleMessage({
+  const normalizedMessage = validateModelVisibleMessage({
     role: "assistant",
     content: "",
-    toolCalls: [call],
+    toolCalls: response.toolCalls,
   })
-  const normalized = message.toolCalls?.[0]
-  if (normalized === undefined) throw new Error("Provider tool call normalization failed")
-  return normalized
+  const toolCalls = normalizedMessage.toolCalls ?? []
+  return {
+    assistant: response.assistant,
+    finishReason: response.finishReason,
+    toolCalls: toolCalls.map((call) => ({ id: call.id, name: call.name, input: call.input })),
+    ...(response.metadata === undefined ? {} : { metadata: response.metadata }),
+  }
 }
 
 function materializeJson(value: unknown): unknown {
@@ -161,11 +173,9 @@ export class AgentTurnRunner {
     const registeredPairsJson = registeredToolPairsJson(registeredTools)
 
     let tools = registeredTools
-    let guardPlanIdentity: string | undefined
     if (input.guardPlanJson !== undefined) {
       try {
         const exposure = reduceGuardedToolExposure(input.guardPlanJson, registeredPairsJson)
-        guardPlanIdentity = exposure.planIdentity
         const effectivePairs = new Map(exposure.effectiveTools.map((tool) => [tool.name, tool.capability] as const))
         tools = registeredTools.filter((tool) => effectivePairs.get(tool.name) === tool.capability)
       } catch (error) {
@@ -234,7 +244,7 @@ export class AgentTurnRunner {
 
     let response: ModelProviderResponse
     try {
-      response = await provider.generate({
+      const generated = await provider.generate({
         model: request.model,
         messages: request.messages,
         tools: request.tools,
@@ -242,7 +252,7 @@ export class AgentTurnRunner {
         onStreamEvent,
       })
       throwIfAborted(input.signal)
-      validateResponse(response)
+      response = normalizeProviderResponse(generated)
     } catch (error) {
       await this.session.emit("model.failed", {
         provider: provider.name,
@@ -277,38 +287,22 @@ export class AgentTurnRunner {
       })
     }
 
-    const toolResults: AgentToolResult[] = []
-    const effectiveToolCalls: ModelToolCall[] = []
-    for (const providerCall of response.toolCalls) {
+    const preparedCalls: PreparedToolCall[] = []
+    for (const call of response.toolCalls) {
       throwIfAborted(input.signal)
-      const call = normalizeProviderToolCall(providerCall)
-      await this.session.emit("model.tool_call.requested", {
-        provider: provider.name,
-        model: request.model,
-        callId: call.id,
-        tool: call.name,
-      })
-
       const registered = registeredTools.find((tool) => tool.name === call.name)
       if (registered === undefined) throw new GuardedToolCallBlockedError("unknown_tool")
 
       let effectiveInput = call.input
-      let guardResultIdentity: string | undefined
-      let finalCallIdentity: string | undefined
+      let guard: PreparedToolCall["guard"]
       if (input.guardPlanJson !== undefined) {
         const guarded = reduceGuardedToolCallWithPlan(
           input.guardPlanJson,
           registeredPairsJson,
           guardedCallJson({ toolName: call.name, capability: registered.capability, input: call.input }),
         )
-        guardResultIdentity = guarded.pipeline.resultIdentity
-        finalCallIdentity = guarded.pipeline.finalCallIdentity
-        await this.session.emit("tool.guard.evaluated", {
-          version: KDO_H5_R3B_GUARD_EVIDENCE_VERSION,
+        guard = Object.freeze({
           planIdentity: guarded.planIdentity,
-          callId: call.id,
-          tool: call.name,
-          capability: registered.capability,
           pipelineResultIdentity: guarded.pipeline.resultIdentity,
           baseToolSetIdentity: guarded.pipeline.baseToolSetIdentity,
           effectiveToolSetIdentity: guarded.pipeline.effectiveToolSetIdentity,
@@ -319,26 +313,74 @@ export class AgentTurnRunner {
           inputChanged: guarded.pipeline.inputChanged,
           requiresK2Reevaluation: guarded.pipeline.requiresK2Reevaluation,
         })
-        if (guarded.pipeline.blocked) {
-          throw new GuardedToolCallBlockedError("guard_blocked", guarded.pipeline.resultIdentity)
-        }
         effectiveInput = guarded.pipeline.effectiveCall.input
       }
+      preparedCalls.push(Object.freeze({
+        effectiveCall: immutableEffectiveCall({ id: call.id, name: call.name, value: effectiveInput }),
+        capability: registered.capability,
+        ...(guard === undefined ? {} : { guard }),
+      }))
+    }
 
-      const effectiveCall = immutableEffectiveCall({ id: call.id, name: call.name, value: effectiveInput })
+    if (input.guardPlanJson !== undefined) {
+      for (const prepared of preparedCalls) {
+        const guard = prepared.guard
+        if (guard === undefined) throw new Error("guarded tool preflight evidence is missing")
+        await this.session.emit("model.tool_call.requested", {
+          provider: provider.name,
+          model: request.model,
+          callId: prepared.effectiveCall.id,
+          tool: prepared.effectiveCall.name,
+        })
+        await this.session.emit("tool.guard.evaluated", {
+          version: KDO_H5_R3B_GUARD_EVIDENCE_VERSION,
+          planIdentity: guard.planIdentity,
+          callId: prepared.effectiveCall.id,
+          tool: prepared.effectiveCall.name,
+          capability: prepared.capability,
+          pipelineResultIdentity: guard.pipelineResultIdentity,
+          baseToolSetIdentity: guard.baseToolSetIdentity,
+          effectiveToolSetIdentity: guard.effectiveToolSetIdentity,
+          originalCallIdentity: guard.originalCallIdentity,
+          finalCallIdentity: guard.finalCallIdentity,
+          blocked: guard.blocked,
+          blockCode: guard.blockCode,
+          inputChanged: guard.inputChanged,
+          requiresK2Reevaluation: guard.requiresK2Reevaluation,
+        })
+      }
+      const blocked = preparedCalls.find((prepared) => prepared.guard?.blocked === true)
+      if (blocked?.guard !== undefined) {
+        throw new GuardedToolCallBlockedError("guard_blocked", blocked.guard.pipelineResultIdentity)
+      }
+    }
+
+    const toolResults: AgentToolResult[] = []
+    const effectiveToolCalls: ModelToolCall[] = []
+    for (const prepared of preparedCalls) {
+      throwIfAborted(input.signal)
+      const effectiveCall = prepared.effectiveCall
+      if (input.guardPlanJson === undefined) {
+        await this.session.emit("model.tool_call.requested", {
+          provider: provider.name,
+          model: request.model,
+          callId: effectiveCall.id,
+          tool: effectiveCall.name,
+        })
+      }
       await hooks.beforeToolCall?.(effectiveCall)
       const executionInput = materializeJson(effectiveCall.input)
       const output = await this.orchestrator.invoke<unknown, unknown>(effectiveCall.name, executionInput, { signal: input.signal })
 
-      if (input.guardPlanJson !== undefined && guardPlanIdentity !== undefined && guardResultIdentity !== undefined && finalCallIdentity !== undefined) {
+      if (prepared.guard !== undefined) {
         await this.session.emit("tool.guard.execution_observed", {
           version: KDO_H5_R3B_EXECUTION_OBSERVATION_VERSION,
-          planIdentity: guardPlanIdentity,
+          planIdentity: prepared.guard.planIdentity,
           callId: effectiveCall.id,
           tool: effectiveCall.name,
-          capability: registered.capability,
-          pipelineResultIdentity: guardResultIdentity,
-          finalCallIdentity,
+          capability: prepared.capability,
+          pipelineResultIdentity: prepared.guard.pipelineResultIdentity,
+          finalCallIdentity: prepared.guard.finalCallIdentity,
           status: "completed",
         })
       }
