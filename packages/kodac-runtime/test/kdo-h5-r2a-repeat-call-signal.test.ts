@@ -291,7 +291,6 @@ test("H5-R2A production source remains pure attributed and all non-superseded au
   const protectedBlobs: Record<string, string> = {
     "../src/agent/tool-result-pruning.ts": "66cfee69032c4c24331e8cb9098a86a1d7b9135e",
     "../src/session/model-visible-request.ts": "0f4c7ef7ef0f4e4e1baa90944c39639c1dfa07a6",
-    "../src/model/turn.ts": "401d796b929d350046128371fee4ba719d0d56c9",
     "../src/trust/policy.ts": "b4134e430204123bebe053ffc9105f05fca611c9",
     "../src/execution/gateway.ts": "ecf9cc9d3eda6a2280a280ed2f9a2e472f397560",
     "../src/verification/done-gate.ts": "067e147569fa52cc2b04c5df26fbe20a01e958e9",

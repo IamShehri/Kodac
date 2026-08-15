@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto"
+
+import {
+  reduceGuardedToolCallWithPlan,
+  reduceGuardedToolExposure,
+} from "../agent/guarded-tool-plan.ts"
 import type { RuntimeOrchestrator } from "../runtime/orchestrator.ts"
-import { createModelVisibleRequestSnapshot, materializeModelVisibleRequest } from "../session/model-visible-request.ts"
+import {
+  createModelVisibleRequestSnapshot,
+  materializeModelVisibleRequest,
+  validateModelVisibleMessage,
+} from "../session/model-visible-request.ts"
 import type { RuntimeSession } from "../session/session.ts"
 import type { ToolRegistry } from "../tools/registry.ts"
 import { OpenAICompatibleProvider } from "./openai-compatible.ts"
@@ -16,15 +25,19 @@ import {
   type ProviderRegistry,
 } from "./provider.ts"
 
+export const KDO_H5_R3B_GUARD_EVIDENCE_VERSION = "kodac-tool-guard-evidence-v1" as const
+export const KDO_H5_R3B_EXECUTION_OBSERVATION_VERSION = "kodac-tool-guard-execution-observation-v1" as const
+
 export interface AgentTurnInput {
   provider: string
   model: string
   messages: ModelMessage[]
+  guardPlanJson?: string
   signal?: AbortSignal
 }
 
 export interface AgentTurnHooks {
-  beforeToolCall?(call: ModelToolCall): Promise<void> | void
+  beforeToolCall?(call: Readonly<ModelToolCall>): Promise<void> | void
   onStreamEvent?(event: ModelProviderStreamEvent): Promise<void> | void
 }
 
@@ -42,6 +55,35 @@ export interface AgentTurnResult {
   metadata?: ModelProviderMetadata
 }
 
+export class GuardedToolCallBlockedError extends Error {
+  readonly code: "unknown_tool" | "guard_blocked"
+  readonly pipelineResultIdentity?: string
+
+  constructor(code: "unknown_tool" | "guard_blocked", pipelineResultIdentity?: string) {
+    super("Guarded tool call blocked")
+    this.name = "GuardedToolCallBlockedError"
+    this.code = code
+    if (pipelineResultIdentity !== undefined) this.pipelineResultIdentity = pipelineResultIdentity
+  }
+}
+
+interface PreparedToolCall {
+  readonly effectiveCall: Readonly<ModelToolCall>
+  readonly capability: string
+  readonly guard?: Readonly<{
+    planIdentity: string
+    pipelineResultIdentity: string
+    baseToolSetIdentity: string
+    effectiveToolSetIdentity: string
+    originalCallIdentity: string
+    finalCallIdentity: string
+    blocked: boolean
+    blockCode: string | null
+    inputChanged: boolean
+    requiresK2Reevaluation: boolean
+  }>
+}
+
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex")
 }
@@ -51,7 +93,7 @@ function throwIfAborted(signal?: AbortSignal): void {
   throw signal.reason instanceof Error ? signal.reason : new Error("Operation aborted")
 }
 
-function validateResponse(response: ModelProviderResponse): void {
+function normalizeProviderResponse(response: ModelProviderResponse): ModelProviderResponse {
   if (typeof response.assistant !== "string") throw new Error("Provider response assistant must be a string")
   if (!Array.isArray(response.toolCalls)) throw new Error("Provider response toolCalls must be an array")
   if (response.finishReason === "stop" && response.toolCalls.length > 0) {
@@ -61,12 +103,34 @@ function validateResponse(response: ModelProviderResponse): void {
     throw new Error("Provider response finishReason=tool_calls requires at least one tool call")
   }
 
-  const ids = new Set<string>()
-  for (const call of response.toolCalls) {
-    if (!call.id || !call.name) throw new Error("Provider tool call id and name must not be empty")
-    if (ids.has(call.id)) throw new Error(`Duplicate provider tool call id: ${call.id}`)
-    ids.add(call.id)
+  const normalizedMessage = validateModelVisibleMessage({
+    role: "assistant",
+    content: "",
+    toolCalls: response.toolCalls,
+  })
+  const toolCalls = normalizedMessage.toolCalls ?? []
+  return {
+    assistant: response.assistant,
+    finishReason: response.finishReason,
+    toolCalls: toolCalls.map((call) => ({ id: call.id, name: call.name, input: call.input })),
+    ...(response.metadata === undefined ? {} : { metadata: response.metadata }),
   }
+}
+
+function materializeJson(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value)) as unknown
+}
+
+function registeredToolPairsJson(tools: readonly { name: string; capability: string }[]): string {
+  return JSON.stringify(tools.map((tool) => ({ name: tool.name, capability: tool.capability })))
+}
+
+function guardedCallJson(input: { toolName: string; capability: string; input: unknown }): string {
+  return JSON.stringify({ toolName: input.toolName, capability: input.capability, input: input.input })
+}
+
+function immutableEffectiveCall(input: { id: string; name: string; value: unknown }): Readonly<ModelToolCall> {
+  return Object.freeze({ id: input.id, name: input.name, input: input.value })
 }
 
 export class AgentTurnRunner {
@@ -105,7 +169,25 @@ export class AgentTurnRunner {
   async run(input: AgentTurnInput, hooks: AgentTurnHooks = {}): Promise<AgentTurnResult> {
     throwIfAborted(input.signal)
     const provider = this.resolveProvider(input.provider)
-    const tools = this.tools.list()
+    const registeredTools = this.tools.list()
+    const registeredPairsJson = registeredToolPairsJson(registeredTools)
+
+    let tools = registeredTools
+    if (input.guardPlanJson !== undefined) {
+      try {
+        const exposure = reduceGuardedToolExposure(input.guardPlanJson, registeredPairsJson)
+        const effectivePairs = new Map(exposure.effectiveTools.map((tool) => [tool.name, tool.capability] as const))
+        tools = registeredTools.filter((tool) => effectivePairs.get(tool.name) === tool.capability)
+      } catch (error) {
+        await this.session.emit("model.failed", {
+          provider: provider.name,
+          stage: "tool_guard_plan",
+          error: "guard plan rejected",
+        })
+        throw error
+      }
+    }
+
     let snapshot: ReturnType<typeof createModelVisibleRequestSnapshot>
     try {
       snapshot = createModelVisibleRequestSnapshot({ provider: provider.name, model: input.model, messages: input.messages, tools })
@@ -162,7 +244,7 @@ export class AgentTurnRunner {
 
     let response: ModelProviderResponse
     try {
-      response = await provider.generate({
+      const generated = await provider.generate({
         model: request.model,
         messages: request.messages,
         tools: request.tools,
@@ -170,7 +252,7 @@ export class AgentTurnRunner {
         onStreamEvent,
       })
       throwIfAborted(input.signal)
-      validateResponse(response)
+      response = normalizeProviderResponse(generated)
     } catch (error) {
       await this.session.emit("model.failed", {
         provider: provider.name,
@@ -205,24 +287,112 @@ export class AgentTurnRunner {
       })
     }
 
-    const toolResults: AgentToolResult[] = []
+    const preparedCalls: PreparedToolCall[] = []
     for (const call of response.toolCalls) {
       throwIfAborted(input.signal)
-      await this.session.emit("model.tool_call.requested", {
-        provider: provider.name,
-        model: request.model,
-        callId: call.id,
-        tool: call.name,
-      })
-      await hooks.beforeToolCall?.(call)
-      const output = await this.orchestrator.invoke<unknown, unknown>(call.name, call.input, { signal: input.signal })
-      toolResults.push({ id: call.id, name: call.name, output })
+      const registered = registeredTools.find((tool) => tool.name === call.name)
+      if (registered === undefined) throw new GuardedToolCallBlockedError("unknown_tool")
+
+      let effectiveInput = call.input
+      let guard: PreparedToolCall["guard"]
+      if (input.guardPlanJson !== undefined) {
+        const guarded = reduceGuardedToolCallWithPlan(
+          input.guardPlanJson,
+          registeredPairsJson,
+          guardedCallJson({ toolName: call.name, capability: registered.capability, input: call.input }),
+        )
+        guard = Object.freeze({
+          planIdentity: guarded.planIdentity,
+          pipelineResultIdentity: guarded.pipeline.resultIdentity,
+          baseToolSetIdentity: guarded.pipeline.baseToolSetIdentity,
+          effectiveToolSetIdentity: guarded.pipeline.effectiveToolSetIdentity,
+          originalCallIdentity: guarded.pipeline.originalCallIdentity,
+          finalCallIdentity: guarded.pipeline.finalCallIdentity,
+          blocked: guarded.pipeline.blocked,
+          blockCode: guarded.pipeline.blockCode,
+          inputChanged: guarded.pipeline.inputChanged,
+          requiresK2Reevaluation: guarded.pipeline.requiresK2Reevaluation,
+        })
+        effectiveInput = guarded.pipeline.effectiveCall.input
+      }
+      preparedCalls.push(Object.freeze({
+        effectiveCall: immutableEffectiveCall({ id: call.id, name: call.name, value: effectiveInput }),
+        capability: registered.capability,
+        ...(guard === undefined ? {} : { guard }),
+      }))
+    }
+
+    if (input.guardPlanJson !== undefined) {
+      for (const prepared of preparedCalls) {
+        const guard = prepared.guard
+        if (guard === undefined) throw new Error("guarded tool preflight evidence is missing")
+        await this.session.emit("model.tool_call.requested", {
+          provider: provider.name,
+          model: request.model,
+          callId: prepared.effectiveCall.id,
+          tool: prepared.effectiveCall.name,
+        })
+        await this.session.emit("tool.guard.evaluated", {
+          version: KDO_H5_R3B_GUARD_EVIDENCE_VERSION,
+          planIdentity: guard.planIdentity,
+          callId: prepared.effectiveCall.id,
+          tool: prepared.effectiveCall.name,
+          capability: prepared.capability,
+          pipelineResultIdentity: guard.pipelineResultIdentity,
+          baseToolSetIdentity: guard.baseToolSetIdentity,
+          effectiveToolSetIdentity: guard.effectiveToolSetIdentity,
+          originalCallIdentity: guard.originalCallIdentity,
+          finalCallIdentity: guard.finalCallIdentity,
+          blocked: guard.blocked,
+          blockCode: guard.blockCode,
+          inputChanged: guard.inputChanged,
+          requiresK2Reevaluation: guard.requiresK2Reevaluation,
+        })
+      }
+      const blocked = preparedCalls.find((prepared) => prepared.guard?.blocked === true)
+      if (blocked?.guard !== undefined) {
+        throw new GuardedToolCallBlockedError("guard_blocked", blocked.guard.pipelineResultIdentity)
+      }
+    }
+
+    const toolResults: AgentToolResult[] = []
+    const effectiveToolCalls: ModelToolCall[] = []
+    for (const prepared of preparedCalls) {
+      throwIfAborted(input.signal)
+      const effectiveCall = prepared.effectiveCall
+      if (input.guardPlanJson === undefined) {
+        await this.session.emit("model.tool_call.requested", {
+          provider: provider.name,
+          model: request.model,
+          callId: effectiveCall.id,
+          tool: effectiveCall.name,
+        })
+      }
+      await hooks.beforeToolCall?.(effectiveCall)
+      const executionInput = materializeJson(effectiveCall.input)
+      const output = await this.orchestrator.invoke<unknown, unknown>(effectiveCall.name, executionInput, { signal: input.signal })
+
+      if (prepared.guard !== undefined) {
+        await this.session.emit("tool.guard.execution_observed", {
+          version: KDO_H5_R3B_EXECUTION_OBSERVATION_VERSION,
+          planIdentity: prepared.guard.planIdentity,
+          callId: effectiveCall.id,
+          tool: effectiveCall.name,
+          capability: prepared.capability,
+          pipelineResultIdentity: prepared.guard.pipelineResultIdentity,
+          finalCallIdentity: prepared.guard.finalCallIdentity,
+          status: "completed",
+        })
+      }
+
+      effectiveToolCalls.push({ id: effectiveCall.id, name: effectiveCall.name, input: materializeJson(effectiveCall.input) })
+      toolResults.push({ id: effectiveCall.id, name: effectiveCall.name, output })
     }
 
     return {
       assistant: response.assistant,
       finishReason: response.finishReason,
-      toolCalls: response.toolCalls.map((call) => ({ ...call })),
+      toolCalls: effectiveToolCalls,
       toolResults,
       metadata: response.metadata,
     }

@@ -45,6 +45,7 @@ export interface AgentLoopInput {
   provider: string
   model: string
   messages: ModelMessage[]
+  guardPlanJson?: string
   limits?: Partial<AgentLoopLimits>
   signal?: AbortSignal
 }
@@ -412,6 +413,7 @@ export class BoundedAgentLoop {
               provider: input.provider,
               model: input.model,
               messages: turnMessages,
+              ...(input.guardPlanJson === undefined ? {} : { guardPlanJson: input.guardPlanJson }),
               signal: turnSignal,
             },
             {
