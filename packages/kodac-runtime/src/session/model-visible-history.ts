@@ -34,7 +34,7 @@ import {
 export const KDO_H2_R2_HISTORY_VERSION = "kodac-model-visible-history-v1" as const
 export const KDO_H5_R2B_ADVISORY_HISTORY_VERSION = "kodac-repeat-call-advisory-history-v1" as const
 export const KDO_H5_R1B_PRUNING_HISTORY_VERSION = "kodac-tool-result-pruning-history-v1" as const
-export const KDO_H5_R1B_PRUNING_RECORD_MAX_BYTES = 256 * 1024 as const
+export const KDO_H5_R1B_PRUNING_RECORD_MAX_BYTES = 262144 as const
 export const KDO_H5_R2B_REPEAT_POLICY_IDENTITY = "7331f353c9a29af123cd54fa99453768b35fe2534db5d009df9dae67cdc80222" as const
 export const KDO_H5_R2B_ADVISORY_MESSAGE_CONTENT =
   "Kodac advisory: the same tool call with the same canonical input completed twice consecutively. Reconsider the approach before issuing the same call again." as const
