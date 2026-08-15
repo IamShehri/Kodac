@@ -148,7 +148,7 @@ test("R1B predecessor documents primitive identity and non-authority boundary ar
 test("R1B structural record replays exact R1A output while canonical source history remains recoverable", () => {
   const rawMarker = `RAW_TOOL_BODY_${"x".repeat(1400)}`
   const fixture = directFixture([rawMarker])
-  const policy = createToolResultPruningPolicy(256)
+  const policy = createToolResultPruningPolicy({ maxToolResultBytes: 256 })
   const expected = pruneModelVisibleToolResults(fixture.messages, policy)
   assert.equal(expected.changes.length, 1)
 
@@ -182,7 +182,7 @@ test("R1B structural record replays exact R1A output while canonical source hist
 
 test("R1B record validator rejects stale tampered reordered and hostile evidence fail-closed", () => {
   const fixture = directFixture(["a".repeat(1200), "b".repeat(1300)])
-  const policy = createToolResultPruningPolicy(256)
+  const policy = createToolResultPruningPolicy({ maxToolResultBytes: 256 })
   const record = createToolResultPruningHistoryRecord({ afterRequestIdentity: fixture.anchor, messages: fixture.messages, policy })
   assert.equal(record.changes.length, 2)
   assert.doesNotThrow(() => validateToolResultPruningHistoryRecord(record))
@@ -228,7 +228,7 @@ test("R1B record validator rejects stale tampered reordered and hostile evidence
 
 test("R1B direct replay preserves UTF-8 byte bounds and deterministic ordered multi-change evidence", () => {
   const fixture = directFixture(["🙂".repeat(500), "界".repeat(500)])
-  const policy = createToolResultPruningPolicy(300)
+  const policy = createToolResultPruningPolicy({ maxToolResultBytes: 300 })
   const first = createToolResultPruningHistoryRecord({ afterRequestIdentity: fixture.anchor, messages: fixture.messages, policy })
   const second = createToolResultPruningHistoryRecord({ afterRequestIdentity: fixture.anchor, messages: fixture.messages, policy })
   assert.deepEqual(first, second)
@@ -388,7 +388,7 @@ test("R1B record and projector reject unsupported versions and future required h
   const record = createToolResultPruningHistoryRecord({
     afterRequestIdentity: fixture.anchor,
     messages: fixture.messages,
-    policy: createToolResultPruningPolicy(256),
+    policy: createToolResultPruningPolicy({ maxToolResultBytes: 256 }),
   })
   assert.throws(() => validateToolResultPruningHistoryRecord({ ...record, version: "future" }), /unsupported/)
   assert.throws(() => projectModelVisibleHistory([...fixture.events, {
