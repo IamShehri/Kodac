@@ -2,9 +2,8 @@ import { createHash } from "node:crypto"
 import type { ModelMessage, ModelToolCall } from "../model/provider.ts"
 import type { AgentTurnRunner, AgentTurnResult } from "../model/turn.ts"
 import {
+  createToolResultPruningPolicy,
   pruneModelVisibleToolResults,
-  validateToolResultPruningPolicy,
-  type ToolResultPruningPolicy,
 } from "./tool-result-pruning.ts"
 import {
   KDO_H5_R2A_CALL_VERSION,
@@ -52,7 +51,7 @@ export interface AgentLoopInput {
   model: string
   messages: ModelMessage[]
   guardPlanJson?: string
-  toolResultPruningPolicy?: ToolResultPruningPolicy
+  toolResultPruningMaxBytes?: number
   limits?: Partial<AgentLoopLimits>
   signal?: AbortSignal
 }
@@ -305,9 +304,13 @@ export class BoundedAgentLoop {
 
   private async runExclusive(input: AgentLoopInput): Promise<AgentLoopResult> {
     const limits = resolveLimits(input.limits)
-    const pruningPolicy = input.toolResultPruningPolicy === undefined
-      ? undefined
-      : validateToolResultPruningPolicy(input.toolResultPruningPolicy)
+    let pruningPolicy
+    if (input.toolResultPruningMaxBytes !== undefined) {
+      if (typeof input.toolResultPruningMaxBytes !== "number") {
+        throw new TypeError("toolResultPruningMaxBytes must be a primitive number")
+      }
+      pruningPolicy = createToolResultPruningPolicy(input.toolResultPruningMaxBytes)
+    }
     const repeatObservationEnabled = limits.maxIdenticalToolCalls >= 2
     const startedAt = this.clock()
     const runStartSequence = this.session.eventsSnapshot().at(-1)?.sequence ?? 0
