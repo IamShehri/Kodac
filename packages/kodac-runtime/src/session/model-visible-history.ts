@@ -2,6 +2,14 @@ import { createHash } from "node:crypto"
 
 import type { ModelMessage } from "../model/provider.ts"
 import {
+  KDO_H5_R1A_RESULT_VERSION,
+  pruneModelVisibleToolResults,
+  validateToolResultPruningPolicy,
+  validateToolResultPruningResult,
+  type ToolResultPruningChange,
+  type ToolResultPruningPolicy,
+} from "../agent/tool-result-pruning.ts"
+import {
   KDO_H5_R2A_CALL_VERSION,
   KDO_H5_R2A_POLICY_VERSION,
   KDO_H5_R2A_SIGNAL_JSON_MAX_BYTES,
@@ -25,6 +33,8 @@ import {
 
 export const KDO_H2_R2_HISTORY_VERSION = "kodac-model-visible-history-v1" as const
 export const KDO_H5_R2B_ADVISORY_HISTORY_VERSION = "kodac-repeat-call-advisory-history-v1" as const
+export const KDO_H5_R1B_PRUNING_HISTORY_VERSION = "kodac-tool-result-pruning-history-v1" as const
+export const KDO_H5_R1B_PRUNING_RECORD_MAX_BYTES = 256 * 1024 as const
 export const KDO_H5_R2B_REPEAT_POLICY_IDENTITY = "7331f353c9a29af123cd54fa99453768b35fe2534db5d009df9dae67cdc80222" as const
 export const KDO_H5_R2B_ADVISORY_MESSAGE_CONTENT =
   "Kodac advisory: the same tool call with the same canonical input completed twice consecutively. Reconsider the approach before issuing the same call again." as const
@@ -102,6 +112,24 @@ export interface RepeatCallAdvisoryHistoryRecordInput {
   readonly signalJson: string
 }
 
+export interface ToolResultPruningHistoryRecord {
+  readonly version: typeof KDO_H5_R1B_PRUNING_HISTORY_VERSION
+  readonly afterRequestIdentity: string
+  readonly policy: ToolResultPruningPolicy
+  readonly inputHistoryIdentity: string
+  readonly outputHistoryIdentity: string
+  readonly resultIdentity: string
+  readonly changes: readonly ToolResultPruningChange[]
+  readonly recordPreimageBytes: number
+  readonly recordIdentity: string
+}
+
+export interface ToolResultPruningHistoryRecordInput {
+  readonly afterRequestIdentity: string
+  readonly messages: readonly ModelMessage[]
+  readonly policy: ToolResultPruningPolicy
+}
+
 export interface ProjectedModelVisibleHistory {
   readonly sessionId?: string
   readonly anchorRequestIdentity?: string
@@ -138,6 +166,18 @@ const ADVISORY_RECORD_KEYS = [
   "message",
   "messageBytes",
   "messageIdentity",
+  "recordPreimageBytes",
+  "recordIdentity",
+] as const
+const PRUNING_INPUT_KEYS = ["afterRequestIdentity", "messages", "policy"] as const
+const PRUNING_RECORD_KEYS = [
+  "version",
+  "afterRequestIdentity",
+  "policy",
+  "inputHistoryIdentity",
+  "outputHistoryIdentity",
+  "resultIdentity",
+  "changes",
   "recordPreimageBytes",
   "recordIdentity",
 ] as const
@@ -406,6 +446,118 @@ export function validateRepeatCallAdvisoryHistoryRecord(value: unknown): RepeatC
   return rebuilt
 }
 
+function canonicalPruningPolicy(policy: ToolResultPruningPolicy): string {
+  return `{"maxToolResultBytes":${policy.maxToolResultBytes},"version":${JSON.stringify(policy.version)}}`
+}
+
+function canonicalPruningChange(change: ToolResultPruningChange): string {
+  return `{"changeIdentity":${JSON.stringify(change.changeIdentity)},"messageIndex":${change.messageIndex},"originalBytes":${change.originalBytes},"originalContentHash":${JSON.stringify(change.originalContentHash)},"policyIdentity":${JSON.stringify(change.policyIdentity)},"prunedBytes":${change.prunedBytes},"removedBytes":${change.removedBytes},"resultContentHash":${JSON.stringify(change.resultContentHash)},"resultSnippetHash":${JSON.stringify(change.resultSnippetHash)}}`
+}
+
+function canonicalPruningPreimage(input: {
+  afterRequestIdentity: string
+  policy: ToolResultPruningPolicy
+  inputHistoryIdentity: string
+  outputHistoryIdentity: string
+  resultIdentity: string
+  changes: readonly ToolResultPruningChange[]
+}): string {
+  return `{"afterRequestIdentity":${JSON.stringify(input.afterRequestIdentity)},"changes":[${input.changes.map((change) => canonicalPruningChange(change)).join(",")}],"inputHistoryIdentity":${JSON.stringify(input.inputHistoryIdentity)},"outputHistoryIdentity":${JSON.stringify(input.outputHistoryIdentity)},"policy":${canonicalPruningPolicy(input.policy)},"resultIdentity":${JSON.stringify(input.resultIdentity)},"version":${JSON.stringify(KDO_H5_R1B_PRUNING_HISTORY_VERSION)}}`
+}
+
+function canonicalPruningRecord(record: ToolResultPruningHistoryRecord): string {
+  return `{"afterRequestIdentity":${JSON.stringify(record.afterRequestIdentity)},"changes":[${record.changes.map((change) => canonicalPruningChange(change)).join(",")}],"inputHistoryIdentity":${JSON.stringify(record.inputHistoryIdentity)},"outputHistoryIdentity":${JSON.stringify(record.outputHistoryIdentity)},"policy":${canonicalPruningPolicy(record.policy)},"recordIdentity":${JSON.stringify(record.recordIdentity)},"recordPreimageBytes":${record.recordPreimageBytes},"resultIdentity":${JSON.stringify(record.resultIdentity)},"version":${JSON.stringify(record.version)}}`
+}
+
+export function createToolResultPruningHistoryRecord(
+  input: ToolResultPruningHistoryRecordInput,
+): ToolResultPruningHistoryRecord {
+  const inputRecord = asPlainRecord(input, "toolResultPruningHistory")
+  exactKeys(inputRecord, PRUNING_INPUT_KEYS, "toolResultPruningHistory")
+  const afterRequestIdentity = requireSha256(inputRecord.afterRequestIdentity, "toolResultPruningHistory.afterRequestIdentity")
+  const policy = validateToolResultPruningPolicy(inputRecord.policy)
+  const result = pruneModelVisibleToolResults(inputRecord.messages as readonly ModelMessage[], policy)
+  if (result.changes.length === 0) throw new TypeError("tool-result pruning history requires at least one deterministic change")
+  const preimage = canonicalPruningPreimage({
+    afterRequestIdentity,
+    policy: result.policy,
+    inputHistoryIdentity: result.inputHistoryIdentity,
+    outputHistoryIdentity: result.outputHistoryIdentity,
+    resultIdentity: result.resultIdentity,
+    changes: result.changes,
+  })
+  const recordPreimageBytes = Buffer.byteLength(preimage, "utf8")
+  const record: ToolResultPruningHistoryRecord = Object.freeze({
+    version: KDO_H5_R1B_PRUNING_HISTORY_VERSION,
+    afterRequestIdentity,
+    policy: result.policy,
+    inputHistoryIdentity: result.inputHistoryIdentity,
+    outputHistoryIdentity: result.outputHistoryIdentity,
+    resultIdentity: result.resultIdentity,
+    changes: result.changes,
+    recordPreimageBytes,
+    recordIdentity: sha256(preimage),
+  })
+  const finalBytes = Buffer.byteLength(canonicalPruningRecord(record), "utf8")
+  if (finalBytes > KDO_H5_R1B_PRUNING_RECORD_MAX_BYTES) {
+    throw new RangeError(`toolResultPruningHistory exceeds ${KDO_H5_R1B_PRUNING_RECORD_MAX_BYTES} canonical JSON bytes`)
+  }
+  return record
+}
+
+export function validateToolResultPruningHistoryRecord(value: unknown): ToolResultPruningHistoryRecord {
+  const record = asPlainRecord(value, "toolResultPruningHistoryRecord")
+  exactKeys(record, PRUNING_RECORD_KEYS, "toolResultPruningHistoryRecord")
+  if (record.version !== KDO_H5_R1B_PRUNING_HISTORY_VERSION) throw new TypeError("unsupported tool-result pruning history record")
+  const afterRequestIdentity = requireSha256(record.afterRequestIdentity, "toolResultPruningHistoryRecord.afterRequestIdentity")
+  const inputHistoryIdentity = requireSha256(record.inputHistoryIdentity, "toolResultPruningHistoryRecord.inputHistoryIdentity")
+  const outputHistoryIdentity = requireSha256(record.outputHistoryIdentity, "toolResultPruningHistoryRecord.outputHistoryIdentity")
+  const resultIdentity = requireSha256(record.resultIdentity, "toolResultPruningHistoryRecord.resultIdentity")
+  const recordIdentity = requireSha256(record.recordIdentity, "toolResultPruningHistoryRecord.recordIdentity")
+  const recordPreimageBytes = requirePositiveSafeInteger(record.recordPreimageBytes, "toolResultPruningHistoryRecord.recordPreimageBytes")
+  const policy = validateToolResultPruningPolicy(record.policy)
+  const result = validateToolResultPruningResult({
+    version: KDO_H5_R1A_RESULT_VERSION,
+    policy,
+    inputHistoryIdentity,
+    outputHistoryIdentity,
+    resultIdentity,
+    changes: record.changes,
+  })
+  if (result.changes.length === 0) throw new TypeError("tool-result pruning history record requires at least one deterministic change")
+  const preimage = canonicalPruningPreimage({
+    afterRequestIdentity,
+    policy: result.policy,
+    inputHistoryIdentity: result.inputHistoryIdentity,
+    outputHistoryIdentity: result.outputHistoryIdentity,
+    resultIdentity: result.resultIdentity,
+    changes: result.changes,
+  })
+  const rebuilt: ToolResultPruningHistoryRecord = Object.freeze({
+    version: KDO_H5_R1B_PRUNING_HISTORY_VERSION,
+    afterRequestIdentity,
+    policy: result.policy,
+    inputHistoryIdentity: result.inputHistoryIdentity,
+    outputHistoryIdentity: result.outputHistoryIdentity,
+    resultIdentity: result.resultIdentity,
+    changes: result.changes,
+    recordPreimageBytes: Buffer.byteLength(preimage, "utf8"),
+    recordIdentity: sha256(preimage),
+  })
+  if (
+    recordPreimageBytes !== rebuilt.recordPreimageBytes ||
+    recordIdentity !== rebuilt.recordIdentity ||
+    canonicalPruningRecord(record as unknown as ToolResultPruningHistoryRecord) !== canonicalPruningRecord(rebuilt)
+  ) {
+    throw new TypeError("tool-result pruning history record derived fields mismatch")
+  }
+  const finalBytes = Buffer.byteLength(canonicalPruningRecord(rebuilt), "utf8")
+  if (finalBytes > KDO_H5_R1B_PRUNING_RECORD_MAX_BYTES) {
+    throw new RangeError(`toolResultPruningHistoryRecord exceeds ${KDO_H5_R1B_PRUNING_RECORD_MAX_BYTES} canonical JSON bytes`)
+  }
+  return rebuilt
+}
+
 function normalizeMessageList(value: unknown, label: string): ModelVisibleMessage[] {
   const raw = ownArrayDataValues(value, label)
   if (raw.length > KDO_H2_R2_LIMITS.maxProjectedMessages) {
@@ -570,6 +722,26 @@ export function projectModelVisibleHistory(value: readonly KodacEvent[] | unknow
       }
       assertRepeatAdvisorySourceBinding(record, assistantRecord, toolResultRecord)
       projected = [...projected, record.message]
+      assertProjectedBounds(projected)
+      continue
+    }
+
+    if (event.type === "model.history.tool_result_pruning.applied") {
+      if (anchorRequestIdentity === undefined) throw new TypeError("tool-result pruning cannot precede a request snapshot anchor")
+      const record = validateToolResultPruningHistoryRecord(event.payload)
+      if (record.afterRequestIdentity !== anchorRequestIdentity) {
+        throw new TypeError("tool-result pruning is bound to a stale request identity")
+      }
+      const replay = pruneModelVisibleToolResults(projected, record.policy)
+      if (
+        replay.inputHistoryIdentity !== record.inputHistoryIdentity ||
+        replay.outputHistoryIdentity !== record.outputHistoryIdentity ||
+        replay.resultIdentity !== record.resultIdentity ||
+        JSON.stringify(replay.changes) !== JSON.stringify(record.changes)
+      ) {
+        throw new TypeError("tool-result pruning replay does not match its durable transformation record")
+      }
+      projected = replay.messages.map((message) => validateModelVisibleMessage(message))
       assertProjectedBounds(projected)
       continue
     }
