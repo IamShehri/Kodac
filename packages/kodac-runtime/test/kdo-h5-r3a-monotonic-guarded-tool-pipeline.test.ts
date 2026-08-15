@@ -374,12 +374,17 @@ test("R3A production remains pure while R3B integrates it only through the pure 
   assert.match(events, /tool\.guard\.evaluated/)
   assert.match(events, /tool\.guard\.execution_observed/)
 
+  const history = source("../src/session/model-visible-history.ts")
+  assert.match(history, /model\.history\.tool_result_pruning\.applied/)
+  assert.match(history, /pruneModelVisibleToolResults/)
+  assert.doesNotMatch(history, /guarded-tool-pipeline|guarded-tool-plan|reduceGuardedToolPipeline|reduceGuardedToolExposure|reduceGuardedToolCallWithPlan/)
+  assert.doesNotMatch(history, /tool\.guard\.evaluated|tool\.guard\.execution_observed|ExecutionGateway|RuntimeOrchestrator|DoneGate/)
+
   const protectedBlobs: Record<string, string> = {
     "../src/agent/repeat-call-signal.ts": "1fd23cbc4dffd6be5ee77446d84bdea2ca27471f",
     "../src/runtime/orchestrator.ts": "b069da69909b282fdbdc2c62279e0297cbd430e9",
     "../src/tools/registry.ts": "0bdf5cfd02efda7cab0c81976c7735bc7b46081b",
     "../src/session/session.ts": "d5f2334b18e89f7bac2bac7422ed8a33669b8afd",
-    "../src/session/model-visible-history.ts": "06909401c6ddf2880154eb3d5fb1fe646d12d7fb",
     "../src/session/model-visible-request.ts": "0f4c7ef7ef0f4e4e1baa90944c39639c1dfa07a6",
     "../src/agent/tool-result-pruning.ts": "66cfee69032c4c24331e8cb9098a86a1d7b9135e",
     "../src/trust/policy.ts": "b4134e430204123bebe053ffc9105f05fca611c9",
