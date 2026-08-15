@@ -66,6 +66,16 @@ function guardDecision(kind: string, id: string, extra: Record<string, unknown> 
   }
 }
 
+function minimalObserveDecision(id: string): Record<string, unknown> {
+  return {
+    version: KDO_H5_R3A_DECISION_VERSION,
+    decisionId: id,
+    stageId: "s",
+    code: "c",
+    kind: "observe",
+  }
+}
+
 function guardRule(
   ruleId: string,
   toolName: string,
@@ -313,11 +323,12 @@ test("R3B plan limit and uniqueness boundaries fail closed at limit plus one", (
     callRules: [guardRule("one", "test.alpha", "cap.alpha", []), guardRule("two", "test.alpha", "cap.alpha", [])],
   }), pair), /duplicate toolName\/capability pair/)
 
-  const tools = Array.from({ length: 9 }, (_, index) => ({ name: `test.${index}`, capability: `cap.${index}` }))
+  const tools = Array.from({ length: 9 }, (_, index) => ({ name: `t${index}`, capability: `c${index}` }))
   const totalOverflow = guardPlan({
-    callRules: tools.map((tool, index) => guardRule(`rule-${index}`, tool.name, tool.capability,
-      Array.from({ length: 114 }, (_, decisionIndex) => guardDecision("observe", `r${index}-d${decisionIndex}`)))),
+    callRules: tools.map((tool, index) => guardRule(`r${index}`, tool.name, tool.capability,
+      Array.from({ length: 114 }, (_, decisionIndex) => minimalObserveDecision(`d${decisionIndex}`)))),
   })
+  assert.ok(Buffer.byteLength(totalOverflow, "utf8") <= KDO_H5_R3B_PLAN_LIMITS.maxPlanJsonBytes)
   assert.throws(() => reduceGuardedToolExposure(totalOverflow, JSON.stringify(tools)), /total decisions/)
 })
 
@@ -326,11 +337,11 @@ test("R3B guard evidence is deterministic bounded and never serves as gateway pe
     const provider = new FixtureModelProvider([{
       assistant: "",
       finishReason: "tool_calls",
-      toolCalls: [{ id: "call-stable", name: "test.stable", input: { value: "provider" } }],
+      toolCalls: [{ id: "call-stable", name: "test.stable", input: { value: "RAW_PROVIDER_INPUT_MARKER" } }],
     }])
     const tool: RuntimeTool = { name: "test.stable", capability: "cap.stable", async execute() { return null } }
     const plan = guardPlan({ callRules: [guardRule("stable", tool.name, tool.capability, [
-      guardDecision("replace_input", "rewrite-stable", { input: { value: "effective" } }),
+      guardDecision("replace_input", "rewrite-stable", { input: { value: "RAW_EFFECTIVE_INPUT_MARKER" } }),
     ])] })
     const { runner, sink } = harness(provider, tool)
     await runner.run({ provider: "fixture", model: "fixture/model", messages: [{ role: "user", content: "run" }], guardPlanJson: plan })
@@ -349,8 +360,8 @@ test("R3B guard evidence is deterministic bounded and never serves as gateway pe
     assert.match(String(payload[key]), /^[0-9a-f]{64}$/)
   }
   assert.equal(payload.blocked, false)
-  assert.equal(JSON.stringify(payload).includes("provider"), false)
-  assert.equal(JSON.stringify(payload).includes("effective"), false)
+  assert.equal(JSON.stringify(payload).includes("RAW_PROVIDER_INPUT_MARKER"), false)
+  assert.equal(JSON.stringify(payload).includes("RAW_EFFECTIVE_INPUT_MARKER"), false)
   assert.ok(Buffer.byteLength(JSON.stringify(payload), "utf8") < 2048)
 })
 
