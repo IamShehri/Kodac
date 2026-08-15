@@ -1,3 +1,4 @@
+export * from "./agent/guarded-tool-pipeline.ts"
 export * from "./agent/loop.ts"
 export * from "./agent/repeat-call-signal.ts"
 export * from "./agent/tool-result-pruning.ts"
