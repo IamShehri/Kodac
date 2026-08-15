@@ -304,7 +304,7 @@ export class BoundedAgentLoop {
 
   private async runExclusive(input: AgentLoopInput): Promise<AgentLoopResult> {
     const limits = resolveLimits(input.limits)
-    let pruningPolicy
+    let pruningPolicy: ReturnType<typeof createToolResultPruningPolicy> | undefined
     if (input.toolResultPruningMaxBytes !== undefined) {
       if (typeof input.toolResultPruningMaxBytes !== "number") {
         throw new TypeError("toolResultPruningMaxBytes must be a primitive number")
