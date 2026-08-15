@@ -139,3 +139,43 @@ Portions of `src/agent/repeat-call-signal.ts` are behaviorally ported and adapte
 Kodac ports only the consecutive same-tool/same-input chain concept. The implementation replaces DeepCode's mutable tracker and permissive argument stringification with an explicit serialized state transition, strict JSON/JCS-compatible canonicalization, bounded UTF-8 inputs, domain-separated SHA-256 structural identities, and evidence-safe structural signals. DeepCode's model-visible reminder text, raw argument preview, runner integration, and hard-stop semantics are not ported.
 
 The MIT license text and upstream copyright notice reproduced in the immediately preceding HKUDS DeepCode section apply to this adaptation as well.
+
+## HKUDS DeepCode guarded tool-pipeline contract adaptation
+
+Portions of `src/agent/guarded-tool-pipeline.ts` are an architectural/behavioral port of selected hook-fold and runner contract ideas from:
+
+- Project: DeepCode
+- Repository: https://github.com/HKUDS/DeepCode
+- Pinned commit: `287510fbf6820147a48adf79f7fd86b0ed1afe92`
+- Pinned tree: `7f44b320f86d04d4315242fabc74f1b325829be8`
+- Runner reference: `core/agent_runtime/runner.py`
+- Runner blob: `645ab82f768214cce0794984c4bc9b92b099ce5a`
+- Lifecycle reference: `core/agent_runtime/hook.py`
+- Lifecycle blob: `b0bbe5ea880f8688306a348ca72f2a29d4ffc9cc`
+- Matcher reference: `core/harness/hooks/events.py`
+- Matcher blob: `ed393156d9e53d543220387fa4421785a0ce0b83`
+- Fold reference: `core/harness/hooks/engine.py`
+- Fold blob: `26f66a1199057077372e26d831f58e7d54bf5d89`
+- Root license blob: `b3ba37ce442298d5bdec96e2e52a8a812a25f123`
+- License: MIT
+- Upstream copyright: Copyright (c) 2025 Data Intelligence Lab@HKU
+
+Kodac deliberately does not port DeepCode's shell-command hook execution, workspace-discovered executable callbacks, permission-hook allow authority, completion-order last-writer rewrite semantics, post-hook evidence mutation, or stop-hook continuation authority. R3A reduces inert serialized declarative decisions through a deterministic monotonic state transition: tools may only be removed, calls may only be blocked, and same-tool/same-capability input rewrites always create new structural identities and require later K2 re-evaluation before any active execution integration.
+
+The MIT license text and upstream copyright notice reproduced in the earlier HKUDS DeepCode section apply to this adaptation as well.
+
+## wrtnlabs/agentica validation-feedback design reference
+
+R3A also studies the validation-feedback design described by:
+
+- Project: Agentica
+- Repository: https://github.com/wrtnlabs/agentica
+- Pinned commit: `dc91f4307a3f2ee25e1ee07cf48777fcd13b6b0d`
+- Reference path: `website/content/docs/concepts/function-calling.mdx`
+- Reference blob: `9e5577511d65369e8439a958683b81e541dc87ee`
+- License: MIT
+- LICENSE blob: `886b7e88682164a5a22e609120c9f96c9ea57216`
+- Copyright: Copyright (c) 2025 Wrtn Technologies
+- Intake mode: STUDY_ONLY
+
+No Agentica runtime source or dependency is copied or imported by H5-R3A. Kodac adopts only the design lesson that argument/schema validation failures can improve recovery feedback. In Kodac's authority model, validation failure may narrow/block a future tool call, while validation success never grants permission and can never bypass K2.
