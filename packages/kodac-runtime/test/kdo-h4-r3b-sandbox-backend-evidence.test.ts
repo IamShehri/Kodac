@@ -213,6 +213,9 @@ test("H4-R3B capability runtime ordering is canonical bounded detached and fail-
     ["runc"],
     ["fallback"],
     ["unknown"],
+    ["toString"],
+    ["constructor"],
+    ["__proto__"],
   ]) {
     assert.throws(() => fixtureCapability({ semanticRuntimeClasses: semanticRuntimeClasses as never }))
   }
