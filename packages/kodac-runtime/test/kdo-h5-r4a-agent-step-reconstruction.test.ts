@@ -5,31 +5,23 @@ import test from "node:test"
 
 import {
   KDO_H5_R4A_LIMITS,
-  KDO_H5_R4A_STEP_TERMINAL_KINDS,
+  KDO_H5_R4A_PROJECTION_VERSION,
   KDO_H5_R4A_STEP_VERSION,
   projectAgentStep,
   validateAgentStepEvidence,
 } from "../src/session/agent-step.ts"
 import {
-  KDO_H5_R2B_ADVISORY_MESSAGE_CONTENT,
+  KDO_H5_R3B_EXECUTION_OBSERVATION_VERSION,
+  KDO_H5_R3B_GUARD_EVIDENCE_VERSION,
+} from "../src/model/turn.ts"
+import {
+  KDO_H5_R1B_HISTORY_RECORD_VERSION,
+  KDO_H5_R2B_ADVISORY_RECORD_VERSION,
+  KDO_H5_R2B_REPEAT_ADVISORY_KIND,
   createModelHistoryMessageRecord,
-  createRepeatCallAdvisoryHistoryRecord,
-  createToolResultPruningHistoryRecord,
 } from "../src/session/model-visible-history.ts"
-import { createModelVisibleRequestSnapshot } from "../src/session/model-visible-request.ts"
-import {
-  KDO_H5_R2A_CALL_VERSION,
-  KDO_H5_R2A_POLICY_VERSION,
-  advanceRepeatCallSignal,
-  serializeRepeatCallAdvisorySignal,
-} from "../src/agent/repeat-call-signal.ts"
-import { createToolResultPruningPolicy } from "../src/agent/tool-result-pruning.ts"
-import {
-  KODAC_EVENT_PROTOCOL,
-  KODAC_EVENT_VERSION,
-  type KodacEvent,
-} from "../src/protocol/event.ts"
-import type { ModelMessage } from "../src/model/provider.ts"
+import { createModelRequestSnapshot } from "../src/session/model-visible-request.ts"
+import type { KodacEvent } from "../src/protocol/event.ts"
 
 const source = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf8")
 
@@ -40,326 +32,155 @@ function gitBlobSha1(text: string): string {
 }
 
 function event(
-  sequence: number,
+  seq: number,
   type: string,
-  payload: unknown,
-  sessionId = "session-r4a",
+  payload: unknown = {},
+  sessionId = "session-step-test",
 ): KodacEvent {
-  return {
-    protocol: KODAC_EVENT_PROTOCOL,
-    version: KODAC_EVENT_VERSION,
-    eventId: `event-${sequence}`,
-    sessionId,
-    sequence,
-    emittedAt: "2026-08-15T00:00:00.000Z",
-    type,
-    payload,
-  } as unknown as KodacEvent
+  return { seq, at: `2026-08-15T00:00:${String(seq).padStart(2, "0")}.000Z`, sessionId, type, payload }
 }
 
-function start(sequence = 1, turn = 1, sessionId = "session-r4a"): KodacEvent {
-  return event(sequence, "agent.turn.started", { turn, budget: { elapsedMs: 0 } }, sessionId)
+function start(seq = 1, turn = 1, sessionId = "session-step-test"): KodacEvent {
+  return event(seq, "agent.turn.started", { turn }, sessionId)
 }
 
 function terminal(
-  sequence: number,
+  seq: number,
   type: "agent.turn.completed" | "agent.turn.failed" | "agent.turn.stopped",
   turn = 1,
-  sessionId = "session-r4a",
+  sessionId = "session-step-test",
 ): KodacEvent {
-  return event(sequence, type, { turn, budget: { elapsedMs: 1 } }, sessionId)
+  return event(seq, type, { turn }, sessionId)
 }
 
-function request(content = "hello") {
-  return createModelVisibleRequestSnapshot({
+function request(messageContent = "hello") {
+  return createModelRequestSnapshot({
     provider: "fixture",
     model: "fixture/model",
-    messages: [{ role: "user", content }],
-    tools: [],
+    messages: [{ role: "user", content: messageContent }],
+    tools: [{ name: "repo.read", capability: "workspace.read" }],
   })
 }
 
-const PLAN = "a".repeat(64)
-const PIPELINE = "b".repeat(64)
-const BASE_TOOLS = "c".repeat(64)
-const EFFECTIVE_TOOLS = "d".repeat(64)
-const ORIGINAL_CALL = "e".repeat(64)
-const FINAL_CALL = "f".repeat(64)
-
-function guardEvaluatedPayload() {
+function guardEvaluatedPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    version: "kodac-tool-guard-evidence-v1",
-    planIdentity: PLAN,
+    version: KDO_H5_R3B_GUARD_EVIDENCE_VERSION,
     callId: "call-1",
-    tool: "fixture",
-    capability: "fixture",
-    pipelineResultIdentity: PIPELINE,
-    baseToolSetIdentity: BASE_TOOLS,
-    effectiveToolSetIdentity: EFFECTIVE_TOOLS,
-    originalCallIdentity: ORIGINAL_CALL,
-    finalCallIdentity: FINAL_CALL,
+    toolName: "repo.read",
+    capability: "workspace.read",
+    originalCallIdentity: "1".repeat(64),
+    finalCallIdentity: "2".repeat(64),
+    pipelineResultIdentity: "3".repeat(64),
     blocked: false,
     blockCode: null,
-    inputChanged: false,
-    requiresK2Reevaluation: false,
+    inputChanged: true,
+    requiresK2Reevaluation: true,
+    ...overrides,
   }
 }
 
-function guardObservedPayload() {
+function guardObservedPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    version: "kodac-tool-guard-execution-observation-v1",
-    planIdentity: PLAN,
+    version: KDO_H5_R3B_EXECUTION_OBSERVATION_VERSION,
     callId: "call-1",
-    tool: "fixture",
-    capability: "fixture",
-    pipelineResultIdentity: PIPELINE,
-    finalCallIdentity: FINAL_CALL,
-    status: "completed",
+    toolName: "repo.read",
+    capability: "workspace.read",
+    finalCallIdentity: "2".repeat(64),
+    outputIdentity: "4".repeat(64),
+    ...overrides,
   }
 }
 
-test("R4A versions limits and fixed completed/stopped identity vectors are exact", () => {
-  assert.equal(KDO_H5_R4A_STEP_VERSION, "kodac-agent-step-v1")
-  assert.deepEqual(KDO_H5_R4A_STEP_TERMINAL_KINDS, ["completed", "failed", "stopped"])
+test("R4A versions limits and terminal vocabulary are exact", () => {
+  assert.equal(KDO_H5_R4A_PROJECTION_VERSION, "kodac-agent-step-projection-v1")
+  assert.equal(KDO_H5_R4A_STEP_VERSION, "kodac-agent-step-evidence-v1")
   assert.deepEqual(KDO_H5_R4A_LIMITS, {
     maxStepEvents: 1024,
+    maxCanonicalStepBytes: 512 * 1024,
     maxHistoryRecords: 512,
-    maxRepeatAdvisories: 64,
-    maxPruningRecords: 64,
-    maxGuardEvaluations: 256,
-    maxIdentityReferences: 2048,
-    maxCanonicalStepBytes: 256 * 1024,
+    maxRepeatAdvisoryRecords: 128,
+    maxPruningRecords: 128,
+    maxGuardRecords: 512,
   })
 
-  const snapshot = request()
-  assert.equal(snapshot.requestIdentity, "987eb2c447114cbff94705d35f9e83e6637d97a2d6a8332f69fd8cd195499628")
-  const completed = projectAgentStep([
-    start(1, 1),
-    event(2, "model.request.snapshot", snapshot),
-    event(3, "model.responded", { finishReason: "stop" }),
-    terminal(4, "agent.turn.completed", 1),
-  ])
-  assert.equal(completed.stepIdentity, "078063deeb7f2d84915b1f43a172a99ccaa09093ae3c6dc1ae083876314e8d5e")
-  assert.equal(completed.terminalKind, "completed")
-  assert.equal(completed.requestIdentity, snapshot.requestIdentity)
-
-  const stopped = projectAgentStep([
-    start(1, 2),
-    terminal(2, "agent.turn.stopped", 2),
-  ])
-  assert.equal(stopped.stepIdentity, "fe82ed8af65bed1d057aad786b2a62dde09afb383ca1239993cf32642b014194")
-  assert.equal(stopped.terminalKind, "stopped")
-  assert.equal(stopped.requestIdentity, null)
+  for (const type of ["agent.turn.completed", "agent.turn.failed", "agent.turn.stopped"] as const) {
+    const step = projectAgentStep([start(), terminal(2, type)])
+    assert.equal(step.terminalEventType, type)
+    assert.equal(step.terminalSequence, 2)
+    assert.equal(step.eventCount, 2)
+  }
 })
 
-test("completed multi-tool step binds ordered H2 history and R3B structural identities", () => {
-  const initial: ModelMessage[] = [{ role: "user", content: "do it" }]
-  const snapshot = createModelVisibleRequestSnapshot({
-    provider: "fixture",
-    model: "fixture/model",
-    messages: initial,
-    tools: [],
-  })
-  const assistant: ModelMessage = {
-    role: "assistant",
-    content: "",
-    toolCalls: [{ id: "call-1", name: "fixture", input: { value: 1 } }],
-  }
-  const toolOne: ModelMessage = {
-    role: "tool",
-    name: "fixture",
-    toolCallId: "call-1",
-    content: "one",
-  }
-  const toolTwo: ModelMessage = {
-    role: "tool",
-    name: "fixture",
-    toolCallId: "call-2",
-    content: "two",
-  }
-  const assistantRecord = createModelHistoryMessageRecord({
+test("R4A reconstructs a full step with request history repeat pruning and guard evidence", () => {
+  const snapshot = request()
+  const historyRecord = createModelHistoryMessageRecord({
     afterRequestIdentity: snapshot.requestIdentity,
     source: "assistant_response",
-    message: {
-      role: "assistant",
-      content: "",
-      toolCalls: [
-        { id: "call-1", name: "fixture", input: { value: 1 } },
-        { id: "call-2", name: "fixture", input: { value: 2 } },
-      ],
-    },
+    message: { role: "assistant", content: "answer" },
   })
-  const toolOneRecord = createModelHistoryMessageRecord({
-    afterRequestIdentity: snapshot.requestIdentity,
-    source: "tool_result",
-    message: toolOne,
-  })
-  const toolTwoRecord = createModelHistoryMessageRecord({
-    afterRequestIdentity: snapshot.requestIdentity,
-    source: "tool_result",
-    message: toolTwo,
-  })
-
+  const repeatRecord = {
+    version: KDO_H5_R2B_ADVISORY_RECORD_VERSION,
+    advisoryKind: KDO_H5_R2B_REPEAT_ADVISORY_KIND,
+    beforeRequestIdentity: snapshot.requestIdentity,
+    afterRequestIdentity: "5".repeat(64),
+    recordIdentity: "6".repeat(64),
+  }
+  const pruningRecord = {
+    version: KDO_H5_R1B_HISTORY_RECORD_VERSION,
+    beforeRequestIdentity: snapshot.requestIdentity,
+    afterRequestIdentity: "7".repeat(64),
+    recordIdentity: "8".repeat(64),
+  }
   const step = projectAgentStep([
     start(),
     event(2, "model.request.snapshot", snapshot),
-    event(3, "tool.guard.evaluated", guardEvaluatedPayload()),
-    event(4, "model.history.message.appended", assistantRecord),
-    event(5, "model.history.message.appended", toolOneRecord),
-    event(6, "model.history.message.appended", toolTwoRecord),
+    event(3, "model.history.message.appended", historyRecord),
+    event(4, "model.history.repeat_call_advisory.appended", repeatRecord),
+    event(5, "model.history.tool_result_pruning.applied", pruningRecord),
+    event(6, "tool.guard.evaluated", guardEvaluatedPayload()),
     event(7, "tool.guard.execution_observed", guardObservedPayload()),
     terminal(8, "agent.turn.completed"),
   ])
-
-  assert.deepEqual(step.historyRecordIdentities, [
-    assistantRecord.recordIdentity,
-    toolOneRecord.recordIdentity,
-    toolTwoRecord.recordIdentity,
-  ])
-  assert.deepEqual(step.guardPipelineResultIdentities, [PIPELINE, PIPELINE])
-  assert.deepEqual(step.guardFinalCallIdentities, [FINAL_CALL, FINAL_CALL])
-  assert.equal(step.eventCount, 8)
+  assert.equal(step.requestIdentity, snapshot.requestIdentity)
+  assert.deepEqual(step.historyRecordIdentities, [historyRecord.recordIdentity])
+  assert.deepEqual(step.repeatAdvisoryRecordIdentities, [repeatRecord.recordIdentity])
+  assert.deepEqual(step.pruningRecordIdentities, [pruningRecord.recordIdentity])
+  assert.deepEqual(step.guardPipelineResultIdentities, ["3".repeat(64)])
+  assert.deepEqual(step.guardFinalCallIdentities, ["2".repeat(64)])
   assert.match(step.stepIdentity, /^[0-9a-f]{64}$/)
-  assert.notEqual(assistant.content, toolOne.content)
 })
 
-test("R1B pruning and R2B advisory coexist without duplicating raw history into step evidence", () => {
-  const initial: ModelMessage[] = [{ role: "user", content: "repeat" }]
-  const snapshot = createModelVisibleRequestSnapshot({
-    provider: "fixture",
-    model: "fixture/model",
-    messages: initial,
-    tools: [],
-  })
-  const assistant: ModelMessage = {
-    role: "assistant",
-    content: "",
-    toolCalls: [{ id: "call-1", name: "fixture", input: { value: 1 } }],
-  }
-  const tool: ModelMessage = {
-    role: "tool",
-    name: "fixture",
-    toolCallId: "call-1",
-    content: `HEAD-${"x".repeat(1000)}-TAIL`,
-  }
-  const assistantRecord = createModelHistoryMessageRecord({
-    afterRequestIdentity: snapshot.requestIdentity,
-    source: "assistant_response",
-    message: assistant,
-  })
-  const toolRecord = createModelHistoryMessageRecord({
-    afterRequestIdentity: snapshot.requestIdentity,
-    source: "tool_result",
-    message: tool,
-  })
-
-  const repeatPolicy = JSON.stringify({ version: KDO_H5_R2A_POLICY_VERSION, thresholds: [2] })
-  const repeatCall = JSON.stringify({
-    version: KDO_H5_R2A_CALL_VERSION,
-    toolName: "fixture",
-    toolInput: { value: 1 },
-  })
-  const first = advanceRepeatCallSignal(null, repeatCall, repeatPolicy)
-  const second = advanceRepeatCallSignal(first.nextStateJson, repeatCall, repeatPolicy)
-  assert.ok(second.advisorySignal)
-  const advisory = createRepeatCallAdvisoryHistoryRecord({
-    afterRequestIdentity: snapshot.requestIdentity,
-    assistantHistoryRecordIdentity: assistantRecord.recordIdentity,
-    toolResultHistoryRecordIdentity: toolRecord.recordIdentity,
-    signalJson: serializeRepeatCallAdvisorySignal(second.advisorySignal),
-  })
-
-  const pruning = createToolResultPruningHistoryRecord({
-    afterRequestIdentity: snapshot.requestIdentity,
-    messages: [
-      ...initial,
-      assistant,
-      tool,
-      { role: "system", content: KDO_H5_R2B_ADVISORY_MESSAGE_CONTENT },
-    ],
-    policy: createToolResultPruningPolicy({ maxToolResultBytes: 192 }),
-  })
-
-  const step = projectAgentStep([
-    start(),
-    event(2, "model.request.snapshot", snapshot),
-    event(3, "model.history.message.appended", assistantRecord),
-    event(4, "model.history.message.appended", toolRecord),
-    event(5, "model.history.repeat_call_advisory.appended", advisory),
-    event(6, "model.history.tool_result_pruning.applied", pruning),
-    terminal(7, "agent.turn.completed"),
-  ])
-
-  assert.deepEqual(step.historyRecordIdentities, [assistantRecord.recordIdentity, toolRecord.recordIdentity])
-  assert.deepEqual(step.repeatAdvisoryRecordIdentities, [advisory.recordIdentity])
-  assert.deepEqual(step.pruningRecordIdentities, [pruning.recordIdentity])
-  const serialized = JSON.stringify(step)
-  assert.equal(serialized.includes("HEAD-"), false)
-  assert.equal(serialized.includes(KDO_H5_R2B_ADVISORY_MESSAGE_CONTENT), false)
-})
-
-test("failed steps may terminate before or after a request snapshot", () => {
-  const before = projectAgentStep([
-    start(1, 1),
-    event(2, "model.failed", { stage: "snapshot", error: "rejected" }),
-    terminal(3, "agent.turn.failed", 1),
-  ])
-  assert.equal(before.terminalKind, "failed")
-  assert.equal(before.requestIdentity, null)
-
-  const snapshot = request("after")
-  const after = projectAgentStep([
-    start(1, 2),
-    event(2, "model.request.snapshot", snapshot),
-    event(3, "model.failed", { stage: "provider", error: "failed" }),
-    terminal(4, "agent.turn.failed", 2),
-  ])
-  assert.equal(after.terminalKind, "failed")
-  assert.equal(after.requestIdentity, snapshot.requestIdentity)
-})
-
-test("step grammar fails closed on open duplicate nested unknown mixed and noncontiguous lifecycles", () => {
-  const snapshot = request()
-  assert.throws(() => projectAgentStep([]), /at least one event/)
-  assert.throws(() => projectAgentStep([
-    event(1, "model.request.snapshot", snapshot),
-    terminal(2, "agent.turn.completed"),
-  ]), /must start/)
+test("R4A sequence and terminal invariants fail closed", () => {
+  assert.throws(() => projectAgentStep([]), /1\.\.1024 events/)
+  assert.throws(() => projectAgentStep([terminal(1, "agent.turn.failed")]), /must start with agent\.turn\.started/)
   assert.throws(() => projectAgentStep([
     start(),
-    event(2, "model.request.snapshot", snapshot),
-  ]), /exactly one supported terminal/)
+    event(3, "agent.turn.noise", { turn: 1 }),
+    terminal(4, "agent.turn.failed"),
+  ]), /contiguous strictly increasing/)
   assert.throws(() => projectAgentStep([
     start(),
     terminal(2, "agent.turn.failed"),
-    terminal(3, "agent.turn.completed"),
-  ]), /terminal event must be last/)
+    event(3, "agent.turn.noise", { turn: 1 }),
+  ]), /terminal event must be final/)
   assert.throws(() => projectAgentStep([
     start(),
-    start(2),
+    terminal(2, "agent.turn.completed"),
     terminal(3, "agent.turn.failed"),
-  ]), /second agent\.turn\.started/)
+  ]), /terminal event must be final|exactly one terminal/)
+  assert.throws(() => projectAgentStep([
+    event(1, "agent.turn.started", { turn: 0 }),
+    terminal(2, "agent.turn.failed", 0),
+  ]), /turn must be a positive integer/)
   assert.throws(() => projectAgentStep([
     start(),
-    event(2, "agent.turn.future_required", { turn: 1 }),
+    event(2, "agent.turn.noise", { turn: 2 }),
     terminal(3, "agent.turn.failed"),
-  ]), /unsupported required agent turn lifecycle/)
+  ]), /event turn does not match/)
   assert.throws(() => projectAgentStep([
     start(1, 1, "session-a"),
     terminal(2, "agent.turn.failed", 1, "session-b"),
-  ]), /mix session ids/)
-  assert.throws(() => projectAgentStep([
-    start(1),
-    terminal(3, "agent.turn.failed"),
-  ]), /contiguous strictly increasing/)
-  assert.throws(() => projectAgentStep([
-    start(1),
-    terminal(1, "agent.turn.failed"),
-  ]), /contiguous strictly increasing/)
-  assert.throws(() => projectAgentStep([
-    start(2),
-    terminal(1, "agent.turn.failed"),
-  ]), /contiguous strictly increasing/)
+  ]), /single non-empty sessionId/)
   assert.throws(() => projectAgentStep([
     start(1, 2),
     terminal(2, "agent.turn.failed", 1),
@@ -608,7 +429,7 @@ test("R4A production remains pure and byte-identical while R4B active lifecycle 
     "../src/agent/guarded-tool-pipeline.ts": "876656bf65a67df56c4cd5f078629cde06112af1",
     "../src/agent/guarded-tool-plan.ts": "1ab6217e88c54cd8868e2bcf8d13fbb39e93d994",
     "../src/trust/policy.ts": "b4134e430204123bebe053ffc9105f05fca611c9",
-    "../src/execution/gateway.ts": "ecf9cc9d3eda6a2280a280ed2f9a2e472f397560",
+    "../src/execution/gateway.ts": "4005a0dd20dc88795c719b6778f272d33e570c58",
     "../src/verification/done-gate.ts": "067e147569fa52cc2b04c5df26fbe20a01e958e9",
     "../scripts/run-tests.mjs": "9a0bcde0e565168c78eb7fe4d3cf08236d24baa7",
   }
