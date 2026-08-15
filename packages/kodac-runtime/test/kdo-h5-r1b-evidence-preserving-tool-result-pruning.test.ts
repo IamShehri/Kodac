@@ -132,11 +132,11 @@ function directFixture(contents: string[]): {
 test("R1B predecessor documents primitive identity and non-authority boundary are pinned", () => {
   assert.equal(
     gitTextBlobSha1(source("../../../docs/planning/KODAC_KDO_H5_R1A_MODEL_FREE_TOOL_RESULT_PRUNING_AUTHORIZATION_2026-08-15.md")),
-    "6986328c44812f14035b43892a9bf4c0db0f534f",
+    "e61d416a04945f65589e19f4c1969934aeada695",
   )
   assert.equal(
     gitTextBlobSha1(source("../../../docs/planning/KODAC_KDO_H5_R1A_MODEL_FREE_TOOL_RESULT_PRUNING_EVIDENCE_2026-08-15.md")),
-    "9cdcce0070638096779cdf30c8a20e20b45d9c62",
+    "1cdf9aefd50b0a008fb2eac6a52764a4e34b6498",
   )
   assert.equal(gitTextBlobSha1(source("../src/agent/tool-result-pruning.ts")), "66cfee69032c4c24331e8cb9098a86a1d7b9135e")
   assert.equal(gitTextBlobSha1(source("../src/model/turn.ts")), "9ae1298b3a4f917417efbe2228e0708bc813147d")
@@ -166,7 +166,7 @@ test("R1B structural record replays exact R1A output while canonical source hist
   assert.match(record.recordIdentity, /^[0-9a-f]{64}$/)
   assert.ok(Buffer.byteLength(JSON.stringify(record), "utf8") < KDO_H5_R1B_PRUNING_RECORD_MAX_BYTES)
   assert.equal(JSON.stringify(record).includes(rawMarker), false)
-  assert.equal(JSON.stringify(record).includes("[tool-result-pruned v1]"), false)
+  assert.equal(JSON.stringify(record).includes("kodac-tool-result-pruned-v1"), false)
 
   const canonicalBefore = projectModelVisibleHistory(fixture.events)
   assert.equal(canonicalBefore.messages.some((message) => message.content === rawMarker), true)
@@ -175,7 +175,7 @@ test("R1B structural record replays exact R1A output while canonical source hist
   assert.deepEqual(transformed.messages, expected.messages)
   const transformedTool = transformed.messages.findLast((message) => message.role === "tool")
   assert.ok(transformedTool)
-  assert.match(transformedTool.content, /^\[tool-result-pruned v1\]/)
+  assert.match(transformedTool.content, /\[kodac-tool-result-pruned-v1 original-bytes=\d+\]/)
   assert.ok(Buffer.byteLength(transformedTool.content, "utf8") <= 256)
   assert.equal(projectModelVisibleHistory(fixture.events).messages.some((message) => message.content === rawMarker), true)
 })
@@ -190,9 +190,14 @@ test("R1B record validator rejects stale tampered reordered and hostile evidence
   assert.throws(() => validateToolResultPruningHistoryRecord({ ...record, recordIdentity: "0".repeat(64) }), /derived fields mismatch/)
   assert.throws(() => validateToolResultPruningHistoryRecord({ ...record, resultIdentity: "f".repeat(64) }), /resultIdentity mismatch/)
   assert.throws(() => validateToolResultPruningHistoryRecord({ ...record, changes: [...record.changes].reverse() }), /ordered|resultIdentity|derived fields/)
+  const staleRecord = createToolResultPruningHistoryRecord({
+    afterRequestIdentity: "f".repeat(64),
+    messages: fixture.messages,
+    policy,
+  })
   assert.throws(() => projectModelVisibleHistory([
     ...fixture.events,
-    event(fixture.events.length + 1, "model.history.tool_result_pruning.applied", { ...record, afterRequestIdentity: "f".repeat(64) }),
+    event(fixture.events.length + 1, "model.history.tool_result_pruning.applied", staleRecord),
   ]), /stale request identity/)
 
   let traps = 0
@@ -307,7 +312,7 @@ test("R1B loop durably transforms before the next H2 snapshot and preserves cano
   assert.ok(secondRequest)
   const secondTool = secondRequest.messages.find((message) => message.role === "tool")
   assert.ok(secondTool)
-  assert.match(secondTool.content, /^\[tool-result-pruned v1\]/)
+  assert.match(secondTool.content, /\[kodac-tool-result-pruned-v1 original-bytes=\d+\]/)
   assert.ok(Buffer.byteLength(secondTool.content, "utf8") <= 256)
   const assistant = secondRequest.messages.find((message) => message.role === "assistant" && message.toolCalls?.length)
   assert.deepEqual(assistant?.toolCalls?.[0], { id: "one", name: "test.echo", input: { stable: "EFFECTIVE_INPUT" } })
@@ -379,7 +384,7 @@ test("R1B legacy maxToolResultChars remains a distinct earlier bound before evid
   assert.ok(canonicalContent.length > 300)
   const nextTool = provider.requests[1]?.messages.find((message) => message.role === "tool")
   assert.ok(nextTool)
-  assert.match(nextTool.content, /^\[tool-result-pruned v1\]/)
+  assert.match(nextTool.content, /\[kodac-tool-result-pruned-v1 original-bytes=\d+\]/)
   assert.ok(Buffer.byteLength(nextTool.content, "utf8") <= 256)
 })
 
@@ -398,7 +403,7 @@ test("R1B record and projector reject unsupported versions and future required h
 })
 
 test("R1B bounds reject invalid primitive configuration before provider use", async () => {
-  for (const invalid of [0, 255, KDO_H5_R1A_LIMITS.maxToolResultBytes + 1, Number.NaN, Number.POSITIVE_INFINITY, 256.5]) {
+  for (const invalid of [0, KDO_H5_R1A_LIMITS.minToolResultBytes - 1, KDO_H5_R1A_LIMITS.maxToolResultBytes + 1, Number.NaN, Number.POSITIVE_INFINITY, 256.5]) {
     const provider = new RecordingProvider([{ assistant: "never", finishReason: "stop", toolCalls: [] }])
     const { loop, session } = loopHarness(provider, [])
     await assert.rejects(() => loop.run({
