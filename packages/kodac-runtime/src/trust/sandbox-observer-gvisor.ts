@@ -254,15 +254,20 @@ function parseJsonRecord(text: unknown, label: string, maxBytes: number): Record
 }
 
 function validateAnnotations(value: unknown): Readonly<Record<string, string>> {
-  if (value === undefined) return Object.freeze({})
+  if (value === undefined) return Object.freeze(Object.create(null) as Record<string, string>)
   const record = asPlainRecord(value, "gVisor state annotations")
   const entries = Object.entries(record)
   if (entries.length > KDO_H4_R3D_LIMITS.maxAnnotations) throw new TypeError(`gVisor state annotations exceed ${KDO_H4_R3D_LIMITS.maxAnnotations} entries`)
-  const normalized: Record<string, string> = {}
+  const normalized = Object.create(null) as Record<string, string>
   for (const [key, rawValue] of entries.sort(([left], [right]) => left.localeCompare(right))) {
     const normalizedKey = boundedString(key, "gVisor state annotation key", KDO_H4_R3D_LIMITS.maxAnnotationBytes, true)
     const normalizedValue = boundedString(rawValue, `gVisor state annotation ${key}`, KDO_H4_R3D_LIMITS.maxAnnotationBytes, true)
-    normalized[normalizedKey] = normalizedValue
+    Object.defineProperty(normalized, normalizedKey, {
+      value: normalizedValue,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
   }
   return Object.freeze(normalized)
 }
