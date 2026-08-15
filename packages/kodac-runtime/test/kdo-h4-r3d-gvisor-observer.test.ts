@@ -79,7 +79,6 @@ function fixtureCandidate() {
   return createGvisorRuntimeObservationCandidate({ plan, state: fixtureState(plan), stats: fixtureStats(plan), process: fixtureProcess() })
 }
 
-
 function linuxOnly(name: string, fn: () => void | Promise<void>): void {
   test(name, { skip: process.platform !== "linux" }, fn)
 }
@@ -167,6 +166,15 @@ test("state parsing is closed bounded duplicate-safe and annotations never affec
   assert.equal(annotations.stateIdentity, noAnnotations.stateIdentity)
   assert.equal(Object.isFrozen(annotations), true)
   assert.equal(Object.isFrozen(annotations.annotations), true)
+
+  const specialAnnotationInput = JSON.parse('{"__proto__":"x","constructor":"y"}') as Record<string, string>
+  const specialAnnotations = fixtureState(plan, specialAnnotationInput)
+  assert.equal(Object.getPrototypeOf(specialAnnotations.annotations), null)
+  assert.equal(Object.hasOwn(specialAnnotations.annotations, "__proto__"), true)
+  assert.equal(specialAnnotations.annotations["__proto__"], "x")
+  assert.equal(Object.hasOwn(specialAnnotations.annotations, "constructor"), true)
+  assert.equal(specialAnnotations.annotations["constructor"], "y")
+  assert.equal(specialAnnotations.stateIdentity, noAnnotations.stateIdentity)
 
   for (const status of ["creating", "created", "stopped", "paused"]) {
     assert.throws(() => parseGvisorStateOutput(JSON.stringify({ ociVersion: "1.2.0", id: FIXTURE_CONTAINER_ID, status, pid: 4242, bundle: FIXTURE_BUNDLE }), plan), /status/)
@@ -337,5 +345,8 @@ test("native source is read-only pidfd/process binding and contains no execution
   assert.match(native, /\/proc\/%ld\/stat/)
   assert.match(native, /strrchr\(/)
   assert.match(native, /KODAC_RUNSC_ARTIFACT_FD 3/)
+  assert.match(native, /#error "pidfd_open syscall number unavailable"/)
+  assert.doesNotMatch(native, /#define\s+SYS_pidfd_open\s+434/)
+  assert.equal([...native.matchAll(/open_and_stat_process_exe\(exe_path/g)].length, 2)
   assert.doesNotMatch(native, /\bkill\s*\(|\bptrace\s*\(|\bexecv?p?\s*\(|\bsocket\s*\(|\bconnect\s*\(|\bmount\s*\(|\bunshare\s*\(|setns\s*\(|docker|containerd/)
 })
