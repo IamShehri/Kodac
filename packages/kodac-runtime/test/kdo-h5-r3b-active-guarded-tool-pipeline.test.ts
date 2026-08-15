@@ -37,6 +37,10 @@ function gitBlobSha1(text: string): string {
   return createHash("sha1").update(`blob ${body.byteLength}\0`).update(body).digest("hex")
 }
 
+function semanticJson(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value)) as unknown
+}
+
 function decision(kind: string, id: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     version: KDO_H5_R3A_DECISION_VERSION,
@@ -122,8 +126,6 @@ function recordingTool(
   return {
     name,
     capability,
-    description: `${name} description`,
-    inputSchema: { type: "object", additionalProperties: true },
     async execute(input) {
       observed.push(input)
       return { observed: input }
@@ -155,7 +157,7 @@ test("R3B plan boundary is strict deterministic pure and reuses unchanged R3A ve
   assert.equal(reduced.planIdentity, exposureA.planIdentity)
   assert.equal(reduced.pipeline.inputChanged, true)
   assert.equal(reduced.pipeline.requiresK2Reevaluation, true)
-  assert.deepEqual(reduced.pipeline.effectiveCall.input, { a: 1, b: 3 })
+  assert.deepEqual(semanticJson(reduced.pipeline.effectiveCall.input), { a: 1, b: 3 })
 
   const r3a = reduceGuardedToolPipeline(JSON.stringify({
     version: KDO_H5_R3A_PIPELINE_VERSION,
@@ -197,7 +199,7 @@ test("R3B serialized plan/exposure/call boundaries reject hostile objects withou
   assert.throws(() => reduceGuardedToolExposure(guardPlan({ callRules: [callRule("bad", "x", "c", [decision("remove_tool", "bad-remove", { toolName: "x", capability: "c" })])] }), registeredPairs([{ name: "x", capability: "c" }])), /may not contain remove_tool/)
 })
 
-test("R3B tool exposure is a strict H2-backed provider subset with descriptors preserved", async () => {
+test("R3B tool exposure is a strict H2-backed provider subset with registry descriptors preserved", async () => {
   const observedA: unknown[] = []
   const observedB: unknown[] = []
   const alpha = recordingTool("test.alpha", "test.alpha", observedA)
@@ -208,12 +210,7 @@ test("R3B tool exposure is a strict H2-backed provider subset with descriptors p
 
   await runner.run({ provider: provider.name, model: "fixture/model", messages: [{ role: "user", content: "hi" }], guardPlanJson: plan })
   assert.equal(provider.requests.length, 1)
-  assert.deepEqual(provider.requests[0]?.tools, [{
-    name: "test.alpha",
-    capability: "test.alpha",
-    description: "test.alpha description",
-    inputSchema: { type: "object", additionalProperties: true },
-  }])
+  assert.deepEqual(provider.requests[0]?.tools, [{ name: "test.alpha", capability: "test.alpha" }])
   const snapshotEvent = session.eventsSnapshot().find((event) => event.type === "model.request.snapshot")
   assert.ok(snapshotEvent)
   assert.deepEqual((snapshotEvent.payload as { tools: unknown[] }).tools, provider.requests[0]?.tools)
@@ -261,7 +258,7 @@ test("R3B rewrite reaches immutable beforeToolCall and tool execution while prov
       },
     },
   )
-  assert.deepEqual(hookCall, { id: "call-1", name: "test.alpha", input: { marker: "EFFECTIVE_ONLY", value: 9 } })
+  assert.deepEqual(semanticJson(hookCall), { id: "call-1", name: "test.alpha", input: { marker: "EFFECTIVE_ONLY", value: 9 } })
   assert.deepEqual(observed, [{ marker: "EFFECTIVE_ONLY", value: 9 }])
   assert.deepEqual(result.toolCalls, [{ id: "call-1", name: "test.alpha", input: { marker: "EFFECTIVE_ONLY", value: 9 } }])
   assert.equal(JSON.stringify(observed).includes("ORIGINAL_SECRET"), false)
@@ -403,7 +400,7 @@ test("R3B R2B repeat advisory is computed from effective rewritten input", async
   const assistantHistory = session.eventsSnapshot().filter((event) => event.type === "model.history.message.appended")
     .map((event) => event.payload as { source?: string; message?: { toolCalls?: Array<{ input: unknown }> } })
     .findLast((record) => record.source === "assistant_response" && record.message?.toolCalls?.length)
-  assert.deepEqual(assistantHistory?.message?.toolCalls?.[0]?.input, { canonical: "same" })
+  assert.deepEqual(semanticJson(assistantHistory?.message?.toolCalls?.[0]?.input), { canonical: "same" })
 })
 
 test("R3B post-execution guard evidence failure prevents successful turn completion", async () => {
