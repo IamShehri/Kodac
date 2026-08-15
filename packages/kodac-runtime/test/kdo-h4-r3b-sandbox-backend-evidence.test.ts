@@ -249,10 +249,18 @@ test("H4-R3B requirement accepts only full canonical R3A workload and secure run
   assert.throws(() => createSandboxExecutionRequirement(duplicate as never), /contain exactly/)
   assert.throws(() => createSandboxExecutionRequirement({ workload: workload.workloadIdentity as never, requiredSemanticRuntimeClass: "gvisor" }))
 
-  for (const field of ["workloadIdentity", "executionIntentIdentity", "confinementRequestIdentity"] as const) {
+  const identityTamperCases = [
+    ["workloadIdentity", /sandbox workload identity mismatch/],
+    ["executionIntentIdentity", /executionIntentIdentity does not match confinement request/],
+    ["confinementRequestIdentity", /confinementRequestIdentity does not match confinement request/],
+  ] as const
+  for (const [field, errorPattern] of identityTamperCases) {
     const broken = clone(workload) as unknown as Record<string, unknown>
     broken[field] = "f".repeat(64)
-    assert.throws(() => createSandboxExecutionRequirement({ workload: broken as never, requiredSemanticRuntimeClass: "gvisor" }), field)
+    assert.throws(
+      () => createSandboxExecutionRequirement({ workload: broken as never, requiredSemanticRuntimeClass: "gvisor" }),
+      errorPattern,
+    )
   }
 
   const brokenNetwork = clone(workload)
