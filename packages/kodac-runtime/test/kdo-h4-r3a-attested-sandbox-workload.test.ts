@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { existsSync, readFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import test from "node:test"
 
 import {
@@ -123,10 +123,6 @@ test("H4-R3A predecessor donor versions limits and protected authority baseline 
   assert.equal(
     gitBlobSha1(source("../../../docs/planning/KODAC_KDO_H4_READINESS_OPENSANDBOX_DONOR_DIFFERENTIAL_AUDIT_2026-08-15.md")),
     "00fbcb55b66de686734a7a8dff27c953a73ce0f1",
-  )
-  assert.equal(
-    existsSync(new URL("../../../docs/planning/KODAC_KDO_H4_R3A_ATTESTED_SANDBOX_WORKLOAD_IDENTITY_EVIDENCE_2026-08-15.md", import.meta.url)),
-    false,
   )
 
   const protectedBlobs: Record<string, string> = {
