@@ -342,8 +342,9 @@ test("result is deeply immutable and exposes no permission or execution-grant vo
   }
 })
 
-test("R3A production source is pure and all protected active authority surfaces remain byte-identical", () => {
+test("R3A production remains pure while R3B integrates it only through the pure plan companion", () => {
   const production = source("../src/agent/guarded-tool-pipeline.ts")
+  assert.equal(gitBlobSha1(production), "876656bf65a67df56c4cd5f078629cde06112af1")
   const imports = [...production.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort()
   assert.deepEqual(imports, ["node:crypto"])
   for (const forbidden of [
@@ -353,16 +354,33 @@ test("R3A production source is pure and all protected active authority surfaces 
     assert.equal(production.includes(forbidden), false, `R3A production source must not contain ${forbidden}`)
   }
 
+  const plan = source("../src/agent/guarded-tool-plan.ts")
+  const planImports = [...plan.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort()
+  assert.deepEqual(planImports, ["./guarded-tool-pipeline.ts", "node:crypto"])
+  assert.match(plan, /reduceGuardedToolPipeline/)
+  assert.doesNotMatch(plan, /node:(?:fs|child_process|net|http|https|tls)|process\.env|\bfetch\s*\(|RuntimeOrchestrator|ExecutionGateway|DoneGate|session\.emit/)
+
+  const turn = source("../src/model/turn.ts")
+  assert.match(turn, /reduceGuardedToolExposure/)
+  assert.match(turn, /reduceGuardedToolCallWithPlan/)
+  assert.doesNotMatch(turn, /node:child_process|node:fs\/promises|import\s*\(.*guard|require\(.*guard/)
+
+  const loop = source("../src/agent/loop.ts")
+  assert.match(loop, /guardPlanJson/)
+  assert.match(loop, /beforeToolCall/)
+  assert.doesNotMatch(loop, /confinement-linux-landlock|confinement-runtime|runConfinedReadOnlyCommand|landlock-run/)
+
+  const events = source("../src/protocol/event.ts")
+  assert.match(events, /tool\.guard\.evaluated/)
+  assert.match(events, /tool\.guard\.execution_observed/)
+
   const protectedBlobs: Record<string, string> = {
-    "../src/agent/loop.ts": "47b160683475068305945c5af8fe2322e20c9cb0",
     "../src/agent/repeat-call-signal.ts": "1fd23cbc4dffd6be5ee77446d84bdea2ca27471f",
-    "../src/model/turn.ts": "401d796b929d350046128371fee4ba719d0d56c9",
     "../src/runtime/orchestrator.ts": "b069da69909b282fdbdc2c62279e0297cbd430e9",
     "../src/tools/registry.ts": "0bdf5cfd02efda7cab0c81976c7735bc7b46081b",
     "../src/session/session.ts": "d5f2334b18e89f7bac2bac7422ed8a33669b8afd",
     "../src/session/model-visible-history.ts": "06909401c6ddf2880154eb3d5fb1fe646d12d7fb",
     "../src/session/model-visible-request.ts": "0f4c7ef7ef0f4e4e1baa90944c39639c1dfa07a6",
-    "../src/protocol/event.ts": "c48b0c4ca3ef900f71ac4f15e9db94d9da5f0096",
     "../src/agent/tool-result-pruning.ts": "66cfee69032c4c24331e8cb9098a86a1d7b9135e",
     "../src/trust/policy.ts": "b4134e430204123bebe053ffc9105f05fca611c9",
     "../src/execution/gateway.ts": "ecf9cc9d3eda6a2280a280ed2f9a2e472f397560",
@@ -371,7 +389,7 @@ test("R3A production source is pure and all protected active authority surfaces 
     "../scripts/run-tests.mjs": "9a0bcde0e565168c78eb7fe4d3cf08236d24baa7",
   }
   for (const [path, expected] of Object.entries(protectedBlobs)) {
-    assert.equal(gitBlobSha1(source(path)), expected, `${path} must remain byte-identical to R3A authorization`)
+    assert.equal(gitBlobSha1(source(path)), expected, `${path} must remain byte-identical to the non-superseded R3A boundary`)
   }
 
   const index = source("../src/index.ts")
