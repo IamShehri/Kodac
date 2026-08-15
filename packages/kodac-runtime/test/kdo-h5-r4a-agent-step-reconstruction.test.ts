@@ -538,8 +538,9 @@ test("AgentStepEvidence is deeply immutable independently validated and identity
   assert.notEqual(step.stepIdentity, differentSession.stepIdentity)
 })
 
-test("R4A production is pure internal-only and protected runtime authority stays byte-identical", () => {
+test("R4A production remains pure and byte-identical while R4B active lifecycle stays non-authoritative", () => {
   const production = source("../src/session/agent-step.ts")
+  assert.equal(gitBlobSha1(production), "a999f1f134167f61266910566612149da91e9a5c")
   const imports = [...production.matchAll(/from\s+["']([^"']+)["']/g)]
     .map((match) => match[1])
     .sort()
@@ -579,10 +580,26 @@ test("R4A production is pure internal-only and protected runtime authority stays
     assert.equal(production.includes(forbidden), false, `R4A production must not contain ${forbidden}`)
   }
 
+  const eventSource = source("../src/protocol/event.ts")
+  assert.match(eventSource, /"agent\.turn\.stopped"/)
+  const lifecycleTypes = [...eventSource.matchAll(/"(agent\.turn\.[a-z_]+)"/g)].map((match) => match[1])
+  assert.deepEqual([...new Set(lifecycleTypes)].sort(), [
+    "agent.turn.completed",
+    "agent.turn.failed",
+    "agent.turn.started",
+    "agent.turn.stopped",
+  ])
+
+  const loopSource = source("../src/agent/loop.ts")
+  assert.match(loopSource, /agent\.turn\.stopped/)
+  assert.match(loopSource, /terminalAttempted/)
+  assert.doesNotMatch(loopSource, /projectAgentStep|validateAgentStepEvidence/)
+
+  const turnSource = source("../src/model/turn.ts")
+  assert.match(turnSource, /onStreamEvent/)
+  assert.doesNotMatch(turnSource, /projectAgentStep|validateAgentStepEvidence/)
+
   const protectedBlobs: Record<string, string> = {
-    "../src/agent/loop.ts": "7353ecb758326dace61e90d18590bb5e942a3414",
-    "../src/model/turn.ts": "9ae1298b3a4f917417efbe2228e0708bc813147d",
-    "../src/protocol/event.ts": "8d837edbbe4e6aceabab17bd9bdf114ab63ff699",
     "../src/session/session.ts": "d5f2334b18e89f7bac2bac7422ed8a33669b8afd",
     "../src/session/model-visible-history.ts": "c534368c8a67cca1509146dee22d489f04f4c9c4",
     "../src/session/model-visible-request.ts": "0f4c7ef7ef0f4e4e1baa90944c39639c1dfa07a6",

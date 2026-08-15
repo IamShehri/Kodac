@@ -129,7 +129,7 @@ function directFixture(contents: string[]): {
   return { events, anchor: snapshot.requestIdentity, messages: projectModelVisibleHistory(events).messages }
 }
 
-test("R1B predecessor documents primitive identity and non-authority boundary are pinned", () => {
+test("R1B predecessor identities remain pinned while R4B observer containment stays outside pruning authority", () => {
   assert.equal(
     gitTextBlobSha1(source("../../../docs/planning/KODAC_KDO_H5_R1A_MODEL_FREE_TOOL_RESULT_PRUNING_AUTHORIZATION_2026-08-15.md")),
     "e61d416a04945f65589e19f4c1969934aeada695",
@@ -139,7 +139,14 @@ test("R1B predecessor documents primitive identity and non-authority boundary ar
     "1cdf9aefd50b0a008fb2eac6a52764a4e34b6498",
   )
   assert.equal(gitTextBlobSha1(source("../src/agent/tool-result-pruning.ts")), "66cfee69032c4c24331e8cb9098a86a1d7b9135e")
-  assert.equal(gitTextBlobSha1(source("../src/model/turn.ts")), "9ae1298b3a4f917417efbe2228e0708bc813147d")
+
+  const turnSource = source("../src/model/turn.ts")
+  assert.match(turnSource, /onStreamEvent/)
+  assert.match(turnSource, /model\.stream\./)
+  assert.equal(turnSource.includes("tool-result-pruning"), false)
+  assert.equal(turnSource.includes("pruneModelVisibleToolResults"), false)
+  assert.equal(turnSource.includes("model.history.tool_result_pruning.applied"), false)
+
   const historySource = source("../src/session/model-visible-history.ts")
   assert.match(historySource, /pruneModelVisibleToolResults/)
   assert.doesNotMatch(historySource, /node:(?:fs|child_process|net|http|https|tls)|process\.env|\bfetch\s*\(|ExecutionGateway|RuntimeOrchestrator|DoneGate/)

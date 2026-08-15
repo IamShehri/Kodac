@@ -421,11 +421,33 @@ export class BoundedAgentLoop {
 
       turnsUsed += 1
       await this.session.emit("agent.turn.started", { turn, budget: budget() })
+      let terminalAttempted = false
+      const emitTurnTerminal = async (
+        type: "agent.turn.completed" | "agent.turn.failed" | "agent.turn.stopped",
+        payload: Record<string, unknown>,
+      ): Promise<void> => {
+        if (terminalAttempted) throw new Error(`Agent turn ${turn} terminal was already attempted`)
+        terminalAttempted = true
+        await this.session.emit(type, payload)
+      }
+
       const callFingerprints: string[] = []
       const serializedInputs = new Map<string, string>()
-      const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remaining)))
-      const turnSignal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal
-      const turnMessages = await messagesForNextTurn()
+      let turnSignal: AbortSignal
+      let turnMessages: ModelMessage[]
+      try {
+        const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remaining)))
+        turnSignal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal
+        turnMessages = await messagesForNextTurn()
+      } catch (error) {
+        repeatStateJson = null
+        await emitTurnTerminal("agent.turn.failed", {
+          turn,
+          error: errorMessage(error),
+          budget: budget(),
+        })
+        throw error
+      }
 
       let result: AgentTurnResult
       try {
@@ -458,13 +480,26 @@ export class BoundedAgentLoop {
         )
       } catch (error) {
         repeatStateJson = null
-        if (error instanceof AgentLoopStop) return stop(error.reason)
+        if (error instanceof AgentLoopStop) {
+          await emitTurnTerminal("agent.turn.stopped", {
+            turn,
+            reason: error.reason,
+            budget: budget(),
+          })
+          return stop(error.reason)
+        }
         if (turnSignal.aborted) {
-          return stop(input.signal?.aborted ? "aborted" : "max_elapsed")
+          const reason: Exclude<AgentLoopStopReason, "completed"> = input.signal?.aborted ? "aborted" : "max_elapsed"
+          await emitTurnTerminal("agent.turn.stopped", {
+            turn,
+            reason,
+            budget: budget(),
+          })
+          return stop(reason)
         }
 
         failuresUsed += 1
-        await this.session.emit("agent.turn.failed", {
+        await emitTurnTerminal("agent.turn.failed", {
           turn,
           error: errorMessage(error),
           budget: budget(),
@@ -484,60 +519,71 @@ export class BoundedAgentLoop {
       }
 
       assistant = result.assistant
-      const projection = projectModelVisibleHistory(runEvents())
-      if (projection.anchorRequestIdentity === undefined) {
-        throw new Error("Successful model turn did not establish an H2-R1 request snapshot anchor")
-      }
+      try {
+        const projection = projectModelVisibleHistory(runEvents())
+        if (projection.anchorRequestIdentity === undefined) {
+          throw new Error("Successful model turn did not establish an H2-R1 request snapshot anchor")
+        }
 
-      const historyBatch: PendingHistoryMessage[] = []
-      if (result.assistant || result.toolCalls.length > 0) {
-        historyBatch.push({
-          source: "assistant_response",
-          message: {
-            role: "assistant",
-            content: result.assistant,
-            toolCalls: result.toolCalls.map((call) => ({ ...call })),
-          },
+        const historyBatch: PendingHistoryMessage[] = []
+        if (result.assistant || result.toolCalls.length > 0) {
+          historyBatch.push({
+            source: "assistant_response",
+            message: {
+              role: "assistant",
+              content: result.assistant,
+              toolCalls: result.toolCalls.map((call) => ({ ...call })),
+            },
+          })
+        }
+        for (const toolResult of result.toolResults) {
+          historyBatch.push({
+            source: "tool_result",
+            message: {
+              role: "tool",
+              name: toolResult.name,
+              toolCallId: toolResult.id,
+              content: toolMessageContent(toolResult.output, limits.maxToolResultChars),
+            },
+          })
+        }
+
+        const repeatObservation = observeRepeatBatch({
+          previousStateJson: repeatStateJson,
+          result,
+          serializedInputs,
+          enabled: repeatObservationEnabled,
         })
-      }
-      for (const toolResult of result.toolResults) {
-        historyBatch.push({
-          source: "tool_result",
-          message: {
-            role: "tool",
-            name: toolResult.name,
-            toolCallId: toolResult.id,
-            content: toolMessageContent(toolResult.output, limits.maxToolResultChars),
-          },
+        await appendHistoryBatch(historyBatch, repeatObservation.advisory)
+        repeatStateJson = repeatObservation.nextStateJson
+
+        const signature = sha256(`${result.finishReason}\n${result.assistant}\n${callFingerprints.join("\n")}`)
+        const repeated = (turnCounts.get(signature) ?? 0) + 1
+        turnCounts.set(signature, repeated)
+
+        await emitTurnTerminal("agent.turn.completed", {
+          turn,
+          finishReason: result.finishReason,
+          toolResults: result.toolResults.length,
+          budget: budget(),
         })
+
+        if (result.finishReason === "stop") {
+          const snapshot = budget()
+          await this.session.emit("agent.loop.completed", { reason: "completed", budget: snapshot })
+          return { status: "completed", reason: "completed", assistant, budget: snapshot }
+        }
+        if (repeated > limits.maxRepeatedTurnSignatures) return stop("cycle_detected")
+      } catch (error) {
+        repeatStateJson = null
+        if (terminalAttempted) throw error
+        await emitTurnTerminal("agent.turn.failed", {
+          turn,
+          error: errorMessage(error),
+          budget: budget(),
+        })
+        throw error
       }
-
-      const repeatObservation = observeRepeatBatch({
-        previousStateJson: repeatStateJson,
-        result,
-        serializedInputs,
-        enabled: repeatObservationEnabled,
-      })
-      await appendHistoryBatch(historyBatch, repeatObservation.advisory)
-      repeatStateJson = repeatObservation.nextStateJson
-
-      const signature = sha256(`${result.finishReason}\n${result.assistant}\n${callFingerprints.join("\n")}`)
-      const repeated = (turnCounts.get(signature) ?? 0) + 1
-      turnCounts.set(signature, repeated)
-
-      await this.session.emit("agent.turn.completed", {
-        turn,
-        finishReason: result.finishReason,
-        toolResults: result.toolResults.length,
-        budget: budget(),
-      })
-
-      if (result.finishReason === "stop") {
-        const snapshot = budget()
-        await this.session.emit("agent.loop.completed", { reason: "completed", budget: snapshot })
-        return { status: "completed", reason: "completed", assistant, budget: snapshot }
-      }
-      if (repeated > limits.maxRepeatedTurnSignatures) return stop("cycle_detected")
     }
 
     return stop("max_turns")
