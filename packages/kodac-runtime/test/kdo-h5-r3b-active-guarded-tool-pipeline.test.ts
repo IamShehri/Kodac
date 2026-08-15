@@ -6,6 +6,7 @@ import test from "node:test"
 import { BoundedAgentLoop } from "../src/agent/loop.ts"
 import {
   KDO_H5_R3A_DECISION_VERSION,
+  KDO_H5_R3A_LIMITS,
   KDO_H5_R3A_PIPELINE_VERSION,
   reduceGuardedToolPipeline,
 } from "../src/agent/guarded-tool-pipeline.ts"
@@ -199,6 +200,51 @@ test("R3B serialized plan/exposure/call boundaries reject hostile objects withou
   assert.throws(() => reduceGuardedToolExposure(guardPlan({ callRules: [callRule("bad", "x", "c", [decision("remove_tool", "bad-remove", { toolName: "x", capability: "c" })])] }), registeredPairs([{ name: "x", capability: "c" }])), /may not contain remove_tool/)
 })
 
+test("R3B call-rule preflight rejects combined pipelines that exceed canonical R3A limits", () => {
+  const tools = registeredPairs([{ name: "test.alpha", capability: "test.alpha" }])
+  const globals = Array.from({ length: KDO_H5_R3A_LIMITS.maxDecisions }, (_, index) => decision("observe", `global-${index}`))
+  const plan = guardPlan({
+    toolDecisions: globals,
+    callRules: [callRule("overflow", "test.alpha", "test.alpha", [decision("observe", "rule-extra")])],
+  })
+  assert.throws(() => reduceGuardedToolExposure(plan, tools), /decisions.*128|at most 128/i)
+})
+
+test("R3B call-rule replacement input inherits R3A item bounds during exposure preflight", () => {
+  const tools = registeredPairs([{ name: "test.alpha", capability: "test.alpha" }])
+  const oversized = Array.from({ length: KDO_H5_R3A_LIMITS.maxInputItems + 1 }, () => 0)
+  const plan = guardPlan({
+    callRules: [callRule("oversized-input", "test.alpha", "test.alpha", [
+      decision("replace_input", "replace-oversized", { input: oversized }),
+    ])],
+  })
+  assert.throws(() => reduceGuardedToolExposure(plan, tools), /input items|8192|exceeds/i)
+})
+
+test("R3B invalid call-rule preflight fails before request snapshot and provider invocation", async () => {
+  const observed: unknown[] = []
+  const provider = new RecordingProvider([{ assistant: "never", finishReason: "stop", toolCalls: [] }])
+  const { runner, session } = harness(provider, [recordingTool("test.alpha", "test.alpha", observed)])
+  const globals = Array.from({ length: KDO_H5_R3A_LIMITS.maxDecisions }, (_, index) => decision("observe", `global-${index}`))
+  const plan = guardPlan({
+    toolDecisions: globals,
+    callRules: [callRule("overflow", "test.alpha", "test.alpha", [decision("observe", "rule-extra")])],
+  })
+  await assert.rejects(() => runner.run({
+    provider: provider.name,
+    model: "fixture/model",
+    messages: [{ role: "user", content: "hi" }],
+    guardPlanJson: plan,
+  }), /decisions.*128|at most 128/i)
+  assert.equal(provider.requests.length, 0)
+  assert.equal(session.eventsSnapshot().some((event) => event.type === "model.request.snapshot"), false)
+  assert.deepEqual(session.eventsSnapshot().find((event) => event.type === "model.failed")?.payload, {
+    provider: provider.name,
+    stage: "tool_guard_plan",
+    error: "guard plan rejected",
+  })
+})
+
 test("R3B tool exposure is a strict H2-backed provider subset with registry descriptors preserved", async () => {
   const observedA: unknown[] = []
   const observedB: unknown[] = []
@@ -236,6 +282,43 @@ test("R3B rejects stale guard plan before request snapshot and provider invocati
   assert.equal(session.eventsSnapshot().some((event) => event.type === "model.request.snapshot"), false)
   const failed = session.eventsSnapshot().find((event) => event.type === "model.failed")
   assert.deepEqual(failed?.payload, { provider: provider.name, stage: "tool_guard_plan", error: "guard plan rejected" })
+})
+
+test("R3B provider tool-call accessor cycle and hostile proxy fail before trusted hook or tool execution", async () => {
+  for (const mode of ["accessor", "cycle", "proxy"] as const) {
+    const observed: unknown[] = []
+    let hooks = 0
+    let getterCalls = 0
+    let toolCall: unknown
+    if (mode === "accessor") {
+      const candidate: Record<string, unknown> = { name: "test.alpha", input: { value: 1 } }
+      Object.defineProperty(candidate, "id", { enumerable: true, get() { getterCalls += 1; return "accessor" } })
+      toolCall = candidate
+    } else if (mode === "cycle") {
+      const cyclic: Record<string, unknown> = { value: 1 }
+      cyclic.self = cyclic
+      toolCall = { id: "cycle", name: "test.alpha", input: cyclic }
+    } else {
+      toolCall = new Proxy({ id: "proxy", name: "test.alpha", input: { value: 1 } }, {
+        getPrototypeOf() { return Array.prototype },
+      })
+    }
+    const provider: ModelProvider = {
+      name: `hostile-${mode}`,
+      async generate() {
+        return { assistant: "", finishReason: "tool_calls", toolCalls: [toolCall as never] }
+      },
+    }
+    const { runner, session } = harness(provider, [recordingTool("test.alpha", "test.alpha", observed)])
+    await assert.rejects(() => runner.run(
+      { provider: provider.name, model: "fixture/model", messages: [{ role: "user", content: "run" }] },
+      { beforeToolCall() { hooks += 1 } },
+    ))
+    assert.equal(hooks, 0)
+    assert.equal(observed.length, 0)
+    assert.equal(session.eventsSnapshot().some((event) => event.type === "tool.started"), false)
+    if (mode === "accessor") assert.equal(getterCalls, 0)
+  }
 })
 
 test("R3B rewrite reaches immutable beforeToolCall and tool execution while provider-original input does not", async () => {
@@ -322,6 +405,39 @@ test("R3B block and removed-tool hallucination cannot reach trusted hook or tool
     assert.equal((guardEvent?.payload as { blocked: boolean }).blocked, true)
     assert.equal(session.eventsSnapshot().some((event) => event.type === "tool.started"), false)
   }
+})
+
+test("R3B guard-preflights an entire provider call batch before executing its first tool", async () => {
+  const observedA: unknown[] = []
+  const observedB: unknown[] = []
+  const provider = new RecordingProvider([{
+    assistant: "",
+    finishReason: "tool_calls",
+    toolCalls: [
+      { id: "first", name: "test.alpha", input: { value: 1 } },
+      { id: "second", name: "test.beta", input: { value: 2 } },
+    ],
+  }])
+  const { runner, session } = harness(provider, [
+    recordingTool("test.alpha", "test.alpha", observedA),
+    recordingTool("test.beta", "test.beta", observedB),
+  ])
+  const plan = guardPlan({ callRules: [
+    callRule("block-beta", "test.beta", "test.beta", [decision("block_call", "block-beta")]),
+  ] })
+  await assert.rejects(
+    () => runner.run({
+      provider: provider.name,
+      model: "fixture/model",
+      messages: [{ role: "user", content: "run batch" }],
+      guardPlanJson: plan,
+    }),
+    (error: unknown) => error instanceof GuardedToolCallBlockedError && error.code === "guard_blocked",
+  )
+  assert.equal(observedA.length, 0)
+  assert.equal(observedB.length, 0)
+  assert.equal(session.eventsSnapshot().some((event) => event.type === "tool.started"), false)
+  assert.equal(session.eventsSnapshot().filter((event) => event.type === "tool.guard.evaluated").length, 2)
 })
 
 test("R3B unknown provider tool cannot reach hook or orchestrator", async () => {
