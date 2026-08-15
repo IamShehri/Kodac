@@ -239,7 +239,12 @@ export class AgentTurnRunner {
           responseId: event.responseId,
         })
       }
-      await hooks.onStreamEvent?.(event)
+      try {
+        await hooks.onStreamEvent?.(event)
+      } catch {
+        // R4B: caller stream observers are non-authoritative after Kodac's
+        // canonical stream evidence append has succeeded.
+      }
     }
 
     let response: ModelProviderResponse
