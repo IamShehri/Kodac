@@ -180,7 +180,7 @@ function canonicalProviderId(value: unknown): string {
 }
 
 function semanticRuntimeClass(value: unknown, label: string): SandboxSemanticRuntimeClass {
-  if (typeof value !== "string" || !(value in RUNTIME_RANK)) throw new TypeError(`${label} is not an admitted R3B semantic runtime class`)
+  if (typeof value !== "string" || !Object.hasOwn(RUNTIME_RANK, value)) throw new TypeError(`${label} is not an admitted R3B semantic runtime class`)
   return value as SandboxSemanticRuntimeClass
 }
 
