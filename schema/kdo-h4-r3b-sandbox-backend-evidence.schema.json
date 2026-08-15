@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kodac.dev/schema/kdo-h4-r3b-sandbox-backend-evidence.schema.json",
+  "title": "Kodac H4-R3B Sandbox Backend Capability and Execution Evidence",
+  "description": "Structural schema for the pure H4-R3B requirement/capability/observation/evidence contract. The canonical R3A schema URI must be mapped locally to repository blob b8f5b8b97a49e550bfe036b73d259b0826ec75bd. Runtime validation remains mandatory before identity construction and authoritative for hostile JavaScript object semantics.",
+  "oneOf": [
+    { "$ref": "#/$defs/capability" },
+    { "$ref": "#/$defs/requirement" },
+    { "$ref": "#/$defs/observation" },
+    { "$ref": "#/$defs/evidence" }
+  ],
+  "$defs": {
+    "identity": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "semanticRuntimeClass": {
+      "enum": ["gvisor", "kata-firecracker", "kata-qemu"]
+    },
+    "semanticRuntimeClasses": {
+      "type": "array",
+      "enum": [
+        ["gvisor"],
+        ["kata-firecracker"],
+        ["kata-qemu"],
+        ["gvisor", "kata-firecracker"],
+        ["gvisor", "kata-qemu"],
+        ["kata-firecracker", "kata-qemu"],
+        ["gvisor", "kata-firecracker", "kata-qemu"]
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "backendFamily",
+        "providerId",
+        "implementationIdentity",
+        "semanticRuntimeClasses",
+        "supportsImmutableImageDigestObservation",
+        "supportsDenyAllNetworkObservation",
+        "supportsCpuBudgetObservation",
+        "supportsMemoryLimitObservation",
+        "supportsTtlObservation",
+        "supportsOutputLimitObservation",
+        "credentialMode",
+        "downgradePolicy",
+        "capabilityIdentity"
+      ],
+      "properties": {
+        "version": { "const": "kodac-h4-r3b-backend-capability-v1" },
+        "backendFamily": { "const": "oci-container" },
+        "providerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "implementationIdentity": { "$ref": "#/$defs/identity" },
+        "semanticRuntimeClasses": { "$ref": "#/$defs/semanticRuntimeClasses" },
+        "supportsImmutableImageDigestObservation": { "type": "boolean" },
+        "supportsDenyAllNetworkObservation": { "type": "boolean" },
+        "supportsCpuBudgetObservation": { "type": "boolean" },
+        "supportsMemoryLimitObservation": { "type": "boolean" },
+        "supportsTtlObservation": { "type": "boolean" },
+        "supportsOutputLimitObservation": { "type": "boolean" },
+        "credentialMode": { "const": "none" },
+        "downgradePolicy": { "const": "forbid" },
+        "capabilityIdentity": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "workload", "requiredSemanticRuntimeClass", "downgradePolicy", "requirementIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r3b-execution-requirement-v1" },
+        "workload": {
+          "$ref": "https://kodac.dev/schema/kdo-h4-r3a-sandbox-workload.schema.json#/$defs/workload"
+        },
+        "requiredSemanticRuntimeClass": { "$ref": "#/$defs/semanticRuntimeClass" },
+        "downgradePolicy": { "const": "forbid" },
+        "requirementIdentity": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "requirementIdentity",
+        "workloadIdentity",
+        "capabilityIdentity",
+        "observerIdentity",
+        "executionInstanceIdentity",
+        "observedSourceDigest",
+        "observedSemanticRuntimeClass",
+        "observedNetworkPolicy",
+        "observedResourcePolicy",
+        "observedCredentialBindingIdentity",
+        "downgradeOccurred",
+        "observationIdentity"
+      ],
+      "properties": {
+        "version": { "const": "kodac-h4-r3b-backend-observation-v1" },
+        "requirementIdentity": { "$ref": "#/$defs/identity" },
+        "workloadIdentity": { "$ref": "#/$defs/identity" },
+        "capabilityIdentity": { "$ref": "#/$defs/identity" },
+        "observerIdentity": { "$ref": "#/$defs/identity" },
+        "executionInstanceIdentity": { "$ref": "#/$defs/identity" },
+        "observedSourceDigest": { "$ref": "#/$defs/digest" },
+        "observedSemanticRuntimeClass": { "$ref": "#/$defs/semanticRuntimeClass" },
+        "observedNetworkPolicy": {
+          "$ref": "https://kodac.dev/schema/kdo-h4-r3a-sandbox-workload.schema.json#/$defs/networkPolicy"
+        },
+        "observedResourcePolicy": {
+          "$ref": "https://kodac.dev/schema/kdo-h4-r3a-sandbox-workload.schema.json#/$defs/resourcePolicy"
+        },
+        "observedCredentialBindingIdentity": { "type": "null" },
+        "downgradeOccurred": { "const": false },
+        "observationIdentity": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "requirement", "capability", "observation", "evidenceIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r3b-execution-evidence-v1" },
+        "requirement": { "$ref": "#/$defs/requirement" },
+        "capability": { "$ref": "#/$defs/capability" },
+        "observation": { "$ref": "#/$defs/observation" },
+        "evidenceIdentity": { "$ref": "#/$defs/identity" }
+      }
+    }
+  }
+}
