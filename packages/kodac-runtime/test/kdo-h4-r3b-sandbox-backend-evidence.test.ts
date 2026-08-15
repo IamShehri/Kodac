@@ -238,6 +238,12 @@ test("H4-R3B requirement accepts only full canonical R3A workload and secure run
   assert.throws(() => createSandboxExecutionRequirement({ workload, requiredSemanticRuntimeClass: "runc" as never }))
   assert.throws(() => createSandboxExecutionRequirement({ workload, requiredSemanticRuntimeClass: "fallback" as never }))
   assert.throws(() => createSandboxExecutionRequirement({ workload, requiredSemanticRuntimeClass: "unknown" as never }))
+  for (const runtime of ["toString", "constructor", "__proto__"]) {
+    assert.throws(
+      () => createSandboxExecutionRequirement({ workload, requiredSemanticRuntimeClass: runtime as never }),
+      /not an admitted R3B semantic runtime class/,
+    )
+  }
 
   const duplicate = { workload, requiredSemanticRuntimeClass: "gvisor", workloadIdentity: workload.workloadIdentity }
   assert.throws(() => createSandboxExecutionRequirement(duplicate as never), /contain exactly/)
@@ -261,6 +267,13 @@ test("H4-R3B requirement accepts only full canonical R3A workload and secure run
 test("H4-R3B evidence rejects runtime source network resource credential and downgrade mismatches", () => {
   const capability = fixtureCapability()
   const requirement = fixtureRequirement()
+
+  for (const runtime of ["toString", "constructor", "__proto__"]) {
+    assert.throws(
+      () => createSandboxBackendObservation(observationInput(requirement, capability, { observedSemanticRuntimeClass: runtime as never })),
+      /not an admitted R3B semantic runtime class/,
+    )
+  }
 
   const runtimeMismatch = fixtureObservation(requirement, capability, { observedSemanticRuntimeClass: "kata-qemu" })
   assert.throws(() => createSandboxExecutionEvidence({ requirement, capability, observation: runtimeMismatch }), /runtime class mismatch/)
@@ -343,8 +356,11 @@ test("H4-R3B rejects hostile object shapes before semantic acceptance", () => {
 
 test("H4-R3B schema pins R3A locally and admits only seven canonical runtime arrays", () => {
   const schema = JSON.parse(source("../../../schema/kdo-h4-r3b-sandbox-backend-evidence.schema.json")) as Record<string, unknown>
+  const r3aSchema = JSON.parse(source("../../../schema/kdo-h4-r3a-sandbox-workload.schema.json")) as Record<string, unknown>
+  const r3aSchemaId = "https://kodac.dev/schema/kdo-h4-r3a-sandbox-workload.schema.json"
   assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema")
   assert.equal(schema.$id, "https://kodac.dev/schema/kdo-h4-r3b-sandbox-backend-evidence.schema.json")
+  assert.equal(r3aSchema.$id, r3aSchemaId)
   assert.match(String(schema.description), /b8f5b8b97a49e550bfe036b73d259b0826ec75bd/)
 
   const defs = schema.$defs as Record<string, Record<string, unknown>>
@@ -358,23 +374,26 @@ test("H4-R3B schema pins R3A locally and admits only seven canonical runtime arr
     ["kata-firecracker", "kata-qemu"],
     ["gvisor", "kata-firecracker", "kata-qemu"],
   ])
-  assert.equal(
-    (runtimeArrays as unknown[][]).some((value) => JSON.stringify(value) === JSON.stringify(["kata-qemu", "gvisor"])),
-    false,
-  )
+  const schemaAdmitsRuntimeArray = (candidate: unknown[]) =>
+    (runtimeArrays as unknown[][]).some((value) => JSON.stringify(value) === JSON.stringify(candidate))
+  assert.equal(schemaAdmitsRuntimeArray(["gvisor"]), true)
+  assert.equal(schemaAdmitsRuntimeArray(["gvisor", "kata-qemu"]), true)
+  assert.equal(schemaAdmitsRuntimeArray(["kata-qemu", "gvisor"]), false)
+  assert.equal(schemaAdmitsRuntimeArray(["gvisor", "gvisor"]), false)
+  assert.equal(schemaAdmitsRuntimeArray(["runc"]), false)
 
-  const requirementProperties = (defs.requirement.properties as Record<string, Record<string, unknown>>)
+  const requirementProperties = defs.requirement.properties as Record<string, Record<string, unknown>>
   assert.equal(
     requirementProperties.workload.$ref,
-    "https://kodac.dev/schema/kdo-h4-r3a-sandbox-workload.schema.json#/$defs/workload",
+    `${r3aSchemaId}#/$defs/workload`,
   )
   const observationProperties = defs.observation.properties as Record<string, Record<string, unknown>>
   assert.equal(
     observationProperties.observedNetworkPolicy.$ref,
-    "https://kodac.dev/schema/kdo-h4-r3a-sandbox-workload.schema.json#/$defs/networkPolicy",
+    `${r3aSchemaId}#/$defs/networkPolicy`,
   )
   assert.equal(
     observationProperties.observedResourcePolicy.$ref,
-    "https://kodac.dev/schema/kdo-h4-r3a-sandbox-workload.schema.json#/$defs/resourcePolicy",
+    `${r3aSchemaId}#/$defs/resourcePolicy`,
   )
 })
