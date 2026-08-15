@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { types as utilTypes } from "node:util"
 
 import type { ModelMessage } from "../model/provider.ts"
 import {
@@ -199,6 +200,7 @@ function sha256(value: string): string {
 
 function asPlainRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${label} must be an object`)
+  if (utilTypes.isProxy(value)) throw new TypeError(`${label} must not be a Proxy`)
   const prototype = Object.getPrototypeOf(value)
   if (prototype !== Object.prototype && prototype !== null) throw new TypeError(`${label} must be a plain object`)
   return value as Record<string, unknown>
@@ -229,7 +231,9 @@ function exactKeys(record: Record<string, unknown>, keys: readonly string[], lab
 }
 
 function ownArrayDataValues(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError(`${label} must be a plain array`)
+  if (!Array.isArray(value)) throw new TypeError(`${label} must be a plain array`)
+  if (utilTypes.isProxy(value)) throw new TypeError(`${label} must not be a Proxy`)
+  if (Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError(`${label} must be a plain array`)
   if (Object.getOwnPropertySymbols(value).length > 0) throw new TypeError(`${label} contains symbol-keyed fields`)
   const descriptors = Object.getOwnPropertyDescriptors(value)
   const allowed = new Set<string>(["length"])
