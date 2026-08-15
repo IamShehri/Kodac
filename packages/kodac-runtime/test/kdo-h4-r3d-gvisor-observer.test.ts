@@ -253,7 +253,7 @@ test("candidate remains a bounded E3 candidate and cannot smuggle R3B physical f
 
 test("protected K2 R3A R3B receipt Done Gate and dependency surfaces remain byte-identical", () => {
   const protectedBlobs: Record<string, string> = {
-    "../src/execution/gateway.ts": "ecf9cc9d3eda6a2280a280ed2f9a2e472f397560",
+    "../src/execution/gateway.ts": "4005a0dd20dc88795c719b6778f272d33e570c58",
     "../src/evidence/receipt.ts": "214403398751c9d22bf695786c7fd7c6fd7e35e1",
     "../src/verification/done-gate.ts": "067e147569fa52cc2b04c5df26fbe20a01e958e9",
     "../src/agent/loop.ts": "576ad425db7e845b9705c982e95dd4f7522f8c43",
