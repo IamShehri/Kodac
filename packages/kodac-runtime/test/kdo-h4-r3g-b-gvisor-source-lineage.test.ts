@@ -585,3 +585,52 @@ test("H4-R3G-B mountinfo parser rejects missing duplicate non-overlay malformed 
   assert.throws(() => parseGvisorSourceMountInfo(`71 29 0:81 / ${ROOTFS.replace("/var", "\\999var")} rw - overlay overlay rw\n`, ROOTFS), /invalid mountinfo escaping/)
   assert.throws(() => parseGvisorSourceMountInfo(Buffer.from([0xff]), ROOTFS), /valid UTF-8/)
 })
+
+test("H4-R3G-B materializes only fixed ctr reads and accepts omitted committed parent", async () => {
+  const {
+    materializeGvisorSourceCtrContainerInfoCommand,
+    materializeGvisorSourceCtrSnapshotInfoCommand,
+    parseGvisorSourceCtrSnapshotInfo,
+    requireGvisorSourceCtrExecutablePolicy,
+  } = await import("../src/trust/sandbox-observer-gvisor-source-lineage.ts")
+  const config = validateGvisorSourceLineageRuntimeConfig({
+    version: KDO_H4_R3G_B_RUNTIME_CONFIG_VERSION,
+    ctrPath: "/usr/bin/ctr",
+    expectedCtrSha256: ID("e"),
+    containerdAddress: "/run/containerd/containerd.sock",
+    expectedContainerdSocketUid: "0",
+    expectedContainerdSocketGid: "0",
+    expectedContainerdSocketMode: "49584",
+    commitSourceLineageEvidence: () => undefined,
+  })
+  const containerCommand = materializeGvisorSourceCtrContainerInfoCommand(config, CONTAINER_ID)
+  assert.deepEqual(containerCommand.argv, [
+    "--address", "/run/containerd/containerd.sock",
+    "--namespace", "moby",
+    "containers", "info", CONTAINER_ID,
+  ])
+  assert.equal(Object.isFrozen(containerCommand.argv), true)
+  const snapshotCommand = materializeGvisorSourceCtrSnapshotInfoCommand(config, DIFF_A)
+  assert.deepEqual(snapshotCommand.argv, [
+    "--address", "/run/containerd/containerd.sock",
+    "--namespace", "moby",
+    "snapshots", "--snapshotter", "overlayfs",
+    "info", DIFF_A,
+  ])
+  const omittedParent = parseGvisorSourceCtrSnapshotInfo(JSON.stringify({ Kind: "Committed", Name: DIFF_A }), DIFF_A)
+  assert.equal(omittedParent.parent, "")
+  assert.throws(() => parseGvisorSourceCtrSnapshotInfo(JSON.stringify({ Kind: "Committed", Name: DIFF_A, Parent: 7 }), DIFF_A), /must be a string when present/)
+  assert.doesNotThrow(() => requireGvisorSourceCtrExecutablePolicy(ctrFixture()))
+  const nonExecutable = createGvisorSourceCtrArtifactIdentity({
+    path: "/usr/bin/ctr",
+    sha256: ID("e"),
+    device: "1",
+    inode: "42",
+    uid: "0",
+    gid: "0",
+    mode: "33188",
+    size: "1048576",
+    parentAuthority: authority(["/", "/usr", "/usr/bin"]),
+  })
+  assert.throws(() => requireGvisorSourceCtrExecutablePolicy(nonExecutable), /executable permission bit/)
+})
