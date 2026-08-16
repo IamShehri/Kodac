@@ -366,7 +366,11 @@ export class ExecutionGateway {
       if (options.signal?.aborted) throw new Error("R3E observation aborted before durable evidence commit")
       const rawCommit = await boundedTrustedCallback("R3E durable evidence commit", options.signal, () => runtime.commitLineageEvidence(record)); validateGvisorRuntimeLineageCommit(rawCommit, record)
       if (options.signal?.aborted) throw new Error("R3E observation aborted before commit acknowledgment completed")
+      const serializedRecord = JSON.stringify(record); const receipt = createReceipt({ capability: intent.capability, inputDigest: intent.inputDigest, paths: intent.paths, policy, startedAt, completedAt: new Date().toISOString(), result: { status: "success", outputDigest: sha256(serializedRecord), outputBytes: Buffer.byteLength(serializedRecord, "utf8"), exitCode: 0 } }); await persistReceipt(observer, receipt)
       return record
+    } catch (error) {
+      if (error instanceof ExecutionUnprovenError) throw error
+      const message = error instanceof Error ? error.message : String(error); const receipt = createReceipt({ capability: intent.capability, inputDigest: intent.inputDigest, paths: intent.paths, policy, startedAt, completedAt: new Date().toISOString(), result: { status: "failure", error: message } }); await persistReceipt(observer, receipt); throw new ExecutionFailedError(`runtime.observe.gvisor failed: ${message}`, receipt, { cause: error })
     } finally {
       await helper?.handle.close().catch(() => {}); await runsc?.handle.close().catch(() => {})
     }
@@ -387,7 +391,7 @@ export class ExecutionGateway {
     if (policy.decision === "ask") return this.block(intent, policy, startedAt, observer, "external executable identity requires H4-R2 confinement", "Approval unavailable: external executable identity requires H4-R2 confinement")
     if (process.platform !== "linux") return this.block(intent, policy, startedAt, observer, "Linux Landlock confinement is unavailable on this platform", "Confined execution unavailable: Linux Landlock requires Linux")
     const unsafeBootstrapKey = unsafeLinuxLoaderEnvironmentKey(environment); if (unsafeBootstrapKey !== undefined) return this.block(intent, policy, startedAt, observer, `unsafe pre-Landlock loader environment: ${unsafeBootstrapKey}`, `Confined execution unavailable: ${unsafeBootstrapKey} is forbidden before Landlock activation`)
-    const confinementRuntime = this.confinement; if (!confinementRuntime) return this.block(intent, policy, startedAt, observer, "trusted Linux Landlock runtime is not configured", "Confined execution unavailable: trusted Linux Landlock runtime is not configured")
+    const confinementRuntime = this.confinement; if (!confinementRuntime) return this.block(intent, policy, startedAt, observer, "trusted Linux Landlock runtime is not configured", "Confined execution unavailable: trusted Linux Landlock runtime not configured")
     if (options.signal?.aborted) return this.block(intent, policy, startedAt, observer, "operation aborted before confined execution", "Execution blocked: operation aborted before confined execution")
     let child: ChildProcess | undefined; let permitStream: Writable | undefined; let exitPromise: Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> | undefined; let confinementBinding: ConfinementReceiptBinding | undefined; let goReleased = false
     try {
