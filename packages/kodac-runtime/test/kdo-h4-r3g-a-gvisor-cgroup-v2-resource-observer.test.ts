@@ -229,6 +229,7 @@ test("H4-R3G-A rejects root fabrication malformed hierarchy and wrong cgroup2 mo
   assert.throws(() => createSnapshot(requirement, (raw) => { raw.levels[1].cgroupType = "threaded\n" }), /cgroup.type=domain/)
   assert.throws(() => createSnapshot(requirement, (raw) => { raw.levels[1].cgroupType = "domain threaded\n" }), /cgroup.type=domain/)
   assert.throws(() => createSnapshot(requirement, (raw) => { raw.mountInfo = "29 23 0:26 / /tmp/cgroup rw - cgroup2 cgroup rw\n" }), /\/sys\/fs\/cgroup/)
+  assert.throws(() => createSnapshot(requirement, (raw) => { raw.mountInfo = "29 23 0:26 / /sys/fs/cgroup rw - cgroup2 cgroup\n" }), /exactly one cgroup2/)
 })
 
 test("H4-R3G-A rejects CPU mismatches burst scheduler affinity narrowing and malformed controls", () => {
