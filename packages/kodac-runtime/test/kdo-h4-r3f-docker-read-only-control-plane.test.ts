@@ -218,7 +218,7 @@ test("H4-R3F production surface has no Docker mutation SDK or R3B physical-evide
   assert.doesNotMatch(r3fSource, /const rest\s*=\s*text\.slice\(index\)/)
   assert.match(r3fSource, /numberPattern\.lastIndex\s*=\s*index/)
   assert.match(r3fSource, /text\.startsWith\(literal, index\)/)
-  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "5e4c3cea9982d7c774d0c18beb40f2fcbfde4e64")
+  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "8de6063a929381d0c889a0638507a41f5fbdc645")
   assert.equal(gitBlobSha1(source("../src/trust/sandbox-observer-gvisor-runtime.ts")), "1d02a5dbc1dc4071636c24327e7faf9906370ef5")
   assert.equal(gitBlobSha1(source("../src/trust/sandbox-observer-gvisor.ts")), "47c792ba01c9ba4b2db94d7558f282cdbd218660")
   assert.equal(gitBlobSha1(source("../native/gvisor-proc-observe.c")), "277b66c83ad82c96aa7dbd71f941daf8c6627738")

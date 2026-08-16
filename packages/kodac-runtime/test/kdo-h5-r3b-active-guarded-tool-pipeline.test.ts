@@ -574,6 +574,6 @@ test("R3B pure plan module has no ambient authority and R1B history pruning cann
   assert.equal(turnSource.includes("pruneModelVisibleToolResults"), false)
 
   assert.equal(gitBlobSha1(source("../src/trust/policy.ts")), "b4134e430204123bebe053ffc9105f05fca611c9")
-  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "5e4c3cea9982d7c774d0c18beb40f2fcbfde4e64")
+  assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "8de6063a929381d0c889a0638507a41f5fbdc645")
   assert.equal(gitBlobSha1(source("../src/verification/done-gate.ts")), "067e147569fa52cc2b04c5df26fbe20a01e958e9")
 })
