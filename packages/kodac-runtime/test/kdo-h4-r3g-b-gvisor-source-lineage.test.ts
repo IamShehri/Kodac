@@ -501,3 +501,87 @@ test("H4-R3G-B pre-aborted Docker source observation performs no Docker I/O", { 
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test("H4-R3G-B derives exact Moby rootfs target and parent authority path chain", async () => {
+  const { deriveGvisorSourcePathAuthorityPaths, deriveGvisorSourceRootfsPaths } = await import("../src/trust/sandbox-observer-gvisor-source-lineage.ts")
+  const paths = deriveGvisorSourceRootfsPaths("/var/lib/docker", CONTAINER_ID)
+  assert.deepEqual(paths, {
+    rootfsParentPath: "/var/lib/docker/rootfs/overlayfs",
+    rootfsMountPath: ROOTFS,
+  })
+  assert.deepEqual(deriveGvisorSourcePathAuthorityPaths(paths.rootfsParentPath), [
+    "/", "/var", "/var/lib", "/var/lib/docker", "/var/lib/docker/rootfs", "/var/lib/docker/rootfs/overlayfs",
+  ])
+  assert.deepEqual(deriveGvisorSourcePathAuthorityPaths("/"), ["/"])
+  assert.throws(() => deriveGvisorSourceRootfsPaths("relative", CONTAINER_ID), /canonical absolute/)
+  assert.throws(() => deriveGvisorSourceRootfsPaths("/var/lib/docker", "short"), /64 lowercase/)
+})
+
+test("H4-R3G-B parses exact ctr container metadata rootfs path and ignores mutable diagnostics", async () => {
+  const { parseGvisorSourceCtrContainerInfo } = await import("../src/trust/sandbox-observer-gvisor-source-lineage.ts")
+  const payload = JSON.stringify({
+    ID: CONTAINER_ID,
+    Labels: { mutable: "diagnostic" },
+    Image: "ghcr.io/acme/ignored:tag",
+    Spec: { root: { path: ROOTFS, readonly: false }, process: { args: ["ignored"] } },
+    SnapshotKey: "",
+    Snapshotter: "",
+  })
+  const parsed = parseGvisorSourceCtrContainerInfo(Buffer.from(payload, "utf8"), CONTAINER_ID, ROOTFS)
+  assert.equal(parsed.containerId, CONTAINER_ID)
+  assert.equal(parsed.rootfsMountPath, ROOTFS)
+  assert.match(parsed.specIdentity, /^[0-9a-f]{64}$/)
+  assert.throws(() => parseGvisorSourceCtrContainerInfo(JSON.stringify({ ID: ID("d"), Spec: { root: { path: ROOTFS } } }), CONTAINER_ID, ROOTFS), /ID does not match/)
+  assert.throws(() => parseGvisorSourceCtrContainerInfo(JSON.stringify({ ID: CONTAINER_ID, Spec: { root: { path: "/wrong" } } }), CONTAINER_ID, ROOTFS), /does not match exact rootfsMountPath/)
+  assert.throws(() => parseGvisorSourceCtrContainerInfo(`{"ID":"${CONTAINER_ID}","ID":"${CONTAINER_ID}","Spec":{"root":{"path":"${ROOTFS}"}}}`, CONTAINER_ID, ROOTFS), /duplicate JSON object key/)
+  assert.throws(() => parseGvisorSourceCtrContainerInfo(Buffer.from([0xff]), CONTAINER_ID, ROOTFS), /valid UTF-8/)
+})
+
+test("H4-R3G-B parses ctr snapshot Stat JSON into exact active and committed identities", async () => {
+  const { parseGvisorSourceCtrSnapshotInfo } = await import("../src/trust/sandbox-observer-gvisor-source-lineage.ts")
+  const active = parseGvisorSourceCtrSnapshotInfo(JSON.stringify({ Kind: "Active", Name: CONTAINER_ID, Parent: DIFF_A, Labels: {}, Created: "ignored", Updated: "ignored" }), CONTAINER_ID)
+  assert.equal(active.kind, "active")
+  assert.equal(active.name, CONTAINER_ID)
+  assert.equal(active.parent, DIFF_A)
+  const committed = parseGvisorSourceCtrSnapshotInfo(JSON.stringify({ Kind: "Committed", Name: DIFF_A, Parent: "" }), DIFF_A)
+  assert.equal(committed.kind, "committed")
+  assert.equal(committed.parent, "")
+  assert.throws(() => parseGvisorSourceCtrSnapshotInfo(JSON.stringify({ Kind: "View", Name: CONTAINER_ID, Parent: DIFF_A }), CONTAINER_ID), /Active or Committed/)
+  assert.throws(() => parseGvisorSourceCtrSnapshotInfo(JSON.stringify({ Kind: "Active", Name: ID("d"), Parent: DIFF_A }), CONTAINER_ID), /does not match exact requested snapshot/)
+  assert.throws(() => parseGvisorSourceCtrSnapshotInfo(`{"Kind":"Active","Kind":"Committed","Name":"${CONTAINER_ID}","Parent":"${DIFF_A}"}`, CONTAINER_ID), /duplicate JSON object key/)
+})
+
+test("H4-R3G-B mountinfo parser decodes kernel path escaping and binds one exact overlay target", async () => {
+  const { parseGvisorSourceMountInfo } = await import("../src/trust/sandbox-observer-gvisor-source-lineage.ts")
+  const rootfs = `/var/lib/docker root/rootfs/overlayfs/${CONTAINER_ID}`
+  const escaped = `/var/lib/docker\\040root/rootfs/overlayfs/${CONTAINER_ID}`
+  const text = [
+    "29 23 0:26 / / rw,relatime - ext4 /dev/root rw",
+    `71 29 0:81 / ${escaped} rw,relatime shared:1 - overlay overlay rw,lowerdir=/lower,upperdir=/upper,workdir=/work`,
+  ].join("\n") + "\n"
+  const mount = parseGvisorSourceMountInfo(Buffer.from(text, "utf8"), rootfs)
+  assert.deepEqual(mount, {
+    rootfsMountPath: rootfs,
+    mountId: "71",
+    parentMountId: "29",
+    majorMinor: "0:81",
+    mountRoot: "/",
+    mountOptions: "rw,relatime",
+    filesystemType: "overlay",
+    mountSource: "overlay",
+    superOptions: "rw,lowerdir=/lower,upperdir=/upper,workdir=/work",
+  })
+})
+
+test("H4-R3G-B mountinfo parser rejects missing duplicate non-overlay malformed and ambiguous targets", async () => {
+  const { parseGvisorSourceMountInfo } = await import("../src/trust/sandbox-observer-gvisor-source-lineage.ts")
+  const good = `71 29 0:81 / ${ROOTFS} rw,relatime - overlay overlay rw,lowerdir=/lower,upperdir=/upper,workdir=/work`
+  assert.throws(() => parseGvisorSourceMountInfo("29 23 0:26 / / rw - ext4 /dev/root rw\n", ROOTFS), /target is missing/)
+  assert.throws(() => parseGvisorSourceMountInfo(`${good}\n${good}\n`, ROOTFS), /target is ambiguous/)
+  assert.throws(() => parseGvisorSourceMountInfo(`71 29 0:81 / ${ROOTFS} rw - ext4 /dev/root rw\n`, ROOTFS), /filesystem type must be overlay/)
+  assert.throws(() => parseGvisorSourceMountInfo(`71 29 0:81 / ${ROOTFS} rw overlay overlay rw\n`, ROOTFS), /exactly one separator/)
+  assert.throws(() => parseGvisorSourceMountInfo(`71  29 0:81 / ${ROOTFS} rw - overlay overlay rw\n`, ROOTFS), /ambiguous whitespace/)
+  assert.throws(() => parseGvisorSourceMountInfo(`71 29 0:81 / ${ROOTFS} rw - overlay overlay rw trailing\n`, ROOTFS), /trailing structural ambiguity/)
+  assert.throws(() => parseGvisorSourceMountInfo(`71 29 0:81 / ${ROOTFS.replace("/var", "\\999var")} rw - overlay overlay rw\n`, ROOTFS), /invalid mountinfo escaping/)
+  assert.throws(() => parseGvisorSourceMountInfo(Buffer.from([0xff]), ROOTFS), /valid UTF-8/)
+})
