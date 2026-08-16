@@ -336,7 +336,7 @@ test("H4-R3B evidence rejects each insufficient capability and cross-identity mi
 
   const otherRequirement = createSandboxExecutionRequirement({ workload: fixtureWorkload(), requiredSemanticRuntimeClass: "kata-qemu" })
   const wrongRequirementObservation = fixtureObservation(otherRequirement, capability)
-  assert.throws(() => createSandboxExecutionEvidence({ requirement: otherRequirement, capability, observation: wrongRequirementObservation }), /requirement identity mismatch/)
+  assert.throws(() => createSandboxExecutionEvidence({ requirement, capability, observation: wrongRequirementObservation }), /requirement identity mismatch/)
 })
 
 test("H4-R3B rejects hostile object shapes before semantic acceptance", () => {
