@@ -42,6 +42,15 @@ export const KDO_H4_R3G_A_LIMITS = Object.freeze({
   commitTimeoutMs: 5000,
 } as const)
 
+export interface GvisorInitialCgroupNamespaceIdentity {
+  readonly device: string
+  readonly inode: string
+}
+
+export interface GvisorCgroupNamespaceObservation extends GvisorInitialCgroupNamespaceIdentity {
+  readonly namespaceIdentity: string
+}
+
 export interface GvisorCgroupV2RawLevel {
   readonly path: string
   readonly cgroupType: string
@@ -78,6 +87,9 @@ export interface GvisorCgroupV2PhysicalResourceSnapshot {
   readonly requirementIdentity: string
   readonly pid: number
   readonly startTicks: string
+  readonly cgroupNamespaceDevice: string
+  readonly cgroupNamespaceInode: string
+  readonly cgroupNamespaceIdentity: string
   readonly cgroupPath: string
   readonly mountIdentity: string
   readonly targetProcsIdentity: string
@@ -111,6 +123,7 @@ export interface GvisorCgroupV2ResourceRecord {
   readonly processIdentity: string
   readonly subjectPid: number
   readonly subjectStartTicks: string
+  readonly cgroupNamespaceIdentity: string
   readonly cgroupPath: string
   readonly hierarchyIdentity: string
   readonly prePhysicalSnapshotIdentity: string
@@ -131,6 +144,7 @@ export interface GvisorCgroupV2ResourceCommit {
 
 export interface GvisorCgroupV2RuntimeConfig {
   readonly version: typeof KDO_H4_R3G_A_RUNTIME_CONFIG_VERSION
+  readonly initialCgroupNamespaceIdentity: GvisorInitialCgroupNamespaceIdentity
   readonly commitResourceEvidence: (record: GvisorCgroupV2ResourceRecord) => Promise<unknown> | unknown
 }
 
@@ -395,8 +409,23 @@ function validateLevel(value: unknown, expectedPath: string): ParsedLevel {
   if (shaIdentity(record.levelIdentity, "levelIdentity") !== parsed.observation.levelIdentity) fail("R3G-A cgroup level identity mismatch")
   return parsed
 }
-function derivedHierarchy(mountIdentity: string, cgroupPath: string, levels: readonly GvisorCgroupV2LevelObservation[]): string {
-  return sha256Domain("HIERARCHY", JSON.stringify({ mountIdentity, cgroupPath, levels: levels.map((level) => level.levelIdentity) }))
+
+export function createGvisorCgroupNamespaceObservation(value: unknown): GvisorCgroupNamespaceObservation {
+  const record = plainRecord(value, "cgroup namespace identity")
+  exactKeys(record, ["device", "inode"], "cgroup namespace identity")
+  const device = decimalString(record.device, "cgroup namespace device")
+  const inode = decimalString(record.inode, "cgroup namespace inode")
+  const namespaceIdentity = sha256Domain("CGROUP_NAMESPACE", JSON.stringify({ device, inode }))
+  return Object.freeze({ device, inode, namespaceIdentity })
+}
+
+export function validateGvisorInitialCgroupNamespaceIdentity(value: unknown): GvisorInitialCgroupNamespaceIdentity {
+  const observed = createGvisorCgroupNamespaceObservation(value)
+  return Object.freeze({ device: observed.device, inode: observed.inode })
+}
+
+function derivedHierarchy(namespaceIdentity: string, mountIdentity: string, cgroupPath: string, levels: readonly GvisorCgroupV2LevelObservation[]): string {
+  return sha256Domain("HIERARCHY", JSON.stringify({ namespaceIdentity, mountIdentity, cgroupPath, levels: levels.map((level) => level.levelIdentity) }))
 }
 function snapshotPreimage(value: Omit<GvisorCgroupV2PhysicalResourceSnapshot, "snapshotIdentity">): string { return JSON.stringify(value) }
 
@@ -404,14 +433,19 @@ export function createGvisorCgroupV2PhysicalResourceSnapshot(input: {
   requirement: SandboxExecutionRequirement
   expectedPid: number
   expectedStartTicks: string
+  cgroupNamespace: GvisorCgroupNamespaceObservation
   raw: GvisorCgroupV2RawSnapshot
 }): GvisorCgroupV2PhysicalResourceSnapshot {
   const outer = plainRecord(input, "R3G-A physical snapshot input")
-  exactKeys(outer, ["requirement", "expectedPid", "expectedStartTicks", "raw"], "R3G-A physical snapshot input")
+  exactKeys(outer, ["requirement", "expectedPid", "expectedStartTicks", "cgroupNamespace", "raw"], "R3G-A physical snapshot input")
   const requirement = validateSandboxExecutionRequirement(outer.requirement)
   if (requirement.requiredSemanticRuntimeClass !== "gvisor") fail("R3G-A requires gvisor")
   const expectedPid = positivePid(outer.expectedPid, "expectedPid")
   const expectedStartTicks = decimalString(outer.expectedStartTicks, "expectedStartTicks")
+  const namespaceRecord = plainRecord(outer.cgroupNamespace, "R3G-A cgroup namespace observation")
+  exactKeys(namespaceRecord, ["device", "inode", "namespaceIdentity"], "R3G-A cgroup namespace observation")
+  const cgroupNamespace = createGvisorCgroupNamespaceObservation({ device: namespaceRecord.device, inode: namespaceRecord.inode })
+  if (shaIdentity(namespaceRecord.namespaceIdentity, "cgroup namespace identity") !== cgroupNamespace.namespaceIdentity) fail("R3G-A cgroup namespace identity mismatch")
   const raw = plainRecord(outer.raw, "R3G-A raw snapshot")
   exactKeys(raw, ["mountInfo", "procStat", "procStatus", "procCgroup", "targetCgroupProcs", "levels"], "R3G-A raw snapshot")
   const mountIdentity = parseMount(boundedString(raw.mountInfo, "mountInfo", KDO_H4_R3G_A_LIMITS.maxMountInfoBytes))
@@ -439,7 +473,7 @@ export function createGvisorCgroupV2PhysicalResourceSnapshot(input: {
   const effectiveSwap = finiteLimit(levels.map((level) => level.memorySwapMax), "memory.swap.max")
   if (effectiveSwap !== 0n) fail("physical effective swap ceiling must be exactly 0")
   const observations = Object.freeze(levels.map((level) => level.observation))
-  const hierarchyIdentity = derivedHierarchy(mountIdentity, cgroupPath, observations)
+  const hierarchyIdentity = derivedHierarchy(cgroupNamespace.namespaceIdentity, mountIdentity, cgroupPath, observations)
   const processCpuIdentity = sha256Domain("PROCESS_CPU", JSON.stringify({ pid: expectedPid, startTicks: expectedStartTicks, policy: subject.policy, rtPriority: subject.rtPriority, cpusAllowed: processCpusAllowed, available: canonicalRanges(availableRanges) }))
   const base = Object.freeze({
     version: KDO_H4_R3G_A_SNAPSHOT_VERSION,
@@ -447,6 +481,9 @@ export function createGvisorCgroupV2PhysicalResourceSnapshot(input: {
     requirementIdentity: requirement.requirementIdentity,
     pid: expectedPid,
     startTicks: expectedStartTicks,
+    cgroupNamespaceDevice: cgroupNamespace.device,
+    cgroupNamespaceInode: cgroupNamespace.inode,
+    cgroupNamespaceIdentity: cgroupNamespace.namespaceIdentity,
     cgroupPath,
     mountIdentity,
     targetProcsIdentity: targetProcs,
@@ -467,15 +504,17 @@ export function createGvisorCgroupV2PhysicalResourceSnapshot(input: {
 
 export function validateGvisorCgroupV2PhysicalResourceSnapshot(value: unknown): GvisorCgroupV2PhysicalResourceSnapshot {
   const record = plainRecord(value, "R3G-A physical snapshot")
-  exactKeys(record, ["version", "evidenceClass", "requirementIdentity", "pid", "startTicks", "cgroupPath", "mountIdentity", "targetProcsIdentity", "processCpusAllowed", "processCpuIdentity", "hierarchyIdentity", "levels", "effectiveCpuNumerator", "effectiveCpuDenominator", "availableCpuCount", "schedulerPolicy", "rtPriority", "effectiveMemoryBytes", "effectiveSwapBytes", "snapshotIdentity"], "R3G-A physical snapshot")
+  exactKeys(record, ["version", "evidenceClass", "requirementIdentity", "pid", "startTicks", "cgroupNamespaceDevice", "cgroupNamespaceInode", "cgroupNamespaceIdentity", "cgroupPath", "mountIdentity", "targetProcsIdentity", "processCpusAllowed", "processCpuIdentity", "hierarchyIdentity", "levels", "effectiveCpuNumerator", "effectiveCpuDenominator", "availableCpuCount", "schedulerPolicy", "rtPriority", "effectiveMemoryBytes", "effectiveSwapBytes", "snapshotIdentity"], "R3G-A physical snapshot")
   if (record.version !== KDO_H4_R3G_A_SNAPSHOT_VERSION || record.evidenceClass !== KDO_H4_R3G_A_EVIDENCE_CLASS) fail("R3G-A physical snapshot version/evidence class mismatch")
+  const cgroupNamespace = createGvisorCgroupNamespaceObservation({ device: record.cgroupNamespaceDevice, inode: record.cgroupNamespaceInode })
+  if (shaIdentity(record.cgroupNamespaceIdentity, "cgroupNamespaceIdentity") !== cgroupNamespace.namespaceIdentity) fail("R3G-A cgroup namespace identity mismatch")
   const cgroupPath = canonicalCgroupPath(record.cgroupPath); if (cgroupPath === "/") fail("R3G-A physical snapshot cannot target root cgroup")
   const expectedPaths = cgroupV2HierarchyPaths(cgroupPath)
   const levelValues = denseArray(record.levels, "R3G-A physical snapshot levels", KDO_H4_R3G_A_LIMITS.maxHierarchyDepth)
   if (levelValues.length !== expectedPaths.length) fail("R3G-A physical snapshot levels do not cover the non-root hierarchy")
   const parsed = levelValues.map((level, index) => validateLevel(level, expectedPaths[index])); const levels = Object.freeze(parsed.map((level) => level.observation))
   const mountIdentity = shaIdentity(record.mountIdentity, "mountIdentity")
-  const hierarchyIdentity = derivedHierarchy(mountIdentity, cgroupPath, levels)
+  const hierarchyIdentity = derivedHierarchy(cgroupNamespace.namespaceIdentity, mountIdentity, cgroupPath, levels)
   if (shaIdentity(record.hierarchyIdentity, "hierarchyIdentity") !== hierarchyIdentity) fail("R3G-A hierarchy identity mismatch")
   const derivedCpu = finiteRatio(parsed.map((level) => level.cpu))
   if (decimalString(record.effectiveCpuNumerator, "effectiveCpuNumerator", false) !== derivedCpu.numerator.toString() || decimalString(record.effectiveCpuDenominator, "effectiveCpuDenominator", false) !== derivedCpu.denominator.toString()) fail("R3G-A effective CPU ratio does not match levels")
@@ -499,6 +538,9 @@ export function validateGvisorCgroupV2PhysicalResourceSnapshot(value: unknown): 
     requirementIdentity: shaIdentity(record.requirementIdentity, "requirementIdentity"),
     pid,
     startTicks,
+    cgroupNamespaceDevice: cgroupNamespace.device,
+    cgroupNamespaceInode: cgroupNamespace.inode,
+    cgroupNamespaceIdentity: cgroupNamespace.namespaceIdentity,
     cgroupPath,
     mountIdentity,
     targetProcsIdentity: shaIdentity(record.targetProcsIdentity, "targetProcsIdentity"),
@@ -520,7 +562,7 @@ export function validateGvisorCgroupV2PhysicalResourceSnapshot(value: unknown): 
 }
 
 export function createGvisorCgroupV2ObserverProtocolIdentity(): string {
-  return sha256Domain("OBSERVER_PROTOCOL", JSON.stringify({ version: KDO_H4_R3G_A_VERSION, capability: KDO_H4_R3G_A_CAPABILITY, linuxSemanticBaseline: "linux-v6.12", gvisorSemanticBaseline: "50e1502a95d36ad2faf2c7ef33b8bf21fe975293", cgroupRoot: KDO_H4_R3G_A_CGROUP_ROOT, theorem: "nonroot-domain-fair-cpu-memory-noswap-exact-v1" }))
+  return sha256Domain("OBSERVER_PROTOCOL", JSON.stringify({ version: KDO_H4_R3G_A_VERSION, capability: KDO_H4_R3G_A_CAPABILITY, linuxSemanticBaseline: "linux-v6.12", gvisorSemanticBaseline: "50e1502a95d36ad2faf2c7ef33b8bf21fe975293", cgroupRoot: KDO_H4_R3G_A_CGROUP_ROOT, theorem: "initial-cgroupns-nonroot-domain-fair-cpu-memory-noswap-exact-v1" }))
 }
 function resourcePreimage(value: Omit<GvisorCgroupV2ResourceRecord, "resourceCandidateIdentity">): string { return JSON.stringify(value) }
 
@@ -558,6 +600,7 @@ export function createGvisorCgroupV2ResourceRecord(input: {
     processIdentity: process.processIdentity,
     subjectPid: pre.pid,
     subjectStartTicks: pre.startTicks,
+    cgroupNamespaceIdentity: pre.cgroupNamespaceIdentity,
     cgroupPath: pre.cgroupPath,
     hierarchyIdentity: pre.hierarchyIdentity,
     prePhysicalSnapshotIdentity: pre.snapshotIdentity,
@@ -573,7 +616,7 @@ export function createGvisorCgroupV2ResourceRecord(input: {
 
 export function validateGvisorCgroupV2ResourceRecord(value: unknown): GvisorCgroupV2ResourceRecord {
   const record = plainRecord(value, "R3G-A resource record")
-  exactKeys(record, ["version", "evidenceClass", "executionAttemptIdentity", "requirementIdentity", "workloadIdentity", "containerBindingIdentity", "containerId", "r3eRecordIdentity", "r3eCommitIdentity", "runtimeInstanceIdentity", "r3eObserverImplementationIdentity", "observerProtocolIdentity", "processIdentity", "subjectPid", "subjectStartTicks", "cgroupPath", "hierarchyIdentity", "prePhysicalSnapshotIdentity", "postPhysicalSnapshotIdentity", "effectiveCpuNumerator", "effectiveCpuDenominator", "availableCpuCount", "effectiveMemoryBytes", "effectiveSwapBytes", "resourceCandidateIdentity"], "R3G-A resource record")
+  exactKeys(record, ["version", "evidenceClass", "executionAttemptIdentity", "requirementIdentity", "workloadIdentity", "containerBindingIdentity", "containerId", "r3eRecordIdentity", "r3eCommitIdentity", "runtimeInstanceIdentity", "r3eObserverImplementationIdentity", "observerProtocolIdentity", "processIdentity", "subjectPid", "subjectStartTicks", "cgroupNamespaceIdentity", "cgroupPath", "hierarchyIdentity", "prePhysicalSnapshotIdentity", "postPhysicalSnapshotIdentity", "effectiveCpuNumerator", "effectiveCpuDenominator", "availableCpuCount", "effectiveMemoryBytes", "effectiveSwapBytes", "resourceCandidateIdentity"], "R3G-A resource record")
   if (record.version !== KDO_H4_R3G_A_RECORD_VERSION || record.evidenceClass !== KDO_H4_R3G_A_EVIDENCE_CLASS) fail("R3G-A resource record version/evidence class mismatch")
   const availableCpuCount = record.availableCpuCount
   if (typeof availableCpuCount !== "number" || !Number.isSafeInteger(availableCpuCount) || availableCpuCount <= 0 || availableCpuCount > KDO_H4_R3G_A_LIMITS.maxCpuId + 1) fail("R3G-A availableCpuCount is invalid")
@@ -597,6 +640,7 @@ export function validateGvisorCgroupV2ResourceRecord(value: unknown): GvisorCgro
     processIdentity: shaIdentity(record.processIdentity, "processIdentity"),
     subjectPid: positivePid(record.subjectPid, "subjectPid"),
     subjectStartTicks: decimalString(record.subjectStartTicks, "subjectStartTicks"),
+    cgroupNamespaceIdentity: shaIdentity(record.cgroupNamespaceIdentity, "cgroupNamespaceIdentity"),
     cgroupPath: (() => { const path = canonicalCgroupPath(record.cgroupPath); if (path === "/") fail("R3G-A record cannot target root cgroup"); return path })(),
     hierarchyIdentity: shaIdentity(record.hierarchyIdentity, "hierarchyIdentity"),
     prePhysicalSnapshotIdentity: preIdentity,
@@ -627,8 +671,12 @@ export function validateGvisorCgroupV2ResourceCommit(value: unknown, expectedRec
 }
 export function validateGvisorCgroupV2RuntimeConfig(value: unknown): GvisorCgroupV2RuntimeConfig {
   const record = plainRecord(value, "R3G-A runtime config")
-  exactKeys(record, ["version", "commitResourceEvidence"], "R3G-A runtime config")
+  exactKeys(record, ["version", "initialCgroupNamespaceIdentity", "commitResourceEvidence"], "R3G-A runtime config")
   if (record.version !== KDO_H4_R3G_A_RUNTIME_CONFIG_VERSION) fail("R3G-A runtime config version mismatch")
   if (typeof record.commitResourceEvidence !== "function") fail("R3G-A commitResourceEvidence must be a function")
-  return Object.freeze({ version: KDO_H4_R3G_A_RUNTIME_CONFIG_VERSION, commitResourceEvidence: record.commitResourceEvidence as GvisorCgroupV2RuntimeConfig["commitResourceEvidence"] })
+  return Object.freeze({
+    version: KDO_H4_R3G_A_RUNTIME_CONFIG_VERSION,
+    initialCgroupNamespaceIdentity: validateGvisorInitialCgroupNamespaceIdentity(record.initialCgroupNamespaceIdentity),
+    commitResourceEvidence: record.commitResourceEvidence as GvisorCgroupV2RuntimeConfig["commitResourceEvidence"],
+  })
 }
