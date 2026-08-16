@@ -389,6 +389,7 @@ function validateJsonSyntaxNoDuplicateKeys(text: string, label: string): void {
   const length = text.length
   const isWhitespace = (char: string) => char === " " || char === "\t" || char === "\r" || char === "\n"
   const skipWhitespace = () => { while (index < length && isWhitespace(text[index] ?? "")) index += 1 }
+  const numberPattern = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y
 
   const parseStringToken = (): string => {
     if (text[index] !== '"') throw new TypeError(`${label} contains invalid JSON string syntax`)
@@ -455,11 +456,11 @@ function validateJsonSyntaxNoDuplicateKeys(text: string, label: string): void {
       }
     }
     if (char === '"') { parseStringToken(); return }
-    const rest = text.slice(index)
-    const number = rest.match(/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/)
-    if (number) { index += number[0].length; return }
+    numberPattern.lastIndex = index
+    const number = numberPattern.exec(text)
+    if (number !== null) { index = numberPattern.lastIndex; return }
     for (const literal of ["true", "false", "null"] as const) {
-      if (rest.startsWith(literal)) { index += literal.length; return }
+      if (text.startsWith(literal, index)) { index += literal.length; return }
     }
     throw new TypeError(`${label} contains invalid JSON value syntax`)
   }
@@ -550,7 +551,11 @@ async function boundedDockerGet(input: {
         cleanup()
         resolve(value)
       }
-      const onAbort = () => request.destroy(new Error("Docker R3F request aborted"))
+      const onAbort = () => {
+        const error = new Error("Docker R3F request aborted")
+        finishReject(error)
+        request.destroy(error)
+      }
       const cleanup = () => input.signal?.removeEventListener("abort", onAbort)
       const request = httpRequest({
         method: "GET",
@@ -591,8 +596,13 @@ async function boundedDockerGet(input: {
         response.on("error", finishReject)
       })
       request.on("error", finishReject)
-      request.setTimeout(KDO_H4_R3F_LIMITS.requestTimeoutMs, () => request.destroy(new Error("Docker R3F request timed out")))
+      request.setTimeout(KDO_H4_R3F_LIMITS.requestTimeoutMs, () => {
+        const error = new Error("Docker R3F request timed out")
+        finishReject(error)
+        request.destroy(error)
+      })
       input.signal?.addEventListener("abort", onAbort, { once: true })
+      if (input.signal?.aborted) { onAbort(); return }
       request.end()
     })
   } finally {
