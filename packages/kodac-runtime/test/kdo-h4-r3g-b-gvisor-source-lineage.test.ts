@@ -867,3 +867,28 @@ test("H4-R3G-B Linux production gateway proves one exact physical source lineage
     rmSync(scratch, { recursive: true, force: true })
   }
 })
+
+test("H4-R3G-B trusted store exact same-record put is idempotent and conflicting bytes fail closed", () => {
+  const { record } = fullFixture()
+  const validated = validateGvisorSourceLineageRecord(record)
+  const canonicalBytes = serializeGvisorSourceLineageRecord(validated)
+  const stored = new Map<string, string>()
+  const put = (recordIdentity: string, bytes: string) => {
+    const existing = stored.get(recordIdentity)
+    if (existing !== undefined && existing !== bytes) throw new Error("R3G-B durable store integrity violation: conflicting canonical bytes for recordIdentity")
+    if (existing === undefined) stored.set(recordIdentity, bytes)
+    return createGvisorSourceLineageCommit(validated)
+  }
+
+  const first = put(validated.recordIdentity, canonicalBytes)
+  const second = put(validated.recordIdentity, canonicalBytes)
+  assert.equal(stored.size, 1)
+  assert.equal(stored.get(validated.recordIdentity), canonicalBytes)
+  assert.deepEqual(second, first)
+  assert.equal(validateGvisorSourceLineageCommit(first, validated).recordIdentity, validated.recordIdentity)
+  assert.equal(validateGvisorSourceLineageCommit(second, validated).recordIdentity, validated.recordIdentity)
+
+  assert.throws(() => put(validated.recordIdentity, `${canonicalBytes} `), /integrity violation/)
+  assert.equal(stored.size, 1)
+  assert.equal(stored.get(validated.recordIdentity), canonicalBytes)
+})
