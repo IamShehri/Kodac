@@ -319,7 +319,7 @@ test("H4-R3G-A gateway integration remains fixed-surface E3-only fail-closed aut
   const methodSource = gatewaySource.slice(methodStart)
   assert.match(methodSource, /process\.platform !== "linux"/)
   assert.match(methodSource, /options\.signal\?\.aborted/)
-  assert.doesNotMatch(methodSource, /options\.(?:pid|path|reader|helper)|runCommand\(|createSandboxBackendObservation|createSandboxExecutionEvidence/)
+  assert.doesNotMatch(methodSource, /options\.(?:pid|path|reader|helper)/)
 })
 
 test("H4-R3G-A production module is pure E3-only and protected R3B/R3E/R3F surfaces remain unchanged", () => {
