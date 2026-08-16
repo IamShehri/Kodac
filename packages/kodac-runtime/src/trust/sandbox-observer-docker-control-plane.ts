@@ -33,6 +33,9 @@ export const KDO_H4_R3F_LIMITS = Object.freeze({
   maxSocketPathBytes: 4096,
   maxListResponseBytes: 262_144,
   maxInspectResponseBytes: 1_048_576,
+  maxSystemInfoResponseBytes: 1_048_576,
+  maxImageInspectResponseBytes: 1_048_576,
+  maxDiffIds: 512,
   maxResponseHeaderBytes: 16_384,
   requestTimeoutMs: 5_000,
   maxJsonDepth: 64,
@@ -89,6 +92,30 @@ export interface DockerControlPlaneProviderConfig {
   readonly requirement: SandboxExecutionRequirement
 }
 
+export interface DockerSourceSystemInfoObservation {
+  readonly socketEndpointIdentity: string
+  readonly osType: "linux"
+  readonly driver: "overlayfs"
+  readonly dockerRootDir: string
+  readonly containerdAddress: string
+  readonly containerdContainersNamespace: "moby"
+}
+
+export interface DockerSourceImageRootfsObservation {
+  readonly socketEndpointIdentity: string
+  readonly sourceReference: string
+  readonly sourceDigest: string
+  readonly descriptorDigest: string
+  readonly rootfsType: "layers"
+  readonly diffIds: readonly string[]
+}
+
+export interface DockerSourceControlPlaneObservation {
+  readonly socketEndpoint: DockerSocketEndpointIdentity
+  readonly systemInfo: DockerSourceSystemInfoObservation
+  readonly imageRootfs: DockerSourceImageRootfsObservation
+}
+
 export interface DockerControlPlaneBindingProvider {
   readonly providerId: typeof KDO_H4_R3F_PROVIDER_ID
   readonly providerIdentity: string
@@ -104,6 +131,9 @@ export interface DockerControlPlaneBindingProvider {
     options: { readonly signal?: AbortSignal },
   ) => Promise<GvisorContainerBinding>
 }
+
+type DockerSourceObserver = (options?: { readonly signal?: AbortSignal }) => Promise<DockerSourceControlPlaneObservation>
+const dockerSourceObservers = new WeakMap<DockerControlPlaneBindingProvider["resolveContainerBinding"], DockerSourceObserver>()
 
 const SHA256 = /^[0-9a-f]{64}$/
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/
@@ -182,6 +212,16 @@ function canonicalSocketPath(value: unknown): string {
   }
   if (!posix.isAbsolute(value) || posix.normalize(value) !== value || (value.length > 1 && value.endsWith("/"))) {
     throw new TypeError("socketPath must be a canonical absolute POSIX path")
+  }
+  return value
+}
+
+function canonicalHostPath(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.includes("\0") || byteLength(value) > KDO_H4_R3F_LIMITS.maxSocketPathBytes) {
+    throw new TypeError(`${label} must be a bounded non-empty POSIX path`)
+  }
+  if (!posix.isAbsolute(value) || posix.normalize(value) !== value || (value.length > 1 && value.endsWith("/"))) {
+    throw new TypeError(`${label} must be a canonical absolute POSIX path`)
   }
   return value
 }
@@ -527,6 +567,15 @@ function exactInspectPath(containerId: string): string {
   return `/v${KDO_H4_R3F_DOCKER_API_VERSION}/containers/${fullContainerId(containerId)}/json?size=0`
 }
 
+function exactSystemInfoPath(): string {
+  return `/v${KDO_H4_R3F_DOCKER_API_VERSION}/info`
+}
+
+function exactSourceImageInspectPath(requirement: SandboxExecutionRequirement): { readonly path: string; readonly sourceReference: string } {
+  const sourceReference = `${requirement.workload.source.repository}@${requirement.workload.source.digest}`
+  return Object.freeze({ path: `/v${KDO_H4_R3F_DOCKER_API_VERSION}/images/${sourceReference}/json`, sourceReference })
+}
+
 async function boundedDockerGet(input: {
   socketPath: string
   socketEndpoint: DockerSocketEndpointIdentity
@@ -654,6 +703,55 @@ function requiredStringArray(record: Record<string, unknown>, key: string, label
     return entry
   })
   return Object.freeze(output)
+}
+
+function validateDockerSourceSystemInfo(value: unknown, socketEndpoint: DockerSocketEndpointIdentity): DockerSourceSystemInfoObservation {
+  const info = asPlainRecord(value, "Docker SystemInfo response")
+  if (requiredString(info, "OSType", "Docker SystemInfo") !== "linux") throw new TypeError("Docker SystemInfo OSType must be linux")
+  if (requiredString(info, "Driver", "Docker SystemInfo") !== "overlayfs") throw new TypeError("Docker SystemInfo Driver must be overlayfs")
+  const dockerRootDir = canonicalHostPath(requiredString(info, "DockerRootDir", "Docker SystemInfo"), "DockerRootDir")
+  const containerd = requiredRecord(info, "Containerd", "Docker SystemInfo")
+  const containerdAddress = canonicalHostPath(requiredString(containerd, "Address", "Docker SystemInfo.Containerd"), "Containerd.Address")
+  const namespaces = requiredRecord(containerd, "Namespaces", "Docker SystemInfo.Containerd")
+  if (requiredString(namespaces, "Containers", "Docker SystemInfo.Containerd.Namespaces") !== "moby") {
+    throw new TypeError("Docker SystemInfo containerd containers namespace must be moby")
+  }
+  return Object.freeze({
+    socketEndpointIdentity: socketEndpoint.endpointIdentity,
+    osType: "linux" as const,
+    driver: "overlayfs" as const,
+    dockerRootDir,
+    containerdAddress,
+    containerdContainersNamespace: "moby" as const,
+  })
+}
+
+function validateDockerSourceImageRootfs(
+  value: unknown,
+  requirement: SandboxExecutionRequirement,
+  socketEndpoint: DockerSocketEndpointIdentity,
+  sourceReference: string,
+): DockerSourceImageRootfsObservation {
+  const inspect = asPlainRecord(value, "Docker source image inspect response")
+  const descriptor = requiredRecord(inspect, "Descriptor", "Docker source image inspect")
+  const descriptorDigest = digest(descriptor.digest, "Docker source image Descriptor.digest")
+  const sourceDigest = requirement.workload.source.digest
+  if (descriptorDigest !== sourceDigest) throw new TypeError("Docker source image descriptor digest does not match required source digest")
+  const rootfs = requiredRecord(inspect, "RootFS", "Docker source image inspect")
+  if (requiredString(rootfs, "Type", "Docker source image RootFS") !== "layers") throw new TypeError("Docker source image RootFS.Type must be layers")
+  const rawLayers = requiredStringArray(rootfs, "Layers", "Docker source image RootFS")
+  if (rawLayers.length === 0 || rawLayers.length > KDO_H4_R3F_LIMITS.maxDiffIds) {
+    throw new TypeError(`Docker source image DiffIDs must contain 1..${KDO_H4_R3F_LIMITS.maxDiffIds} entries`)
+  }
+  const diffIds = Object.freeze(rawLayers.map((entry, index) => digest(entry, `Docker source image RootFS.Layers[${index}]`)))
+  return Object.freeze({
+    socketEndpointIdentity: socketEndpoint.endpointIdentity,
+    sourceReference,
+    sourceDigest,
+    descriptorDigest,
+    rootfsType: "layers" as const,
+    diffIds,
+  })
 }
 
 function validateInspect(input: {
@@ -799,6 +897,34 @@ export function createDockerControlPlaneBindingProvider(value: unknown): DockerC
     options: { readonly signal?: AbortSignal },
   ): Promise<GvisorContainerBinding> => (await resolveDockerControlPlaneBinding(request, options)).binding
 
+  const observeDockerSourceControlPlane: DockerSourceObserver = async (options = {}) => {
+    if (options.signal?.aborted) throw new Error("Docker R3G-B source observation aborted")
+    const systemInfoBody = await boundedDockerGet({
+      socketPath: config.socketPath,
+      socketEndpoint,
+      path: exactSystemInfoPath(),
+      maxBodyBytes: KDO_H4_R3F_LIMITS.maxSystemInfoResponseBytes,
+      signal: options.signal,
+    })
+    const systemInfo = validateDockerSourceSystemInfo(parseDockerJson(systemInfoBody, "Docker SystemInfo response"), socketEndpoint)
+    const imageTarget = exactSourceImageInspectPath(config.requirement)
+    const imageBody = await boundedDockerGet({
+      socketPath: config.socketPath,
+      socketEndpoint,
+      path: imageTarget.path,
+      maxBodyBytes: KDO_H4_R3F_LIMITS.maxImageInspectResponseBytes,
+      signal: options.signal,
+    })
+    const imageRootfs = validateDockerSourceImageRootfs(
+      parseDockerJson(imageBody, "Docker source image inspect response"),
+      config.requirement,
+      socketEndpoint,
+      imageTarget.sourceReference,
+    )
+    return Object.freeze({ socketEndpoint, systemInfo, imageRootfs })
+  }
+  dockerSourceObservers.set(resolveContainerBinding, observeDockerSourceControlPlane)
+
   return Object.freeze({
     providerId: KDO_H4_R3F_PROVIDER_ID,
     providerIdentity: fixedProviderIdentity,
@@ -812,4 +938,14 @@ export function createDockerControlPlaneBindingProvider(value: unknown): DockerC
 
 export function createDockerContainerBindingResolver(value: unknown): DockerControlPlaneBindingProvider["resolveContainerBinding"] {
   return createDockerControlPlaneBindingProvider(value).resolveContainerBinding
+}
+
+export async function observeDockerSourceControlPlaneForBindingResolver(
+  resolver: unknown,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<DockerSourceControlPlaneObservation> {
+  if (typeof resolver !== "function") throw new TypeError("R3G-B Docker source observation requires a binding resolver function")
+  const observer = dockerSourceObservers.get(resolver as DockerControlPlaneBindingProvider["resolveContainerBinding"])
+  if (observer === undefined) throw new Error("R3G-B Docker source observation requires a canonical R3F Docker binding resolver")
+  return observer(options)
 }
