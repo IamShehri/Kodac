@@ -46,6 +46,34 @@ import {
   type LauncherArtifactObservation,
   type LinuxLandlockRuntimeConfig,
 } from "../trust/confinement-runtime.ts"
+import {
+  validateSandboxExecutionRequirement,
+  type SandboxExecutionRequirement,
+} from "../trust/sandbox-backend-evidence.ts"
+import {
+  createGvisorObserverPlan,
+  createGvisorRuntimeObservationCandidate,
+  materializeGvisorStateCommand,
+  materializeGvisorStatsCommand,
+  parseGvisorProcessObservation,
+  parseGvisorStateOutput,
+  parseGvisorStatsOutput,
+} from "../trust/sandbox-observer-gvisor.ts"
+import {
+  KDO_H4_R3E_HELPER_FD,
+  KDO_H4_R3E_LIMITS,
+  KDO_H4_R3E_RUNSC_FD,
+  createGvisorContainerBindingRequest,
+  createGvisorExecutionAttemptIdentity,
+  createGvisorObserverArtifact,
+  createGvisorRuntimeLineageRecord,
+  validateGvisorContainerBinding,
+  validateGvisorObserverRuntimeConfig,
+  validateGvisorRuntimeLineageCommit,
+  type GvisorObserverArtifact,
+  type GvisorObserverRuntimeConfig,
+  type GvisorRuntimeLineageRecord,
+} from "../trust/sandbox-observer-gvisor-runtime.ts"
 import type { ExecutionIntent, PolicyEngine, PolicyResult } from "../trust/policy.ts"
 
 export interface ExecutionObserver {
@@ -186,13 +214,81 @@ async function observeLauncherArtifact(config: LinuxLandlockRuntimeConfig): Prom
   } catch (error) { await handle.close().catch(() => {}); throw error }
 }
 
+interface TrustedGvisorArtifactHandle {
+  readonly handle: FileHandle
+  readonly initialStat: Awaited<ReturnType<FileHandle["stat"]>>
+  readonly artifact: GvisorObserverArtifact
+}
+
+async function hashTrustedArtifact(handle: FileHandle, sizeBytes: number, label: string): Promise<string> {
+  const hash = createHash("sha256"); const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, sizeBytes)); let offset = 0
+  while (offset < sizeBytes) {
+    const wanted = Math.min(buffer.byteLength, sizeBytes - offset); const { bytesRead } = await handle.read(buffer, 0, wanted, offset)
+    if (bytesRead <= 0) throw new Error(`${label} changed while its verified descriptor was hashed`)
+    hash.update(buffer.subarray(0, bytesRead)); offset += bytesRead
+  }
+  return hash.digest("hex")
+}
+
+async function observeTrustedGvisorArtifact(path: string, expectedSha256: string, role: "runsc" | "observer-helper", maximumBytes: number): Promise<TrustedGvisorArtifactHandle> {
+  const handle = await open(path, "r")
+  try {
+    const stat = await handle.stat(); if (!stat.isFile()) throw new Error(`configured ${role} artifact must be a regular file`)
+    if (!Number.isSafeInteger(stat.size) || stat.size <= 0 || stat.size > maximumBytes) throw new Error(`configured ${role} artifact size is outside the authorized bound`)
+    const observedSha256 = await hashTrustedArtifact(handle, stat.size, role); const stableStat = await handle.stat()
+    if (!sameLauncherStat(stat, stableStat)) throw new Error(`configured ${role} artifact metadata changed during same-FD verification`)
+    if (observedSha256 !== expectedSha256) throw new Error(`configured ${role} artifact SHA-256 does not match trusted runtime identity`)
+    return { handle, initialStat: stat, artifact: createGvisorObserverArtifact({ role, sha256: observedSha256, sizeBytes: stat.size }) }
+  } catch (error) { await handle.close().catch(() => {}); throw error }
+}
+
+async function reverifyTrustedGvisorArtifact(value: TrustedGvisorArtifactHandle): Promise<void> {
+  const before = await value.handle.stat(); if (!sameLauncherStat(value.initialStat, before)) throw new Error(`${value.artifact.role} artifact metadata changed after verification`)
+  const digest = await hashTrustedArtifact(value.handle, value.artifact.sizeBytes, value.artifact.role); const after = await value.handle.stat()
+  if (!sameLauncherStat(value.initialStat, after) || digest !== value.artifact.sha256) throw new Error(`${value.artifact.role} artifact changed during R3E observation`)
+}
+
+async function boundedTrustedCallback<T>(label: string, signal: AbortSignal | undefined, operation: () => Promise<T> | T): Promise<T> {
+  if (signal?.aborted) throw new Error(`${label} aborted before start`)
+  let timer: NodeJS.Timeout | undefined; let abortHandler: (() => void) | undefined
+  const timeout = new Promise<never>((_, rejectPromise) => { timer = setTimeout(() => rejectPromise(new Error(`${label} timed out`)), KDO_H4_R3E_LIMITS.stateTimeoutMs) })
+  const abort = signal === undefined ? new Promise<never>(() => {}) : new Promise<never>((_, rejectPromise) => { abortHandler = () => rejectPromise(new Error(`${label} aborted`)); signal.addEventListener("abort", abortHandler, { once: true }) })
+  try { return await Promise.race([Promise.resolve().then(operation), timeout, abort]) }
+  finally { if (timer !== undefined) clearTimeout(timer); if (abortHandler !== undefined) signal?.removeEventListener("abort", abortHandler) }
+}
+
+async function runGvisorFdCommand(options: {
+  executableFd: typeof KDO_H4_R3E_RUNSC_FD | typeof KDO_H4_R3E_HELPER_FD
+  runscParentFd: number
+  helperParentFd?: number
+  args: readonly string[]
+  maxStdoutBytes: number
+  timeoutMs: number
+  label: string
+  signal?: AbortSignal
+}): Promise<{ stdout: string; stderr: string }> {
+  if (options.signal?.aborted) throw new Error(`${options.label} aborted before spawn`)
+  const child = options.helperParentFd === undefined
+    ? spawn(`/proc/self/fd/${options.executableFd}`, [...options.args], { cwd: "/", env: { LANG: "C", LC_ALL: "C" }, windowsHide: true, shell: false, timeout: options.timeoutMs, signal: options.signal, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe", options.runscParentFd] })
+    : spawn(`/proc/self/fd/${options.executableFd}`, [...options.args], { cwd: "/", env: { LANG: "C", LC_ALL: "C" }, windowsHide: true, shell: false, timeout: options.timeoutMs, signal: options.signal, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe", options.runscParentFd, options.helperParentFd] })
+  const stdout = child.stdout; const stderr = child.stderr
+  if (!stdout || !stderr) { child.kill("SIGKILL"); throw new Error(`${options.label} did not expose bounded stdout/stderr`) }
+  const kill = () => child.kill("SIGKILL")
+  const stdoutPromise = readBoundedStream(stdout, options.maxStdoutBytes, `${options.label} stdout`, kill); const stderrPromise = readBoundedStream(stderr, KDO_H4_R3E_LIMITS.maxStderrBytes, `${options.label} stderr`, kill)
+  void stdoutPromise.catch(() => {}); void stderrPromise.catch(() => {})
+  const exit = await waitForChild(child); const [stdoutBytes, stderrBytes] = await Promise.all([stdoutPromise, stderrPromise])
+  if (exit.exitCode !== 0) throw new Error(`${options.label} failed: code=${String(exit.exitCode)} signal=${String(exit.signal)} stderr=${stderrBytes.toString("utf8")}`)
+  return { stdout: stdoutBytes.toString("utf8"), stderr: stderrBytes.toString("utf8") }
+}
+
 export class ExecutionGateway {
   private readonly fs: WorkspaceFileSystem
   private readonly policy: PolicyEngine
   private readonly approval?: ApprovalRuntime
   private readonly confinement?: LinuxLandlockRuntimeConfig
-  constructor(fs: WorkspaceFileSystem, policy: PolicyEngine, approval?: ApprovalRuntime, confinement?: LinuxLandlockRuntimeConfig) {
-    this.fs = fs; this.policy = policy; this.approval = approval; this.confinement = confinement === undefined ? undefined : validateLinuxLandlockRuntimeConfig(confinement)
+  private readonly gvisorObserver?: GvisorObserverRuntimeConfig
+  constructor(fs: WorkspaceFileSystem, policy: PolicyEngine, approval?: ApprovalRuntime, confinement?: LinuxLandlockRuntimeConfig, gvisorObserver?: GvisorObserverRuntimeConfig) {
+    this.fs = fs; this.policy = policy; this.approval = approval; this.confinement = confinement === undefined ? undefined : validateLinuxLandlockRuntimeConfig(confinement); this.gvisorObserver = gvisorObserver === undefined ? undefined : validateGvisorObserverRuntimeConfig(gvisorObserver)
   }
   private async block(intent: ExecutionIntent, policy: PolicyResult, startedAt: string, observer: ExecutionObserver | undefined, reason: string, message: string): Promise<never> {
     const receipt = blockedReceipt(intent, policy, startedAt, reason); await persistReceipt(observer, receipt); throw new ExecutionBlockedError(message, receipt)
@@ -210,7 +306,7 @@ export class ExecutionGateway {
     catch { outcome = signal?.aborted ? "cancelled" : "unavailable" }
     const decisionEvidence = createApprovalEvidence(request, "decided", outcome)
     try { const commit = await runtime.evidence.commit(decisionEvidence); validateApprovalEvidenceCommit(commit, decisionEvidence) }
-    catch { return this.block(intent, policy, startedAt, observer, "approval decision evidence could not be durably committed", "Approval unavailable: decision evidence could not be durably committed") }
+    catch { return this.block(intent, policy, startedAt, observer, "approval decision evidence could not be durably committed", "Approval unavailable: approval decision evidence could not be durably committed") }
     if (outcome !== "allowed-once") return this.block(intent, policy, startedAt, observer, `one-shot approval outcome: ${outcome}`, `Execution blocked by one-shot approval outcome: ${outcome}`)
     if (signal?.aborted) return this.block(intent, policy, startedAt, observer, "operation aborted after one-shot approval", "Execution blocked: operation aborted after one-shot approval")
     return Object.freeze({ version: KDO_H4_R1_APPROVAL_VERSION, requestIdentity: request.requestIdentity, requestInstanceId: request.requestInstanceId, decisionEvidenceIdentity: decisionEvidence.evidenceIdentity, outcome: "allowed-once" })
@@ -240,6 +336,45 @@ export class ExecutionGateway {
     for (const [parent, parentPaths] of pathsByParent) { const entries = await this.fs.list(parent, { recursive: false, maxEntries: 20_000, maxDepth: 1 }); const regularFiles = new Set(entries.filter((entry) => entry.type === "file").map((entry) => portablePath(entry.path))); for (const path of parentPaths) if (!regularFiles.has(path)) throw new Error(`git.hash-object path is not a regular workspace file: ${path}`) }
     const result = await this.runReadOnlyCommand("git.hash-object", "git", ["hash-object", "--no-filters", "--", ...canonicalPaths], canonicalPaths, observer, { ...options, maxOutputBytes: options.maxOutputBytes ?? 64 * 1024, timeoutMs: options.timeoutMs ?? 10_000 }, "git hash-object", (stdout) => { parseGitHashObjectOutput(stdout, canonicalPaths.length) }); const objectIds = parseGitHashObjectOutput(result.stdout, canonicalPaths.length); return { objects: canonicalPaths.map((path, index) => ({ path, gitObjectId: objectIds[index] })), receipt: result.receipt }
   }
+  async observeGvisorRuntimeInstance(requirementValue: SandboxExecutionRequirement, observer?: ExecutionObserver, options: { signal?: AbortSignal } = {}): Promise<GvisorRuntimeLineageRecord> {
+    const startedAt = new Date().toISOString(); const requirement = validateSandboxExecutionRequirement(requirementValue)
+    if (requirement.requiredSemanticRuntimeClass !== "gvisor") throw new Error("R3E observer requires requiredSemanticRuntimeClass=gvisor")
+    const intent = immutableExecutionIntent({ capability: "runtime.observe.gvisor", paths: [], inputDigest: sha256(JSON.stringify({ requirementIdentity: requirement.requirementIdentity, workloadIdentity: requirement.workload.workloadIdentity, semanticRuntimeClass: "gvisor" })) }); await observer?.onIntent?.(intent)
+    const policy = immutablePolicyResult(await this.policy.evaluate(intent)); await observer?.onPolicy?.(intent, policy)
+    if (policy.decision === "deny") return this.block(intent, policy, startedAt, observer, policy.reason, `Execution denied: ${policy.reason}`)
+    if (policy.decision === "ask") return this.block(intent, policy, startedAt, observer, "R3E observer approval is not authorized", "Approval unavailable: R3E observer does not authorize ask")
+    if (process.platform !== "linux") return this.block(intent, policy, startedAt, observer, "R3E gVisor observer requires Linux", "gVisor observation unavailable: Linux required")
+    const runtime = this.gvisorObserver; if (!runtime) return this.block(intent, policy, startedAt, observer, "trusted R3E gVisor observer runtime is not configured", "gVisor observation unavailable: trusted runtime not configured")
+    if (options.signal?.aborted) return this.block(intent, policy, startedAt, observer, "R3E observation aborted before external reads", "gVisor observation aborted")
+    let runsc: TrustedGvisorArtifactHandle | undefined; let helper: TrustedGvisorArtifactHandle | undefined
+    try {
+      const executionAttemptIdentity = createGvisorExecutionAttemptIdentity({ requirementIdentity: requirement.requirementIdentity, workloadIdentity: requirement.workload.workloadIdentity, nonce: randomUUID() })
+      const bindingRequest = createGvisorContainerBindingRequest({ executionAttemptIdentity, requirement })
+      const rawBinding = await boundedTrustedCallback("R3E container binding resolver", options.signal, () => runtime.resolveContainerBinding(bindingRequest, { signal: options.signal })); const binding = validateGvisorContainerBinding(rawBinding, bindingRequest)
+      runsc = await observeTrustedGvisorArtifact(runtime.runscPath, runtime.expectedRunscSha256, "runsc", KDO_H4_R3E_LIMITS.maxRunscBytes)
+      helper = await observeTrustedGvisorArtifact(runtime.observerHelperPath, runtime.expectedObserverHelperSha256, "observer-helper", KDO_H4_R3E_LIMITS.maxHelperBytes)
+      const plan = createGvisorObserverPlan({ runscPath: runtime.runscPath, expectedRunscSha256: runtime.expectedRunscSha256, runtimeRoot: runtime.runtimeRoot, containerId: binding.containerId })
+      const stateCommand = materializeGvisorStateCommand(plan); const statsCommand = materializeGvisorStatsCommand(plan)
+      const state1Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_RUNSC_FD, runscParentFd: runsc.handle.fd, args: stateCommand.args, maxStdoutBytes: KDO_H4_R3E_LIMITS.maxStateStdoutBytes, timeoutMs: KDO_H4_R3E_LIMITS.stateTimeoutMs, label: "R3E runsc state #1", signal: options.signal }); const state1 = parseGvisorStateOutput(state1Raw.stdout, plan)
+      const process1Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_HELPER_FD, runscParentFd: runsc.handle.fd, helperParentFd: helper.handle.fd, args: ["--pid", String(state1.pid)], maxStdoutBytes: KDO_H4_R3E_LIMITS.maxHelperStdoutBytes, timeoutMs: KDO_H4_R3E_LIMITS.helperTimeoutMs, label: "R3E process observation #1", signal: options.signal }); const process1 = parseGvisorProcessObservation(process1Raw.stdout); if (process1.pid !== state1.pid) throw new Error("R3E process #1 PID does not match state #1")
+      const statsRaw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_RUNSC_FD, runscParentFd: runsc.handle.fd, args: statsCommand.args, maxStdoutBytes: KDO_H4_R3E_LIMITS.maxStatsStdoutBytes, timeoutMs: KDO_H4_R3E_LIMITS.statsTimeoutMs, label: "R3E runsc stats", signal: options.signal }); const stats = parseGvisorStatsOutput(statsRaw.stdout, plan)
+      const state2Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_RUNSC_FD, runscParentFd: runsc.handle.fd, args: stateCommand.args, maxStdoutBytes: KDO_H4_R3E_LIMITS.maxStateStdoutBytes, timeoutMs: KDO_H4_R3E_LIMITS.stateTimeoutMs, label: "R3E runsc state #2", signal: options.signal }); const state2 = parseGvisorStateOutput(state2Raw.stdout, plan)
+      const process2Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_HELPER_FD, runscParentFd: runsc.handle.fd, helperParentFd: helper.handle.fd, args: ["--pid", String(state2.pid)], maxStdoutBytes: KDO_H4_R3E_LIMITS.maxHelperStdoutBytes, timeoutMs: KDO_H4_R3E_LIMITS.helperTimeoutMs, label: "R3E process observation #2", signal: options.signal }); const process2 = parseGvisorProcessObservation(process2Raw.stdout)
+      if (process2.pid !== state2.pid || state1.stateIdentity !== state2.stateIdentity || process1.processIdentity !== process2.processIdentity) throw new Error("R3E exact-instance observation bracket changed")
+      await reverifyTrustedGvisorArtifact(runsc); await reverifyTrustedGvisorArtifact(helper)
+      const candidate = createGvisorRuntimeObservationCandidate({ plan, state: state1, stats, process: process1 }); const record = createGvisorRuntimeLineageRecord({ executionAttemptIdentity, requirement, binding, runsc: runsc.artifact, helper: helper.artifact, plan, state: state1, stats, process: process1, candidate })
+      if (options.signal?.aborted) throw new Error("R3E observation aborted before durable evidence commit")
+      const rawCommit = await boundedTrustedCallback("R3E durable evidence commit", options.signal, () => runtime.commitLineageEvidence(record)); validateGvisorRuntimeLineageCommit(rawCommit, record)
+      if (options.signal?.aborted) throw new Error("R3E observation aborted before commit acknowledgment completed")
+      const serializedRecord = JSON.stringify(record); const receipt = createReceipt({ capability: intent.capability, inputDigest: intent.inputDigest, paths: intent.paths, policy, startedAt, completedAt: new Date().toISOString(), result: { status: "success", outputDigest: sha256(serializedRecord), outputBytes: Buffer.byteLength(serializedRecord, "utf8"), exitCode: 0 } }); await persistReceipt(observer, receipt)
+      return record
+    } catch (error) {
+      if (error instanceof ExecutionUnprovenError) throw error
+      const message = error instanceof Error ? error.message : String(error); const receipt = createReceipt({ capability: intent.capability, inputDigest: intent.inputDigest, paths: intent.paths, policy, startedAt, completedAt: new Date().toISOString(), result: { status: "failure", error: message } }); await persistReceipt(observer, receipt); throw new ExecutionFailedError(`runtime.observe.gvisor failed: ${message}`, receipt, { cause: error })
+    } finally {
+      await helper?.handle.close().catch(() => {}); await runsc?.handle.close().catch(() => {})
+    }
+  }
   async runCommand(capability: string, executable: string, args: string[], observer?: ExecutionObserver, options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number; env?: NodeJS.ProcessEnv; paths?: string[]; allowedExitCodes?: number[] } = {}): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
     if (capability.startsWith("git.") || capability.startsWith("repo.")) throw new Error(`Generic runCommand cannot use reserved capability: ${capability}`)
     return this.runReadOnlyCommand(capability, executable, args, uniquePaths(options.paths ?? []), observer, options, capability)
@@ -256,7 +391,7 @@ export class ExecutionGateway {
     if (policy.decision === "ask") return this.block(intent, policy, startedAt, observer, "external executable identity requires H4-R2 confinement", "Approval unavailable: external executable identity requires H4-R2 confinement")
     if (process.platform !== "linux") return this.block(intent, policy, startedAt, observer, "Linux Landlock confinement is unavailable on this platform", "Confined execution unavailable: Linux Landlock requires Linux")
     const unsafeBootstrapKey = unsafeLinuxLoaderEnvironmentKey(environment); if (unsafeBootstrapKey !== undefined) return this.block(intent, policy, startedAt, observer, `unsafe pre-Landlock loader environment: ${unsafeBootstrapKey}`, `Confined execution unavailable: ${unsafeBootstrapKey} is forbidden before Landlock activation`)
-    const confinementRuntime = this.confinement; if (!confinementRuntime) return this.block(intent, policy, startedAt, observer, "trusted Linux Landlock runtime is not configured", "Confined execution unavailable: trusted Linux Landlock runtime is not configured")
+    const confinementRuntime = this.confinement; if (!confinementRuntime) return this.block(intent, policy, startedAt, observer, "trusted Linux Landlock runtime is not configured", "Confined execution unavailable: trusted Linux Landlock runtime not configured")
     if (options.signal?.aborted) return this.block(intent, policy, startedAt, observer, "operation aborted before confined execution", "Execution blocked: operation aborted before confined execution")
     let child: ChildProcess | undefined; let permitStream: Writable | undefined; let exitPromise: Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> | undefined; let confinementBinding: ConfinementReceiptBinding | undefined; let goReleased = false
     try {

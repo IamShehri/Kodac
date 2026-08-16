@@ -608,7 +608,7 @@ test("R4A production remains pure and byte-identical while R4B active lifecycle 
     "../src/agent/guarded-tool-pipeline.ts": "876656bf65a67df56c4cd5f078629cde06112af1",
     "../src/agent/guarded-tool-plan.ts": "1ab6217e88c54cd8868e2bcf8d13fbb39e93d994",
     "../src/trust/policy.ts": "b4134e430204123bebe053ffc9105f05fca611c9",
-    "../src/execution/gateway.ts": "ecf9cc9d3eda6a2280a280ed2f9a2e472f397560",
+    "../src/execution/gateway.ts": "420df04c5e0a42b371a250d75e580c36bb32f8cb",
     "../src/verification/done-gate.ts": "067e147569fa52cc2b04c5df26fbe20a01e958e9",
     "../scripts/run-tests.mjs": "9a0bcde0e565168c78eb7fe4d3cf08236d24baa7",
   }
