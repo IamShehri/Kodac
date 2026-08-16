@@ -130,7 +130,7 @@ test("H4-R3A predecessor donor versions limits and protected authority baseline 
     "../src/trust/confinement.ts": "873f235120645c0a12f10a5bff7e9591db6bb341",
     "../src/trust/confinement-linux-landlock.ts": "94b325f73246514f31b950ba4fed38023e3e3cfc",
     "../src/trust/confinement-runtime.ts": "1ca0313fb25c62e549445ebcf1aef029b18e6b86",
-    "../src/execution/gateway.ts": "4005a0dd20dc88795c719b6778f272d33e570c58",
+    "../src/execution/gateway.ts": "420df04c5e0a42b371a250d75e580c36bb32f8cb",
     "../src/evidence/receipt.ts": "214403398751c9d22bf695786c7fd7c6fd7e35e1",
     "../src/verification/done-gate.ts": "067e147569fa52cc2b04c5df26fbe20a01e958e9",
     "../src/agent/loop.ts": "576ad425db7e845b9705c982e95dd4f7522f8c43",
