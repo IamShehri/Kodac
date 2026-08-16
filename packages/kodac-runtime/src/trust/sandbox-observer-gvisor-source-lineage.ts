@@ -212,8 +212,7 @@ function asDenseArray(value: unknown, label: string): readonly unknown[] {
   if (!Array.isArray(value) || utilTypes.isProxy(value)) throw new TypeError(`${label} must be a non-proxy dense array`)
   if (Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError(`${label} must use Array.prototype`)
   if (Object.getOwnPropertySymbols(value).length !== 0) throw new TypeError(`${label} must not contain symbol fields`)
-  const descriptors = Object.getOwnPropertyDescriptors(value)
-  const lengthDescriptor = descriptors.length
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length")
   if (lengthDescriptor === undefined || !("value" in lengthDescriptor) || typeof lengthDescriptor.value !== "number") {
     throw new TypeError(`${label}.length must be an own data property`)
   }
@@ -226,7 +225,7 @@ function asDenseArray(value: unknown, label: string): readonly unknown[] {
   for (let index = 0; index < length; index += 1) {
     const key = String(index)
     if (keys[index] !== key) throw new TypeError(`${label} must use canonical dense indices`)
-    const descriptor = descriptors[key]
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
     if (descriptor === undefined || descriptor.get !== undefined || descriptor.set !== undefined || !("value" in descriptor) || !descriptor.enumerable || descriptor.value === undefined) {
       throw new TypeError(`${label}[${index}] must be an enumerable defined data property`)
     }
@@ -641,7 +640,7 @@ export function createGvisorSourceContainerSpecIdentity(input: { containerId: st
   exactKeys(record, ["containerId", "rootfsMountPath"], "R3G-B container spec input")
   const exactContainerId = containerId(record.containerId)
   const rootfsMountPath = canonicalPath(record.rootfsMountPath, "rootfsMountPath")
-  return Object.freeze({ exactContainerId, containerId: exactContainerId, rootfsMountPath, specIdentity: hashGvisorSourceLineageV1("CONTAINER_SPEC", [exactContainerId, rootfsMountPath]) }) as GvisorSourceContainerSpecIdentity
+  return Object.freeze({ containerId: exactContainerId, rootfsMountPath, specIdentity: hashGvisorSourceLineageV1("CONTAINER_SPEC", [exactContainerId, rootfsMountPath]) })
 }
 
 export function validateGvisorSourceContainerSpecIdentity(value: unknown): GvisorSourceContainerSpecIdentity {
