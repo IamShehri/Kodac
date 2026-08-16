@@ -1,4 +1,4 @@
-# KDO-H4-R3G-A — Root cgroup.type Reconciliation
+# KDO-H4-R3G-A — Root cgroup Controller Semantics Reconciliation
 
 Date: 2026-08-16
 Status: RECONCILIATION CANDIDATE — DOCS ONLY
@@ -7,55 +7,96 @@ Canonical base: `fdedf6df3d779eefca2d5ca274486702b38cbe92`
 
 ## 1. Purpose
 
-Correct one Linux cgroup-v2 interface inconsistency discovered during early pre-ledger R3G-A implementation before any gateway physical-read integration or evidence ledger exists.
+Correct one Linux cgroup-v2 root-interface inconsistency discovered during early pre-ledger R3G-A implementation before any gateway physical-read integration or evidence ledger exists.
 
-The canonical R3G-A authorization contains both of these ideas:
+The canonical R3G-A authorization correctly requires a target-to-root hierarchy theorem, but its fixed-read wording can be read as requiring controller files at the root cgroup.
 
-```text
-read cgroup.type across target/ancestor hierarchy
-```
-
-and later:
+Linux v6.12 documents that these files exist only on non-root cgroups:
 
 ```text
-target cgroup must be a domain cgroup
+cgroup.type
+cpu.max
+cpu.max.burst
+memory.max
+memory.swap.max
 ```
 
-Linux v6.12 documentation makes the root distinction explicit:
-
-```text
-cgroup.type exists on non-root cgroups
-```
-
-Therefore a literal attempt to read:
+Therefore a literal implementation that reads their root forms, such as:
 
 ```text
 /sys/fs/cgroup/cgroup.type
+/sys/fs/cgroup/cpu.max
+/sys/fs/cgroup/memory.max
 ```
 
-at the canonical root is invalid on a conforming cgroup-v2 filesystem.
+would fail on a conforming cgroup-v2 root and would not implement the intended theorem.
 
-## 2. Canonical correction
+## 2. Kernel basis
+
+Pinned Linux v6.12 documentation states:
+
+```text
+cgroup.type:
+exists on non-root cgroups
+
+cpu.max:
+exists on non-root cgroups
+
+cpu.max.burst:
+exists on non-root cgroups
+
+memory.max:
+exists on non-root cgroups
+
+memory.swap.max:
+exists on non-root cgroups
+```
+
+This reconciliation uses the already-pinned Linux semantic baseline and introduces no new dependency or donor code.
+
+## 3. Canonical root correction
 
 R3G-A v1 must use these semantics:
 
 ```text
-TARGET NON-ROOT CGROUP:
+NON-ROOT TARGET:
+physical controller evidence begins here
 cgroup.type must be exactly domain
 
 EVERY NON-ROOT ANCESTOR BETWEEN TARGET AND ROOT:
+controller-limit evidence is observed here
 cgroup.type must be exactly domain
 
 ROOT CGROUP /:
+mount-boundary sentinel only
 no cgroup.type read
-root is represented by an internal canonical root sentinel only
+no cpu.max read
+no cpu.max.burst read
+no memory.max read
+no memory.swap.max read
 ```
 
-The root sentinel is structural metadata, not kernel evidence pretending that a missing `cgroup.type` file returned `domain`.
+The root sentinel represents the validated cgroup2 mount boundary. It is not a fabricated controller-level observation.
 
-## 3. Exact host-read correction
+## 4. Exact physical hierarchy for controller limits
 
-The authorized fixed read family becomes:
+The controller hierarchy used for exact physical CPU/memory/swap limit calculation is:
+
+```text
+target non-root cgroup
+->
+zero or more non-root ancestors
+->
+STOP BEFORE /
+```
+
+The validated root mount remains part of the overall cgroup subject identity and path-containment theorem, but it is not a limit-bearing controller level.
+
+Thus effective finite values are computed across all observed non-root controller levels only.
+
+## 5. Exact host-read correction
+
+The authorized fixed read family is reconciled to:
 
 ```text
 /proc/self/mountinfo
@@ -65,8 +106,6 @@ The authorized fixed read family becomes:
 
 for target and every non-root ancestor:
   cgroup.type
-
-for target and every ancestor INCLUDING root:
   cpu.max
   cpu.max.burst
   cpuset.cpus.effective
@@ -77,83 +116,181 @@ for target only:
   cgroup.procs
 ```
 
-No new read family is added.
+No controller file is read from the cgroup-v2 root.
 
-## 4. Why non-root ancestors must also be domain
+No new host read family is added.
 
-R3G-A v1 deliberately excludes threaded/domain-threaded semantics. A non-root ancestor in a threaded configuration can change membership/control interpretation and invalidate the simple domain hierarchy theorem.
+## 6. cpuset semantics
 
-Therefore every observed non-root level in the target-to-root chain must remain:
+R3G-A may retain `cpuset.cpus.effective` observations on each observed non-root level, but the target value already represents the kernel's effective cpuset after ancestor restrictions.
+
+The implementation may conservatively intersect the non-root observed effective sets as defense in depth, provided the result cannot make a wider set than the target's own `cpuset.cpus.effective`.
+
+The root cpuset file is not required for the R3G-A theorem.
+
+Process-level `Cpus_allowed_list` remains independently intersected with the cgroup cpuset theorem.
+
+## 7. Why non-root ancestors must remain domain
+
+R3G-A v1 deliberately excludes threaded/domain-threaded semantics.
+
+A non-root ancestor in a threaded configuration can change membership/control interpretation and invalidate the simple process-domain hierarchy theorem.
+
+Therefore every observed non-root controller level in the target-to-root chain must remain:
 
 ```text
 cgroup.type == domain
 ```
 
-The root has no `cgroup.type` file and is accepted only through the already-authorized canonical cgroup2 mount theorem.
+The root has no `cgroup.type` evidence and is accepted only through the canonical cgroup2 mount theorem.
 
-## 5. Pure-record representation
+## 8. Normalized representation
 
-A normalized R3G-A hierarchy level may represent the root with a fixed internal discriminator purpose-equivalent to:
+A normalized R3G-A controller-level record contains only non-root levels.
+
+The root MUST NOT be inserted into the controller-level array with invented fields such as:
 
 ```text
 cgroupType: root
+cpu.max: max
+memory.max: max
 ```
 
-and non-root levels only as:
+Instead the root is represented separately by the already-authorized mount identity and by the fact that canonical non-root parent traversal terminates at `/`.
+
+This keeps “absence of root controller files” distinct from “controller value = unlimited.”
+
+## 9. Hierarchy identity
+
+R3G-A hierarchy identity must bind both:
 
 ```text
-cgroupType: domain
+validated cgroup2 mount identity
++
+ordered non-root controller-level identities
 ```
 
-This discriminator must be derived from canonical path equality with `/`; callers cannot choose it independently.
+so that the root boundary remains part of the physical theorem without fabricating a root controller observation.
 
-It must not be interpreted as raw kernel file content for root.
+The exact snapshot identity must also bind the normalized target cgroup path.
 
-## 6. Focused hostile coverage
+## 10. Effective CPU correction
 
-The focused R3G-A test must additionally prove:
+The effective cgroup CPU bandwidth ratio is the minimum finite `cpu.max` ratio across the complete ordered set of non-root controller levels.
+
+If no non-root level provides a finite CPU limit:
 
 ```text
-root snapshot succeeds without a root cgroup.type read
-non-root domain succeeds
+R3G-A CPU proof = unavailable
+```
+
+The absence of a root `cpu.max` is normal and must not itself be treated as an error or as an implicit finite/unlimited controller record.
+
+All observed non-root `cpu.max.burst` values must still be exactly zero.
+
+## 11. Effective memory correction
+
+The effective cgroup memory hard ceiling is the minimum finite `memory.max` across all observed non-root controller levels.
+
+If no non-root level provides a finite memory limit:
+
+```text
+R3G-A memory proof = unavailable
+```
+
+The absence of root `memory.max` is normal.
+
+## 12. Effective swap correction
+
+The effective cgroup swap hard ceiling is the minimum finite `memory.swap.max` across all observed non-root controller levels.
+
+For the R3G-A no-swap theorem the effective result must still be exactly:
+
+```text
+0
+```
+
+The absence of root `memory.swap.max` is normal.
+
+## 13. Target-root edge case
+
+R3G-A v1 requires the observed subject to be in a non-root cgroup.
+
+If `/proc/<pid>/cgroup` resolves the exact R3E subject directly to:
+
+```text
+0::/
+```
+
+there is no non-root controller level on which the authorized CPU/memory/swap hard-limit theorem can be established.
+
+Therefore:
+
+```text
+target cgroup path = /
+-> fail closed / proof unavailable
+```
+
+No host-global capacity value substitutes for the missing cgroup controller theorem.
+
+## 14. Focused hostile coverage
+
+The focused R3G-A test must prove at minimum:
+
+```text
+valid non-root target hierarchy succeeds without any root controller file
+single non-root target directly below root succeeds when limits are exact
+multiple non-root ancestors are incorporated into effective-limit calculation
 non-root threaded fails
 non-root domain-threaded fails
-caller/raw fixture cannot mark a non-root level as root
-caller/raw fixture cannot mark root as domain file evidence when the production reader never reads that file
+target path / fails closed
+missing non-root controller level fails closed
+fixture cannot add a fabricated root controller level
+fixture cannot omit a required non-root ancestor
+finite/non-finite controller effective calculations remain exact after root removal
 ```
 
-## 7. Existing authorization otherwise unchanged
+## 15. Current early implementation consequence
+
+Current early pre-ledger PR #102 contains only the new pure R3G-A module and no gateway physical reads.
+
+Its current implementation includes `/` as a synthetic controller level and requires `cgroup.type=domain` plus CPU/memory/swap files there.
+
+That behavior is not accepted as final implementation behavior.
+
+After this reconciliation is canonical, PR #102 must correct the pure module so that:
+
+```text
+controller levels = non-root target through non-root ancestors only
+root = mount/path boundary only
+```
+
+before gateway integration and before final pre-ledger certification.
+
+No evidence ledger may be created from any pre-reconciliation head.
+
+## 16. Existing authorization otherwise unchanged
 
 This reconciliation does not change:
 
 - Linux/cgroup-v2-only platform floor;
-- canonical `/sys/fs/cgroup` mount root theorem;
+- canonical `/sys/fs/cgroup` mount theorem;
 - exact PID/startTicks binding;
-- CPU effective-ratio theorem;
-- zero CPU burst;
 - fair scheduler restriction;
+- exact rational CPU equality;
+- zero CPU burst;
 - cpuset/process-affinity theorem;
 - exact memory hard ceiling;
 - zero swap allowance;
-- pre/post snapshot stability;
-- durable R3E then durable R3G-A commit ordering;
+- pre/post physical snapshot stability;
+- durable R3E then R3G-A commit ordering;
 - E3-only output class;
 - prohibition on R3B final observation/evidence minting;
 - prohibition on Docker/cgroup mutation;
 - 13-path pre-ledger implementation allowlist;
 - reserved evidence ledger lifecycle.
 
-## 8. Current early implementation consequence
-
-The current early pre-ledger PR #102 already contains only the new pure R3G-A module and no gateway physical reads.
-
-Its current parser requiring `cgroup.type=domain` at the root is not accepted as final implementation behavior.
-
-After this reconciliation is canonical, PR #102 must incorporate the correction within its already-authorized new pure module before any final pre-ledger certification.
-
-No evidence ledger may be created from the pre-reconciliation implementation head.
-
-## 9. Exact reconciliation scope
+## 17. Exact reconciliation scope
 
 This reconciliation PR may add exactly one path:
 
@@ -167,7 +304,7 @@ Production/test/schema/workflow/dependency delta:
 0
 ```
 
-## 10. Review gate
+## 18. Review gate
 
 Before canonical merge, exact head must prove:
 
@@ -183,14 +320,14 @@ manual kernel/trust review = PASS
 0 unresolved actionable review threads
 ```
 
-## 11. Bounded reconciliation claim
+## 19. Bounded reconciliation claim
 
 If this document becomes canonical:
 
 ```text
-KODAC_R3G_A_ROOT_CGROUP_TYPE_SEMANTICS_RECONCILED
+KODAC_R3G_A_ROOT_CONTROLLER_SEMANTICS_RECONCILED
 ```
 
 means only:
 
-> R3G-A's domain-cgroup theorem applies to every non-root cgroup in the exact target hierarchy, while the cgroup-v2 root is validated through the canonical mount theorem and never requires a nonexistent root `cgroup.type` file.
+> R3G-A computes exact cgroup-v2 CPU, memory and swap controller limits across the complete non-root target/ancestor chain, while the cgroup-v2 root remains a validated mount boundary and never receives fabricated or nonexistent root controller-file observations.
