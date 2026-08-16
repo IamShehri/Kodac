@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -55,7 +55,7 @@ function fixtureRequirement(input: { runtime?: "gvisor" | "kata-qemu"; digest?: 
   })
   const workload = createSandboxWorkloadRequest({
     source: createSandboxOciImageSource({ repository: "ghcr.io/acme/r3f-fixture", digest: input.digest ?? SOURCE_DIGEST }),
-    entrypoint: createSandboxEntrypoint({ executable: "/usr/bin/node", args: ["--version"] }),
+    entrypoint: createSandboxEntrypoint({ executable: "/usr/bin/node", args: ["--version", "--no-warnings"] }),
     resourcePolicy: createSandboxResourcePolicy({
       cpuMillis: input.cpuMillis ?? 1500,
       memoryBytes: input.memoryBytes ?? 536_870_912,
@@ -93,8 +93,11 @@ function expectedListPath(requirement: SandboxExecutionRequirement): string {
 function defaultInspect(requirement: SandboxExecutionRequirement): Record<string, unknown> {
   return {
     Id: CONTAINER_ID,
+    Path: requirement.workload.entrypoint.executable,
+    Args: [...requirement.workload.entrypoint.args],
     State: { Running: true, Paused: false, Restarting: false, Dead: false, Pid: 4321 },
     RestartCount: 0,
+    Image: requirement.workload.source.digest,
     HostConfig: {
       Runtime: "runsc",
       NetworkMode: "none",
@@ -105,19 +108,23 @@ function defaultInspect(requirement: SandboxExecutionRequirement): Record<string
       RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
     },
     Config: {
+      Image: requirement.workload.source.digest,
       Labels: {
         [KDO_H4_R3F_LABELS.bindingVersion]: KDO_H4_R3F_BINDING_VERSION,
         [KDO_H4_R3F_LABELS.requirementIdentity]: requirement.requirementIdentity,
         [KDO_H4_R3F_LABELS.workloadIdentity]: requirement.workload.workloadIdentity,
       },
     },
+    NetworkSettings: { Networks: {} },
     ImageManifestDescriptor: { digest: requirement.workload.source.digest, mediaType: "application/vnd.oci.image.manifest.v1+json", size: 1234 },
   }
 }
 
 type FakeDockerOptions = {
-  listBody?: string
-  inspectBody?: string
+  listBody?: string | Buffer
+  inspectBody?: string | Buffer
+  listStatus?: number
+  inspectStatus?: number
   delayListMs?: number
 }
 
@@ -141,12 +148,23 @@ async function startFakeDocker(root: string, requirement: SandboxExecutionRequir
     requests.push(`${method} ${url}`)
     if (method !== "GET") { response.statusCode=405; response.end(); return }
     if (url === listPath) {
-      const send = () => { if (!response.destroyed) { response.setHeader("content-type","application/json"); response.end(listBody) } }
+      const send = () => {
+        if (!response.destroyed) {
+          response.statusCode = options.listStatus ?? 200
+          response.setHeader("content-type","application/json")
+          response.end(listBody)
+        }
+      }
       if ((options.delayListMs ?? 0) > 0) setTimeout(send, options.delayListMs)
       else send()
       return
     }
-    if (url === inspectPath) { response.setHeader("content-type","application/json"); response.end(inspectBody); return }
+    if (url === inspectPath) {
+      response.statusCode = options.inspectStatus ?? 200
+      response.setHeader("content-type","application/json")
+      response.end(inspectBody)
+      return
+    }
     response.statusCode = 404
     response.end()
   })
@@ -166,21 +184,25 @@ async function startFakeDocker(root: string, requirement: SandboxExecutionRequir
   }
 }
 
-test("H4-R3F constants and pure E2 record are bounded and non-R3B", () => {
+test("H4-R3F constants and pure E2 record are bounded non-R3B and command-sensitive", () => {
   assert.equal(KDO_H4_R3F_CONTROL_PLANE_VERSION, "kodac-h4-r3f-docker-control-plane-v1")
   assert.equal(KDO_H4_R3F_EVIDENCE_CLASS, "e2-docker-control-plane")
   assert.equal(KDO_H4_R3F_DOCKER_API_VERSION, "1.48")
   assert.equal(KDO_H4_R3F_PROVIDER_ID, "docker-engine")
-  const observation = createDockerControlPlaneObservation({
+  const base = {
     providerIdentity: "1".repeat(64), socketEndpointIdentity: "2".repeat(64), executionAttemptIdentity: "3".repeat(64),
     requirementIdentity: "4".repeat(64), workloadIdentity: "5".repeat(64), containerId: CONTAINER_ID,
-    bindingIdentity: "6".repeat(64), imageManifestDigest: SOURCE_DIGEST, nanoCpus: 1_500_000_000,
-    memoryBytes: 536_870_912, memorySwapBytes: 536_870_912,
-  })
+    bindingIdentity: "6".repeat(64), imageManifestDigest: SOURCE_DIGEST, executable: "/usr/bin/node", argsIdentity: "7".repeat(64),
+    nanoCpus: 1_500_000_000, memoryBytes: 536_870_912, memorySwapBytes: 536_870_912,
+  }
+  const observation = createDockerControlPlaneObservation(base)
   assert.deepEqual(validateDockerControlPlaneObservation(observation), observation)
   assert.equal(observation.runtimeName, "runsc")
   assert.equal(observation.networkMode, "none")
+  assert.equal(observation.networkAttachmentCount, 0)
   assert.equal(observation.privileged, false)
+  assert.notEqual(createDockerControlPlaneObservation({...base, executable:"/usr/bin/python"}).controlPlaneObservationIdentity, observation.controlPlaneObservationIdentity)
+  assert.notEqual(createDockerControlPlaneObservation({...base, argsIdentity:"8".repeat(64)}).controlPlaneObservationIdentity, observation.controlPlaneObservationIdentity)
   for (const forbidden of ["observedSourceDigest","observedSemanticRuntimeClass","observedNetworkPolicy","observedResourcePolicy","observationIdentity","evidenceIdentity"]) {
     assert.equal(forbidden in observation, false)
   }
@@ -191,6 +213,8 @@ test("H4-R3F production surface has no Docker mutation SDK or R3B physical-evide
   assert.doesNotMatch(r3fSource, /createSandboxBackendObservation|createSandboxExecutionEvidence|dockerode|@docker|node:child_process|DOCKER_HOST|process\.env/)
   assert.doesNotMatch(r3fSource, /method:\s*["'](?:POST|PUT|PATCH|DELETE)["']/)
   assert.match(r3fSource, /method:\s*"GET"/)
+  assert.match(r3fSource, /NetworkSettings/)
+  assert.match(r3fSource, /effective executable/)
   assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "420df04c5e0a42b371a250d75e580c36bb32f8cb")
   assert.equal(gitBlobSha1(source("../src/trust/sandbox-observer-gvisor-runtime.ts")), "1d02a5dbc1dc4071636c24327e7faf9906370ef5")
   assert.equal(gitBlobSha1(source("../src/trust/sandbox-observer-gvisor.ts")), "47c792ba01c9ba4b2db94d7558f282cdbd218660")
@@ -210,7 +234,12 @@ test("H4-R3F non-Linux production provider fails closed", { skip: process.platfo
   assert.throws(() => createDockerControlPlaneBindingProvider({ socketPath: "/tmp/docker.sock", requirement: fixtureRequirement() }), /requires Linux/)
 })
 
-test("H4-R3F Linux fake Docker proves exact list-inspect binding and R3E-compatible adapter", { skip: process.platform !== "linux" }, async () => {
+test("H4-R3F Linux provider rejects non-socket endpoint", { skip: process.platform !== "linux" }, () => {
+  const root=mkdtempSync(join(tmpdir(),"kodac-r3f-regular-"));const socketPath=join(root,"docker.sock")
+  try{writeFileSync(socketPath,"not a socket","utf8");assert.throws(()=>createDockerControlPlaneBindingProvider({socketPath,requirement:fixtureRequirement()}),/real Unix socket/)}finally{rmSync(root,{recursive:true,force:true})}
+})
+
+test("H4-R3F Linux fake Docker proves exact list-inspect command-network binding and R3E-compatible adapter", { skip: process.platform !== "linux" }, async () => {
   const root=mkdtempSync(join(tmpdir(),"kodac-r3f-live-")); const requirement=fixtureRequirement(); let fake:FakeDocker|undefined
   try {
     fake=await startFakeDocker(root,requirement)
@@ -223,6 +252,9 @@ test("H4-R3F Linux fake Docker proves exact list-inspect binding and R3E-compati
     assert.equal(result.binding.providerId,KDO_H4_R3F_PROVIDER_ID)
     assert.equal(result.observation.bindingIdentity,result.binding.bindingIdentity)
     assert.equal(result.observation.imageManifestDigest,requirement.workload.source.digest)
+    assert.equal(result.observation.executable,requirement.workload.entrypoint.executable)
+    assert.match(result.observation.argsIdentity,/^[0-9a-f]{64}$/)
+    assert.equal(result.observation.networkAttachmentCount,0)
     assert.equal(result.observation.nanoCpus,requirement.workload.resourcePolicy.cpuMillis*1_000_000)
     assert.equal(result.observation.memoryBytes,requirement.workload.resourcePolicy.memoryBytes)
     assert.deepEqual(validateDockerControlPlaneObservation(result.observation),result.observation)
@@ -258,18 +290,29 @@ test("H4-R3F fails closed on zero multiple and malformed list candidates", { ski
   for(const item of cases){const root=mkdtempSync(join(tmpdir(),`kodac-r3f-${item.name}-`));let fake:FakeDocker|undefined;try{fake=await startFakeDocker(root,requirement,{listBody:item.body});const provider=createDockerControlPlaneBindingProvider({socketPath:fake.socketPath,requirement});await assert.rejects(provider.resolveDockerControlPlaneBinding(bindingRequest(requirement)),item.pattern)}finally{await fake?.close();rmSync(root,{recursive:true,force:true})}}
 })
 
-test("H4-R3F rejects every required inspect mismatch", { skip: process.platform !== "linux" }, async () => {
+test("H4-R3F rejects every required inspect mismatch including command and current network attachments", { skip: process.platform !== "linux" }, async () => {
   const requirement=fixtureRequirement()
   const cases: Array<{name:string;mutate:(value:any)=>void;pattern:RegExp}> = [
     {name:"id",mutate:(v)=>{v.Id="d".repeat(64)},pattern:/ID does not match/},
+    {name:"path",mutate:(v)=>{v.Path="/usr/bin/python"},pattern:/effective executable/},
+    {name:"arg-value",mutate:(v)=>{v.Args[0]="--help"},pattern:/effective args/},
+    {name:"arg-order",mutate:(v)=>{v.Args.reverse()},pattern:/effective args/},
+    {name:"arg-extra",mutate:(v)=>{v.Args.push("--extra")},pattern:/effective args/},
+    {name:"arg-missing",mutate:(v)=>{v.Args.pop()},pattern:/effective args/},
+    {name:"arg-type",mutate:(v)=>{v.Args[0]=42},pattern:/Args\[0\] must be a string/},
     {name:"label",mutate:(v)=>{v.Config.Labels[KDO_H4_R3F_LABELS.requirementIdentity]="f".repeat(64)},pattern:/requirement-identity label/},
     {name:"digest",mutate:(v)=>{v.ImageManifestDescriptor.digest=`sha256:${"3".repeat(64)}`},pattern:/manifest digest/},
+    {name:"descriptor-missing",mutate:(v)=>{delete v.ImageManifestDescriptor},pattern:/ImageManifestDescriptor/},
     {name:"runtime",mutate:(v)=>{v.HostConfig.Runtime="runc"},pattern:/Runtime must be runsc/},
-    {name:"network",mutate:(v)=>{v.HostConfig.NetworkMode="bridge"},pattern:/NetworkMode must be none/},
+    {name:"network-mode",mutate:(v)=>{v.HostConfig.NetworkMode="bridge"},pattern:/NetworkMode must be none/},
+    {name:"network-attachment",mutate:(v)=>{v.NetworkSettings.Networks.bridge={NetworkID:"deadbeef"}},pattern:/zero live network attachments/},
+    {name:"network-settings-missing",mutate:(v)=>{delete v.NetworkSettings},pattern:/NetworkSettings/},
+    {name:"networks-not-object",mutate:(v)=>{v.NetworkSettings.Networks=[]},pattern:/Networks must be a non-proxy plain object/},
     {name:"cpu",mutate:(v)=>{v.HostConfig.NanoCpus+=1_000_000},pattern:/NanoCpus/},
     {name:"memory",mutate:(v)=>{v.HostConfig.Memory+=1},pattern:/Memory does not match/},
     {name:"swap",mutate:(v)=>{v.HostConfig.MemorySwap=-1},pattern:/MemorySwap/},
     {name:"privileged",mutate:(v)=>{v.HostConfig.Privileged=true},pattern:/privileged/},
+    {name:"not-running",mutate:(v)=>{v.State.Running=false},pattern:/must be running/},
     {name:"restart-count",mutate:(v)=>{v.RestartCount=1},pattern:/RestartCount=0/},
     {name:"restart-policy",mutate:(v)=>{v.HostConfig.RestartPolicy.Name="always"},pattern:/RestartPolicy/},
     {name:"paused",mutate:(v)=>{v.State.Paused=true},pattern:/paused/},
@@ -279,17 +322,24 @@ test("H4-R3F rejects every required inspect mismatch", { skip: process.platform 
   for(const item of cases){const root=mkdtempSync(join(tmpdir(),`kodac-r3f-inspect-${item.name}-`));let fake:FakeDocker|undefined;try{const value:any=defaultInspect(requirement);item.mutate(value);fake=await startFakeDocker(root,requirement,{inspectBody:JSON.stringify(value)});const provider=createDockerControlPlaneBindingProvider({socketPath:fake.socketPath,requirement});await assert.rejects(provider.resolveDockerControlPlaneBinding(bindingRequest(requirement)),item.pattern)}finally{await fake?.close();rmSync(root,{recursive:true,force:true})}}
 })
 
-test("H4-R3F rejects duplicate-key deep and oversized Docker JSON", { skip: process.platform !== "linux" }, async () => {
+test("H4-R3F rejects duplicate-key deep oversized and invalid-UTF8 Docker JSON", { skip: process.platform !== "linux" }, async () => {
   const requirement=fixtureRequirement()
   const good=JSON.stringify(defaultInspect(requirement))
   const duplicate=good.replace(`"Id":"${CONTAINER_ID}"`,`"Id":"${CONTAINER_ID}","Id":"${CONTAINER_ID}"`)
   const deep=`{"extra":${"[".repeat(66)}0${"]".repeat(66)}}`
-  const cases=[
+  const cases: Array<{name:string;options:FakeDockerOptions;pattern:RegExp}> = [
     {name:"duplicate",options:{inspectBody:duplicate},pattern:/duplicate JSON object key/},
     {name:"deep",options:{inspectBody:deep},pattern:/nesting depth/},
     {name:"oversized",options:{listBody:" ".repeat(KDO_H4_R3F_LIMITS.maxListResponseBytes+1)},pattern:/body exceeds bound/},
+    {name:"utf8",options:{inspectBody:Buffer.from([0xff,0xfe,0xfd])},pattern:/valid UTF-8/},
   ]
   for(const item of cases){const root=mkdtempSync(join(tmpdir(),`kodac-r3f-json-${item.name}-`));let fake:FakeDocker|undefined;try{fake=await startFakeDocker(root,requirement,item.options);const provider=createDockerControlPlaneBindingProvider({socketPath:fake.socketPath,requirement});await assert.rejects(provider.resolveDockerControlPlaneBinding(bindingRequest(requirement)),item.pattern)}finally{await fake?.close();rmSync(root,{recursive:true,force:true})}}
+})
+
+test("H4-R3F rejects non-200 Docker responses without following or downgrading", { skip: process.platform !== "linux" }, async () => {
+  const requirement=fixtureRequirement()
+  const root=mkdtempSync(join(tmpdir(),"kodac-r3f-http-"));let fake:FakeDocker|undefined
+  try{fake=await startFakeDocker(root,requirement,{listStatus:503});const provider=createDockerControlPlaneBindingProvider({socketPath:fake.socketPath,requirement});await assert.rejects(provider.resolveDockerControlPlaneBinding(bindingRequest(requirement)),/HTTP 503/);assert.equal(fake.requests.length,1)}finally{await fake?.close();rmSync(root,{recursive:true,force:true})}
 })
 
 test("H4-R3F abort terminates owned Docker read and cannot become late success", { skip: process.platform !== "linux" }, async () => {
