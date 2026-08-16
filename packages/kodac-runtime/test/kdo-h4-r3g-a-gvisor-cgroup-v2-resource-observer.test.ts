@@ -128,20 +128,22 @@ async function testOnlyBoundedCommit(
   record: GvisorCgroupV2ResourceRecord,
   callback: (value: GvisorCgroupV2ResourceRecord) => Promise<unknown> | unknown,
   signal?: AbortSignal,
+  timeoutMs = 25,
 ): Promise<unknown> {
   if (signal?.aborted) throw new Error("R3G-A test harness aborted before commit")
-  let removeAbort: (() => void) | undefined
+  let removeAbort: (() => void) | undefined; let timer: NodeJS.Timeout | undefined
   const aborted = new Promise<never>((_, reject) => {
     if (signal === undefined) return
     const onAbort = () => reject(new Error("R3G-A test harness aborted during commit"))
     signal.addEventListener("abort", onAbort, { once: true })
     removeAbort = () => signal.removeEventListener("abort", onAbort)
   })
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("R3G-A test harness commit acknowledgment timed out")), timeoutMs) })
   try {
-    const value = await Promise.race([Promise.resolve().then(() => callback(record)), aborted])
+    const value = await Promise.race([Promise.resolve().then(() => callback(record)), aborted, timeout])
     if (signal?.aborted) throw new Error("R3G-A test harness aborted after commit")
     return value
-  } finally { removeAbort?.() }
+  } finally { removeAbort?.(); if (timer !== undefined) clearTimeout(timer) }
 }
 
 async function testOnlyFixedSurfaceReadSequence(
@@ -188,6 +190,7 @@ test("H4-R3G-A constants namespace trust root and non-root hierarchy are exact",
   assert.equal(KDO_H4_R3G_A_CAPABILITY, "runtime.observe.gvisor.cgroup-v2")
   assert.equal(KDO_H4_R3G_A_CGROUP_ROOT, "/sys/fs/cgroup")
   assert.equal(KDO_H4_R3G_A_LIMITS.maxRecordSerializedBytes, 64 * 1024)
+  assert.equal(KDO_H4_R3G_A_LIMITS.commitTimeoutMs, 5_000)
   assert.deepEqual(CGROUP_NAMESPACE, { device: "7", inode: "4026531835", namespaceIdentity: CGROUP_NAMESPACE.namespaceIdentity })
   assert.match(CGROUP_NAMESPACE.namespaceIdentity, /^[0-9a-f]{64}$/)
   assert.throws(() => createGvisorCgroupNamespaceObservation({ device: 7, inode: "4026531835" }))
@@ -310,12 +313,21 @@ test("H4-R3G-A resource record binds R3E lineage stable bracket serialized bound
   assert.throws(() => validateGvisorCgroupV2ResourceCommit(wrongResourceCommit, fixture.record), /commit identity mismatch/)
 })
 
-test("H4-R3G-A test-only trusted commit harness rejects failed wrong and cancelled acknowledgments including late completion", async () => {
+test("H4-R3G-A test-only trusted commit harness rejects failed wrong timed-out and cancelled acknowledgments including late completion", async () => {
   const { record, commit } = fixtureResourceRecord()
   assert.deepEqual(validateGvisorCgroupV2ResourceCommit(await testOnlyBoundedCommit(record, () => commit), record), commit)
   await assert.rejects(testOnlyBoundedCommit(record, async () => { throw new Error("durable store failed") }), /durable store failed/)
   const wrong = { ...commit, recordIdentity: "f".repeat(64) }
   await assert.rejects(async () => validateGvisorCgroupV2ResourceCommit(await testOnlyBoundedCommit(record, () => wrong), record), /commit identity mismatch/)
+
+  let timeoutRelease!: (value: unknown) => void
+  const timeoutDelayed = new Promise<unknown>((resolve) => { timeoutRelease = resolve })
+  let timeoutSuccessfulReturn = false
+  const timedOut = testOnlyBoundedCommit(record, () => timeoutDelayed, undefined, 5).then((value) => { timeoutSuccessfulReturn = true; return value })
+  await assert.rejects(timedOut, /timed out/)
+  timeoutRelease(commit)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(timeoutSuccessfulReturn, false)
 
   const before = new AbortController(); before.abort()
   await assert.rejects(testOnlyBoundedCommit(record, () => commit, before.signal), /aborted before/)
