@@ -537,11 +537,15 @@ async function boundedDockerGet(input: {
       }, (response) => {
         const rawHeaderBytes = response.rawHeaders.reduce((total, item) => total + byteLength(item) + 2, 0)
         if (rawHeaderBytes > KDO_H4_R3F_LIMITS.maxResponseHeaderBytes) {
-          response.destroy(new Error("Docker R3F response headers exceed bound"))
+          const error = new Error("Docker R3F response headers exceed bound")
+          finishReject(error)
+          response.destroy(error)
           return
         }
         if (response.statusCode !== 200) {
-          response.destroy(new Error(`Docker R3F request failed with HTTP ${String(response.statusCode ?? "unknown")}`))
+          const error = new Error(`Docker R3F request failed with HTTP ${String(response.statusCode ?? "unknown")}`)
+          finishReject(error)
+          response.destroy(error)
           return
         }
         const chunks: Buffer[] = []
@@ -550,7 +554,9 @@ async function boundedDockerGet(input: {
           const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
           bytes += part.byteLength
           if (bytes > input.maxBodyBytes) {
-            response.destroy(new Error("Docker R3F response body exceeds bound"))
+            const error = new Error("Docker R3F response body exceeds bound")
+            finishReject(error)
+            response.destroy(error)
             return
           }
           chunks.push(part)
