@@ -309,7 +309,7 @@ test("H4-R3G-A gateway integration remains fixed-surface E3-only fail-closed aut
   assert.match(gatewaySource, /async observeGvisorCgroupV2Resources\(/)
   assert.match(gatewaySource, /readGvisorCgroupV2RawSnapshot/)
   assert.match(gatewaySource, /readBoundedVirtualText/)
-  assert.match(gatewaySource, /O_NOFOLLOW/)
+  assert.doesNotMatch(gatewaySource, /\brealpath\s*\(/)
   assert.match(gatewaySource, /\/proc\/self\/mountinfo/)
   assert.match(gatewaySource, /KDO_H4_R3G_A_CGROUP_ROOT/)
   assert.match(gatewaySource, /boundedR3GACallback/)
