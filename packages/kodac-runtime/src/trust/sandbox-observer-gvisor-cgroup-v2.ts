@@ -39,6 +39,7 @@ export const KDO_H4_R3G_A_LIMITS = Object.freeze({
   maxCpuId: 1_048_575,
   maxPathBytes: 4096,
   maxDecimalDigits: 20,
+  maxRecordSerializedBytes: 64 * 1024,
   commitTimeoutMs: 5000,
 } as const)
 
@@ -565,6 +566,10 @@ export function createGvisorCgroupV2ObserverProtocolIdentity(): string {
   return sha256Domain("OBSERVER_PROTOCOL", JSON.stringify({ version: KDO_H4_R3G_A_VERSION, capability: KDO_H4_R3G_A_CAPABILITY, linuxSemanticBaseline: "linux-v6.12", gvisorSemanticBaseline: "50e1502a95d36ad2faf2c7ef33b8bf21fe975293", cgroupRoot: KDO_H4_R3G_A_CGROUP_ROOT, theorem: "initial-cgroupns-nonroot-domain-fair-cpu-memory-noswap-exact-v1" }))
 }
 function resourcePreimage(value: Omit<GvisorCgroupV2ResourceRecord, "resourceCandidateIdentity">): string { return JSON.stringify(value) }
+function boundedResourceRecord(value: GvisorCgroupV2ResourceRecord): GvisorCgroupV2ResourceRecord {
+  if (utf8Bytes(JSON.stringify(value)) > KDO_H4_R3G_A_LIMITS.maxRecordSerializedBytes) fail("R3G-A resource record exceeds serialized byte bound")
+  return value
+}
 
 export function createGvisorCgroupV2ResourceRecord(input: {
   requirement: SandboxExecutionRequirement
@@ -611,7 +616,8 @@ export function createGvisorCgroupV2ResourceRecord(input: {
     effectiveMemoryBytes: pre.effectiveMemoryBytes,
     effectiveSwapBytes: pre.effectiveSwapBytes,
   })
-  return Object.freeze({ ...base, resourceCandidateIdentity: sha256Domain("RESOURCE_RECORD", resourcePreimage(base)) })
+  const result = Object.freeze({ ...base, resourceCandidateIdentity: sha256Domain("RESOURCE_RECORD", resourcePreimage(base)) })
+  return boundedResourceRecord(result)
 }
 
 export function validateGvisorCgroupV2ResourceRecord(value: unknown): GvisorCgroupV2ResourceRecord {
@@ -653,7 +659,7 @@ export function validateGvisorCgroupV2ResourceRecord(value: unknown): GvisorCgro
   })
   const expected = sha256Domain("RESOURCE_RECORD", resourcePreimage(base))
   if (shaIdentity(record.resourceCandidateIdentity, "resourceCandidateIdentity") !== expected) fail("R3G-A resource record identity mismatch")
-  return Object.freeze({ ...base, resourceCandidateIdentity: expected })
+  return boundedResourceRecord(Object.freeze({ ...base, resourceCandidateIdentity: expected }))
 }
 
 export function createGvisorCgroupV2ResourceCommit(record: GvisorCgroupV2ResourceRecord): GvisorCgroupV2ResourceCommit {
