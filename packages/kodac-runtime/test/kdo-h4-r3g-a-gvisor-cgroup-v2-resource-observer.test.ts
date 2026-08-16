@@ -3,7 +3,9 @@ import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 
+import { ExecutionBlockedError, ExecutionGateway } from "../src/execution/gateway.ts"
 import { createConfinementRequest } from "../src/trust/confinement.ts"
+import { fixedPolicy } from "../src/trust/policy.ts"
 import {
   createSandboxExecutionRequirement,
   type SandboxExecutionRequirement,
@@ -24,6 +26,7 @@ import {
   parseGvisorStatsOutput,
 } from "../src/trust/sandbox-observer-gvisor.ts"
 import {
+  KDO_H4_R3E_RUNTIME_CONFIG_VERSION,
   createGvisorContainerBinding,
   createGvisorExecutionAttemptIdentity,
   createGvisorObserverArtifact,
@@ -140,6 +143,44 @@ async function testOnlyBoundedCommit(
     return value
   } finally { removeAbort?.() }
 }
+
+async function testOnlyFixedSurfaceReadSequence(
+  paths: readonly string[],
+  reader: (path: string) => Promise<string> | string,
+  signal?: AbortSignal,
+): Promise<readonly string[]> {
+  const values: string[] = []
+  for (const path of paths) {
+    if (signal?.aborted) throw new Error("R3G-A test harness aborted before physical read")
+    const value = await reader(path)
+    if (signal?.aborted) throw new Error("R3G-A test harness aborted after physical read")
+    values.push(value)
+  }
+  return Object.freeze(values)
+}
+
+function boundaryR3eRuntime(onResolve: () => void = () => {}): any {
+  return {
+    version: KDO_H4_R3E_RUNTIME_CONFIG_VERSION,
+    runscPath: "/does/not/matter/runsc",
+    expectedRunscSha256: "a".repeat(64),
+    observerHelperPath: "/does/not/matter/helper",
+    expectedObserverHelperSha256: "b".repeat(64),
+    runtimeRoot: "/run/runsc",
+    resolveContainerBinding() { onResolve(); return {} },
+    commitLineageEvidence() { return {} },
+  }
+}
+
+function boundaryR3gRuntime(onCommit: () => void = () => {}): any {
+  return {
+    version: KDO_H4_R3G_A_RUNTIME_CONFIG_VERSION,
+    initialCgroupNamespaceIdentity: { device: "7", inode: "4026531835" },
+    commitResourceEvidence() { onCommit(); return {} },
+  }
+}
+
+const UNUSED_WORKSPACE = Object.freeze({ root: "/unused-r3g-a-boundary" }) as any
 
 test("H4-R3G-A constants namespace trust root and non-root hierarchy are exact", () => {
   assert.equal(KDO_H4_R3G_A_VERSION, "kodac-h4-r3g-a-cgroup-v2-resource-v1")
@@ -291,6 +332,51 @@ test("H4-R3G-A test-only trusted commit harness rejects failed wrong and cancell
   assert.equal(successfulReturn, false)
 })
 
+test("H4-R3G-A test-only fixed-surface reader rejects cancellation during a physical read and late completion", async () => {
+  const fixedPaths = Object.freeze([
+    "/proc/self/mountinfo",
+    `/proc/${PID}/stat`,
+    `/proc/${PID}/status`,
+    `/proc/${PID}/cgroup`,
+    `${KDO_H4_R3G_A_CGROUP_ROOT}/docker/${CONTAINER_ID}/cgroup.procs`,
+  ])
+  const during = new AbortController()
+  const calls: string[] = []
+  let release!: (value: string) => void
+  const delayed = new Promise<string>((resolve) => { release = resolve })
+  let successfulReturn = false
+  const pending = testOnlyFixedSurfaceReadSequence(fixedPaths, (path) => { calls.push(path); return delayed }, during.signal)
+    .then((value) => { successfulReturn = true; return value })
+  assert.deepEqual(calls, [fixedPaths[0]])
+  during.abort()
+  release("late kernel text")
+  await assert.rejects(pending, /aborted after physical read/)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(successfulReturn, false)
+  assert.deepEqual(calls, [fixedPaths[0]])
+})
+
+test("H4-R3G-A non-Linux production gateway fails closed before trusted runtime activity", { skip: process.platform === "linux" }, async () => {
+  const gateway = new ExecutionGateway(UNUSED_WORKSPACE, fixedPolicy("allow"))
+  await assert.rejects(gateway.observeGvisorCgroupV2Resources(fixtureRequirement()), (error: unknown) => error instanceof ExecutionBlockedError && /Linux required/.test(error.message))
+})
+
+test("H4-R3G-A pre-aborted Linux production gateway blocks before resolver or physical reads", { skip: process.platform !== "linux" }, async () => {
+  let resolverCalls = 0; let resourceCommitCalls = 0
+  const gateway = new ExecutionGateway(
+    UNUSED_WORKSPACE,
+    fixedPolicy("allow"),
+    undefined,
+    undefined,
+    boundaryR3eRuntime(() => { resolverCalls += 1 }),
+    boundaryR3gRuntime(() => { resourceCommitCalls += 1 }),
+  )
+  const controller = new AbortController(); controller.abort()
+  await assert.rejects(gateway.observeGvisorCgroupV2Resources(fixtureRequirement(), undefined, { signal: controller.signal }), (error: unknown) => error instanceof ExecutionBlockedError && /aborted/.test(error.message))
+  assert.equal(resolverCalls, 0)
+  assert.equal(resourceCommitCalls, 0)
+})
+
 test("H4-R3G-A runtime config requires trusted namespace identity and exposes no reader authority", () => {
   const commitResourceEvidence = () => ({})
   const config = validateGvisorCgroupV2RuntimeConfig({ version: KDO_H4_R3G_A_RUNTIME_CONFIG_VERSION, initialCgroupNamespaceIdentity: { device: "7", inode: "4026531835" }, commitResourceEvidence })
@@ -311,6 +397,9 @@ test("H4-R3G-A gateway integration remains fixed-surface E3-only fail-closed aut
   assert.match(gatewaySource, /readBoundedVirtualText/)
   assert.doesNotMatch(gatewaySource, /\brealpath\s*\(/)
   assert.match(gatewaySource, /\/proc\/self\/mountinfo/)
+  assert.match(gatewaySource, /aborted before read/)
+  assert.match(gatewaySource, /aborted during read/)
+  assert.match(gatewaySource, /aborted after read/)
   assert.match(gatewaySource, /boundedR3GACallback/)
   assert.match(gatewaySource, /commitLineageEvidence/)
   assert.match(gatewaySource, /commitResourceEvidence/)
