@@ -174,7 +174,9 @@ function exactKeys(record: PlainRecord, expected: readonly string[], label: stri
   if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) fail(`${label} must contain exactly: ${wanted.join(", ")}`)
 }
 function denseArray(value: unknown, label: string, maximum: number): readonly unknown[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > maximum) fail(`${label} must contain 1..${maximum} entries`)
+  if (!Array.isArray(value) || utilTypes.isProxy(value)) fail(`${label} must be a non-proxy array`)
+  if (Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length !== 0) fail(`${label} must be a plain array without symbol fields`)
+  if (value.length === 0 || value.length > maximum) fail(`${label} must contain 1..${maximum} entries`)
   if (Object.keys(value).length !== value.length) fail(`${label} must be dense with no extra enumerable fields`)
   for (let index = 0; index < value.length; index += 1) if (!Object.prototype.hasOwnProperty.call(value, index)) fail(`${label} must not be sparse`)
   return value
@@ -577,6 +579,8 @@ export function validateGvisorCgroupV2ResourceRecord(value: unknown): GvisorCgro
   if (typeof availableCpuCount !== "number" || !Number.isSafeInteger(availableCpuCount) || availableCpuCount <= 0 || availableCpuCount > KDO_H4_R3G_A_LIMITS.maxCpuId + 1) fail("R3G-A availableCpuCount is invalid")
   const preIdentity = shaIdentity(record.prePhysicalSnapshotIdentity, "prePhysicalSnapshotIdentity"); const postIdentity = shaIdentity(record.postPhysicalSnapshotIdentity, "postPhysicalSnapshotIdentity")
   if (preIdentity !== postIdentity) fail("R3G-A resource record must bind identical pre/post physical snapshots")
+  const expectedObserverProtocolIdentity = createGvisorCgroupV2ObserverProtocolIdentity()
+  if (shaIdentity(record.observerProtocolIdentity, "observerProtocolIdentity") !== expectedObserverProtocolIdentity) fail("R3G-A observerProtocolIdentity does not match canonical protocol")
   const base = Object.freeze({
     version: KDO_H4_R3G_A_RECORD_VERSION,
     evidenceClass: KDO_H4_R3G_A_EVIDENCE_CLASS,
@@ -589,7 +593,7 @@ export function validateGvisorCgroupV2ResourceRecord(value: unknown): GvisorCgro
     r3eCommitIdentity: shaIdentity(record.r3eCommitIdentity, "r3eCommitIdentity"),
     runtimeInstanceIdentity: shaIdentity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity"),
     r3eObserverImplementationIdentity: shaIdentity(record.r3eObserverImplementationIdentity, "r3eObserverImplementationIdentity"),
-    observerProtocolIdentity: shaIdentity(record.observerProtocolIdentity, "observerProtocolIdentity"),
+    observerProtocolIdentity: expectedObserverProtocolIdentity,
     processIdentity: shaIdentity(record.processIdentity, "processIdentity"),
     subjectPid: positivePid(record.subjectPid, "subjectPid"),
     subjectStartTicks: decimalString(record.subjectStartTicks, "subjectStartTicks"),
