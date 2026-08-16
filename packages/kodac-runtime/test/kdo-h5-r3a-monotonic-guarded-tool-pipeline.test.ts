@@ -388,7 +388,7 @@ test("R3A production remains pure while R3B integrates it only through the pure 
     "../src/session/model-visible-request.ts": "0f4c7ef7ef0f4e4e1baa90944c39639c1dfa07a6",
     "../src/agent/tool-result-pruning.ts": "66cfee69032c4c24331e8cb9098a86a1d7b9135e",
     "../src/trust/policy.ts": "b4134e430204123bebe053ffc9105f05fca611c9",
-    "../src/execution/gateway.ts": "420df04c5e0a42b371a250d75e580c36bb32f8cb",
+    "../src/execution/gateway.ts": "5e4c3cea9982d7c774d0c18beb40f2fcbfde4e64",
     "../src/verification/done-gate.ts": "067e147569fa52cc2b04c5df26fbe20a01e958e9",
     "../package.json": "af4c20a3dae387c15cc5fb2eb28d415c8f115b95",
     "../scripts/run-tests.mjs": "9a0bcde0e565168c78eb7fe4d3cf08236d24baa7",
