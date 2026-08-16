@@ -80,11 +80,13 @@ import {
   KDO_H4_R3G_A_LIMITS,
   cgroupV2FilesystemPath,
   cgroupV2HierarchyPaths,
+  createGvisorCgroupNamespaceObservation,
   createGvisorCgroupV2PhysicalResourceSnapshot,
   createGvisorCgroupV2ResourceRecord,
   parseGvisorCgroupV2MembershipPath,
   validateGvisorCgroupV2ResourceCommit,
   validateGvisorCgroupV2RuntimeConfig,
+  type GvisorCgroupNamespaceObservation,
   type GvisorCgroupV2RawLevel,
   type GvisorCgroupV2RawSnapshot,
   type GvisorCgroupV2ResourceRecord,
@@ -318,6 +320,19 @@ async function readBoundedVirtualText(path: string, maxBytes: number, label: str
   } finally { await handle.close().catch(() => {}) }
 }
 
+async function observeTrustedCgroupNamespace(config: GvisorCgroupV2RuntimeConfig, signal?: AbortSignal): Promise<GvisorCgroupNamespaceObservation> {
+  if (signal?.aborted) throw new Error("R3G-A cgroup namespace observation aborted before open")
+  const handle = await open("/proc/self/ns/cgroup", "r")
+  try {
+    const stat = await handle.stat({ bigint: true })
+    if (signal?.aborted) throw new Error("R3G-A cgroup namespace observation aborted")
+    const observation = createGvisorCgroupNamespaceObservation({ device: stat.dev.toString(), inode: stat.ino.toString() })
+    const expected = config.initialCgroupNamespaceIdentity
+    if (observation.device !== expected.device || observation.inode !== expected.inode) throw new Error("R3G-A current cgroup namespace does not match trusted initial/full-host namespace identity")
+    return observation
+  } finally { await handle.close().catch(() => {}) }
+}
+
 async function readGvisorCgroupV2RawSnapshot(pid: number, signal?: AbortSignal): Promise<GvisorCgroupV2RawSnapshot> {
   const procRoot = `/proc/${pid}`
   const mountInfo = await readBoundedVirtualText("/proc/self/mountinfo", KDO_H4_R3G_A_LIMITS.maxMountInfoBytes, "R3G-A mountinfo", signal)
@@ -469,17 +484,25 @@ export class ExecutionGateway {
       const plan = createGvisorObserverPlan({ runscPath: runtime.runscPath, expectedRunscSha256: runtime.expectedRunscSha256, runtimeRoot: runtime.runtimeRoot, containerId: binding.containerId }); const stateCommand = materializeGvisorStateCommand(plan); const statsCommand = materializeGvisorStatsCommand(plan)
       const state1Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_RUNSC_FD, runscParentFd: runsc.handle.fd, args: stateCommand.args, maxStdoutBytes: KDO_H4_R3E_LIMITS.maxStateStdoutBytes, timeoutMs: KDO_H4_R3E_LIMITS.stateTimeoutMs, label: "R3G-A runsc state #1", signal: options.signal }); const state1 = parseGvisorStateOutput(state1Raw.stdout, plan)
       const process1Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_HELPER_FD, runscParentFd: runsc.handle.fd, helperParentFd: helper.handle.fd, args: ["--pid", String(state1.pid)], maxStdoutBytes: KDO_H4_R3E_LIMITS.maxHelperStdoutBytes, timeoutMs: KDO_H4_R3E_LIMITS.helperTimeoutMs, label: "R3G-A process observation #1", signal: options.signal }); const process1 = parseGvisorProcessObservation(process1Raw.stdout); if (process1.pid !== state1.pid) throw new Error("R3G-A process #1 PID does not match state #1")
-      const resourceRaw1 = await readGvisorCgroupV2RawSnapshot(state1.pid, options.signal); const resource1 = createGvisorCgroupV2PhysicalResourceSnapshot({ requirement, expectedPid: state1.pid, expectedStartTicks: process1.startTicks, raw: resourceRaw1 })
+      const namespace1 = await observeTrustedCgroupNamespace(cgroupRuntime, options.signal)
+      const resourceRaw1 = await readGvisorCgroupV2RawSnapshot(state1.pid, options.signal); const resource1 = createGvisorCgroupV2PhysicalResourceSnapshot({ requirement, expectedPid: state1.pid, expectedStartTicks: process1.startTicks, cgroupNamespace: namespace1, raw: resourceRaw1 })
       const statsRaw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_RUNSC_FD, runscParentFd: runsc.handle.fd, args: statsCommand.args, maxStdoutBytes: KDO_H4_R3E_LIMITS.maxStatsStdoutBytes, timeoutMs: KDO_H4_R3E_LIMITS.statsTimeoutMs, label: "R3G-A runsc stats", signal: options.signal }); const stats = parseGvisorStatsOutput(statsRaw.stdout, plan)
       const state2Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_RUNSC_FD, runscParentFd: runsc.handle.fd, args: stateCommand.args, maxStdoutBytes: KDO_H4_R3E_LIMITS.maxStateStdoutBytes, timeoutMs: KDO_H4_R3E_LIMITS.stateTimeoutMs, label: "R3G-A runsc state #2", signal: options.signal }); const state2 = parseGvisorStateOutput(state2Raw.stdout, plan)
       const process2Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_HELPER_FD, runscParentFd: runsc.handle.fd, helperParentFd: helper.handle.fd, args: ["--pid", String(state2.pid)], maxStdoutBytes: KDO_H4_R3E_LIMITS.maxHelperStdoutBytes, timeoutMs: KDO_H4_R3E_LIMITS.helperTimeoutMs, label: "R3G-A process observation #2", signal: options.signal }); const process2 = parseGvisorProcessObservation(process2Raw.stdout)
       if (process2.pid !== state2.pid || state1.stateIdentity !== state2.stateIdentity || process1.processIdentity !== process2.processIdentity) throw new Error("R3G-A exact R3E subject bracket changed")
-      const resourceRaw2 = await readGvisorCgroupV2RawSnapshot(state2.pid, options.signal); const resource2 = createGvisorCgroupV2PhysicalResourceSnapshot({ requirement, expectedPid: state2.pid, expectedStartTicks: process2.startTicks, raw: resourceRaw2 })
+      const namespaceBeforeSecondSnapshot = await observeTrustedCgroupNamespace(cgroupRuntime, options.signal)
+      if (namespaceBeforeSecondSnapshot.namespaceIdentity !== namespace1.namespaceIdentity) throw new Error("R3G-A cgroup namespace changed before second physical snapshot")
+      const resourceRaw2 = await readGvisorCgroupV2RawSnapshot(state2.pid, options.signal)
+      const namespace2 = await observeTrustedCgroupNamespace(cgroupRuntime, options.signal)
+      if (namespace2.namespaceIdentity !== namespace1.namespaceIdentity) throw new Error("R3G-A cgroup namespace changed during physical observation bracket")
+      const resource2 = createGvisorCgroupV2PhysicalResourceSnapshot({ requirement, expectedPid: state2.pid, expectedStartTicks: process2.startTicks, cgroupNamespace: namespace2, raw: resourceRaw2 })
       if (resource1.snapshotIdentity !== resource2.snapshotIdentity) throw new Error("R3G-A physical resource snapshot changed during observation bracket")
       await reverifyTrustedGvisorArtifact(runsc); await reverifyTrustedGvisorArtifact(helper)
       const candidate = createGvisorRuntimeObservationCandidate({ plan, state: state1, stats, process: process1 }); const lineage = createGvisorRuntimeLineageRecord({ executionAttemptIdentity, requirement, binding, runsc: runsc.artifact, helper: helper.artifact, plan, state: state1, stats, process: process1, candidate })
       if (options.signal?.aborted) throw new Error("R3G-A observation aborted before R3E durable evidence commit")
       const rawLineageCommit = await boundedR3GACallback("R3G-A R3E durable evidence commit", options.signal, () => runtime.commitLineageEvidence(lineage)); const lineageCommit = validateGvisorRuntimeLineageCommit(rawLineageCommit, lineage)
+      const namespaceBeforeCommit = await observeTrustedCgroupNamespace(cgroupRuntime, options.signal)
+      if (namespaceBeforeCommit.namespaceIdentity !== namespace1.namespaceIdentity) throw new Error("R3G-A cgroup namespace changed before durable resource commit")
       const resourceRecord = createGvisorCgroupV2ResourceRecord({ requirement, lineage, lineageCommit, process: process1, preSnapshot: resource1, postSnapshot: resource2 })
       if (options.signal?.aborted) throw new Error("R3G-A observation aborted before resource evidence commit")
       const rawResourceCommit = await boundedR3GACallback("R3G-A durable resource evidence commit", options.signal, () => cgroupRuntime.commitResourceEvidence(resourceRecord)); validateGvisorCgroupV2ResourceCommit(rawResourceCommit, resourceRecord)
@@ -494,11 +517,11 @@ export class ExecutionGateway {
     }
   }
   async runCommand(capability: string, executable: string, args: string[], observer?: ExecutionObserver, options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number; env?: NodeJS.ProcessEnv; paths?: string[]; allowedExitCodes?: number[] } = {}): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
-    if (capability.startsWith("git.") || capability.startsWith("repo.")) throw new Error(`Generic runCommand cannot use reserved capability: ${capability}`)
+    if (capability.startsWith("git.") || capability.startsWith("repo.") || capability === KDO_H4_R3G_A_CAPABILITY) throw new Error(`Generic runCommand cannot use reserved capability: ${capability}`)
     return this.runReadOnlyCommand(capability, executable, args, uniquePaths(options.paths ?? []), observer, options, capability)
   }
   async runConfinedReadOnlyCommand(capability: string, executable: string, args: string[], observer?: ExecutionObserver, options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number; env?: NodeJS.ProcessEnv; paths?: string[]; allowedExitCodes?: number[] } = {}): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
-    if (capability.startsWith("git.") || capability.startsWith("repo.")) throw new Error(`Confined runCommand cannot use reserved capability: ${capability}`)
+    if (capability.startsWith("git.") || capability.startsWith("repo.") || capability === KDO_H4_R3G_A_CAPABILITY) throw new Error(`Confined runCommand cannot use reserved capability: ${capability}`)
     if (!executable.startsWith("/")) throw new Error("Confined execution requires an absolute Linux target executable path")
     const startedAt = new Date().toISOString(); const executionArgs = [...args]; const maxOutputBytes = options.maxOutputBytes ?? 256 * 1024; const timeoutMs = options.timeoutMs ?? 5_000; const allowedExitCodes = normalizedAllowedExitCodes(options.allowedExitCodes); const environment = canonicalEnvironment(options.env ?? process.env); const paths = uniquePaths((options.paths ?? []).map((path) => canonicalWorkspaceRelativePath(this.fs.root, path)))
     if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) throw new Error("maxOutputBytes must be a positive integer")
