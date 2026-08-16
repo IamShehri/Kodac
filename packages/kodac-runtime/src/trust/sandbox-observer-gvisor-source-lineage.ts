@@ -1063,8 +1063,11 @@ export function parseGvisorSourceCtrSnapshotInfo(
   const name = requiredJsonString(parsed, "Name", "ctr snapshots info")
   if (name !== expectedName) throw new TypeError("ctr snapshot info Name does not match exact requested snapshot")
   const parentValue = parsed.Parent
-  if (typeof parentValue !== "string") throw new TypeError("ctr snapshots info.Parent must be a string")
-  const parent = boundedString(parentValue, KDO_H4_R3G_B_LIMITS.maxStringBytes, "ctr snapshots info.Parent")
+  const parent = parentValue === undefined
+    ? ""
+    : typeof parentValue === "string"
+      ? boundedString(parentValue, KDO_H4_R3G_B_LIMITS.maxStringBytes, "ctr snapshots info.Parent")
+      : (() => { throw new TypeError("ctr snapshots info.Parent must be a string when present") })()
   const rawKind = requiredJsonString(parsed, "Kind", "ctr snapshots info")
   const kind: GvisorSourceSnapshotKind = rawKind === "Active" ? "active" : rawKind === "Committed" ? "committed" : (() => { throw new TypeError("ctr snapshot info Kind must be Active or Committed") })()
   return createGvisorSourceSnapshotNodeIdentity({ name, kind, parent })
