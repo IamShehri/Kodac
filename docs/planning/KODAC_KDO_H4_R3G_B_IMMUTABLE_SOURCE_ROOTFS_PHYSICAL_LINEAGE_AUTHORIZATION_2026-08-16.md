@@ -2,7 +2,7 @@
 
 Date: 2026-08-16
 
-Status: **AUTHORIZATION CANDIDATE — DOCS ONLY — IMPLEMENTATION NOT YET AUTHORIZED UNTIL CANONICAL MERGE**
+Status: **AUTHORIZATION CANDIDATE — DOCS ONLY — IMPLEMENTATION NOT AUTHORIZED UNTIL CANONICAL MERGE**
 
 Repository: `TheHalfMoon/Kodac`
 
@@ -19,9 +19,19 @@ KDO-H4-R3G-A = CLOSED / MERGED / CANONICAL / PROVEN
 KODAC_LINUX_CGROUP_V2_PHYSICAL_RESOURCE_OBSERVATION_PROVEN
 ```
 
-This document authorizes only the bounded R3G-B source-lineage slice described below after this document itself is reviewed and merged canonically.
+Revision note:
 
-It does **not** authorize implementation while this document is merely proposed.
+```text
+This candidate supersedes the first PR #106 draft theorem.
+The first draft incorrectly treated containerd Container.SnapshotKey and
+<bundle>/rootfs as authoritative Moby rootfs surfaces.
+Manual pinned-source review proved that Docker/Moby's Linux snapshotter path
+mounts the container RW snapshot itself, stores that mount as BaseFS, and writes
+BaseFS into OCI Spec.Root.Path. The corrected theorem below follows that actual
+Moby execution path.
+```
+
+No R3G-B implementation is authorized while this document is only proposed.
 
 ---
 
@@ -41,29 +51,33 @@ OUTPUT CLASS:
 E3 PHYSICAL SOURCE CANDIDATE
 ```
 
-The first R3G-B implementation must prove a narrow conjunction:
+R3G-B v1 proves only this bounded conjunction:
 
 1. the exact canonical R3E gVisor execution subject remains the same running instance;
-2. the exact R3F Docker container binding remains the same container and required manifest digest;
-3. the local Docker/containerd image metadata resolves that exact required OCI manifest digest to an ordered immutable image-rootfs DiffID chain;
-4. the ordered DiffIDs deterministically derive one expected image ChainID;
-5. containerd metadata for the exact full container ID names the exact active snapshot key and the `overlayfs` snapshotter;
-6. the active snapshot has one of only two authorized ancestry shapes ending at the expected immutable image ChainID;
-7. the exact R3E bundle has a real, non-symlink `rootfs` mount whose kernel-visible mount identity remains stable while the same R3E subject remains live;
-8. all control-plane, snapshot-lineage and kernel-mount observations remain stable across the observation window;
-9. a durable E3 source-lineage record is acknowledged before the gateway can return success.
+2. the exact R3F Docker container binding remains the same container and exact required manifest digest;
+3. Docker's trusted local read-only control plane reports the supported containerd/overlayfs host storage configuration and canonical Docker data root;
+4. the exact required OCI manifest resolves locally to an ordered non-empty DiffID list;
+5. those DiffIDs deterministically derive one expected immutable image ChainID;
+6. the pinned Moby implementation theorem maps the exact Docker container ID to the active container snapshot key;
+7. containerd's read-only snapshot API proves the active snapshot ancestry terminates at that exact expected immutable image ChainID, with at most the one canonical Docker init snapshot;
+8. the pinned Moby mount theorem derives the exact physical rootfs mount target from DockerRootDir + snapshotter + container ID;
+9. the stored container OCI spec reports that exact physical target as `Root.Path`;
+10. the exact physical target is a stable kernel-visible overlay mount during the observation window;
+11. the stored Moby bundle label agrees with the exact R3E bundle identity;
+12. all subject/control-plane/snapshot/mount/artifact endpoint identities remain stable through the bounded observation;
+13. a durable E3 source-lineage record receives an exact acknowledgment before success can return.
 
-Failure of any conjunct is fail-closed.
+Any failed conjunct fails closed.
 
 ---
 
-## 2. Terminology correction: “immutable rootfs” does not mean “the whole running rootfs is read-only”
+## 2. Precise claim: immutable image-base lineage, not a globally read-only running rootfs
 
-R3A authorizes an immutable OCI source digest. It does **not** require the running container root filesystem to be globally read-only.
+R3A authorizes an immutable OCI source digest. It does not require the running root filesystem to be globally read-only.
 
-A normal Docker/containerd container may have a writable active snapshot above immutable image layers.
+Docker normally uses an active writable container snapshot above immutable image snapshots.
 
-Therefore this slice uses the precise term:
+Therefore the exact R3G-B term is:
 
 ```text
 immutable OCI image-base / rootfs lineage
@@ -71,49 +85,17 @@ immutable OCI image-base / rootfs lineage
 
 The theorem is:
 
-> the running container's active rootfs snapshot descends from the exact content-addressed OCI image-base lineage required by the workload.
+> the running container's physically mounted active rootfs descends through the exact authorized snapshot ancestry to the image ChainID derived from the exact required content-addressed OCI source.
 
-It is **not**:
+It is not:
 
-> no file in the running rootfs can be modified.
+> the complete running rootfs is immutable or read-only.
 
-`root.readonly=true` is not added as a hidden R3G-B requirement.
-
----
-
-## 3. Why R3F E2 is necessary but insufficient
-
-Canonical R3F already proves, through Docker Engine's read-only control plane, that:
-
-```text
-InspectResponse.ImageManifestDescriptor.Digest
-==
-requirement.workload.source.digest
-```
-
-That is an important E2 binding.
-
-R3G-B must not reinterpret it as physical source proof by itself.
-
-The following remain insufficient alone:
-
-```text
-Docker image name
-Docker image tag
-Docker RepoTags
-Docker RepoDigests
-InspectResponse.Image
-Config.Image
-bundle path string
-OCI config root.path string
-R3F ImageManifestDescriptor digest alone
-```
-
-R3G-B adds independent containerd snapshot ancestry plus a kernel-visible live rootfs mount and exact R3E subject bracketing.
+`ReadonlyRootfs=true` is not silently added as an R3G-B requirement.
 
 ---
 
-## 4. Evidence class
+## 3. Evidence class
 
 R3G-B may emit only:
 
@@ -121,7 +103,7 @@ R3G-B may emit only:
 E3 PHYSICAL SOURCE CANDIDATE
 ```
 
-R3G-B must not mint or structurally simulate:
+R3G-B MUST NOT mint or simulate:
 
 ```text
 SandboxBackendObservation
@@ -129,89 +111,95 @@ SandboxExecutionEvidence
 E4 final backend proof
 ```
 
-The final R3B conjunction remains a later gate.
+Final R3B evidence remains a later conjunction gate.
 
 ---
 
-## 5. Upstream primary-source pins used by this authorization
+## 4. Why R3F E2 is necessary but insufficient
 
-This authorization is grounded in exact upstream source snapshots.
+Canonical R3F already proves through Docker Engine's read-only control plane:
+
+```text
+InspectResponse.ImageManifestDescriptor.Digest
+==
+requirement.workload.source.digest
+```
+
+That remains required.
+
+It is not by itself physical rootfs/source proof.
+
+The following are insufficient alone:
+
+```text
+Docker image name
+Docker image tag
+RepoTags
+RepoDigests
+InspectResponse.Image
+Config.Image
+bundle path string
+OCI root.path string
+R3F ImageManifestDescriptor digest alone
+containerd snapshot name alone
+physical mount path alone
+```
+
+R3G-B requires their bounded cross-authority conjunction.
+
+---
+
+## 5. Upstream primary-source pins
 
 ### OCI Image Spec
 
-Repository:
-
 ```text
-opencontainers/image-spec
-```
-
-Source commit inspected:
-
-```text
-af26a05fba5ee648512f4ea3c9fda1fcc1b6d6dc
-```
-
-Relevant source:
-
-```text
-manifest.md
-config.md
+repository: opencontainers/image-spec
+commit:     af26a05fba5ee648512f4ea3c9fda1fcc1b6d6dc
+sources:    manifest.md, config.md, identity/chainid.go-equivalent semantics
 ```
 
 ### OCI Runtime Spec
 
-Repository:
-
 ```text
-opencontainers/runtime-spec
-```
-
-Source commit inspected:
-
-```text
-6999a89a76a0329f440d5740497bedb9dd431297
-```
-
-Relevant source:
-
-```text
-config.md
+repository: opencontainers/runtime-spec
+commit:     6999a89a76a0329f440d5740497bedb9dd431297
+source:     config.md
 ```
 
 ### Moby / Docker Engine
 
-Repository:
-
 ```text
-moby/moby
+repository: moby/moby
+commit:     d430e1c2c7e53611d16d19d2ffb8c6fecae5dae3
 ```
 
-Canonical R3F source pin retained:
+Relevant pinned source inspected includes:
 
 ```text
-d430e1c2c7e53611d16d19d2ffb8c6fecae5dae3
-```
-
-Relevant source inspected includes:
-
-```text
-daemon/image_store_choice.go
 daemon/containerd/image_snapshot.go
-daemon/containerd/image_inspect.go
+daemon/containerd/service.go
 daemon/snapshotter/mount.go
+daemon/daemon.go
+daemon/daemon_unix.go
+daemon/oci_linux.go
+daemon/info.go
+daemon/inspect.go
 daemon/start.go
-daemon/start_unix.go
+daemon/internal/libcontainerd/replace.go
+daemon/internal/libcontainerd/remote/client.go
+daemon/internal/libcontainerd/remote/client_linux.go
 ```
 
 ### containerd
 
-Moby at the pinned commit depends on:
+Pinned Moby depends on:
 
 ```text
 github.com/containerd/containerd/v2 v2.3.4
 ```
 
-The verified annotated `v2.3.4` tag resolves to commit:
+The verified annotated tag resolves to:
 
 ```text
 db8809540e1a7a9da5d518876894933ff55692ab
@@ -220,58 +208,45 @@ db8809540e1a7a9da5d518876894933ff55692ab
 Relevant source inspected includes:
 
 ```text
+client/container.go
 client/image.go
 core/containers/containers.go
 core/snapshots/snapshotter.go
-core/runtime/v2/bundle.go
-core/runtime/v2/task_manager.go
-cmd/containerd-shim-runc-v2/runc/container.go
 cmd/ctr/commands/containers/containers.go
 cmd/ctr/commands/snapshots/snapshots.go
 ```
 
 ### gVisor
 
-Canonical gVisor pin retained from R3D/R3E/R3G-A:
+Canonical predecessor pin remains:
 
 ```text
 50e1502a95d36ad2faf2c7ef33b8bf21fe975293
 ```
 
-Relevant source inspected includes:
-
-```text
-runsc/cmd/sandboxsetup/gofer_mount.go
-```
-
 ---
 
-## 6. OCI source theorem
+## 6. OCI DiffID theorem
 
-The OCI image manifest is content-addressable and references:
+The OCI image configuration's `rootfs.diff_ids` is an ordered sequence of uncompressed layer digests.
 
-- an image configuration descriptor;
-- an ordered list of layer descriptors.
+R3G-B must derive the immutable image-base identity from that ordered content-addressed sequence, not from a mutable image name or tag.
 
-For an OCI image configuration, `rootfs.diff_ids` is the ordered sequence of uncompressed layer digests.
-
-R3G-B must derive the image-base identity from the ordered DiffIDs, not from a mutable name or tag.
-
-For v1, every accepted DiffID must be exactly:
+R3G-B v1 accepts only canonical:
 
 ```text
 sha256:<64 lowercase hexadecimal characters>
 ```
 
-R3G-B v1 may reject non-SHA256 algorithms even if an upstream OCI implementation could theoretically support them.
+for every DiffID.
 
-This is intentional fail-closed narrowing.
+A non-SHA256 algorithm fails closed in v1 even if upstream OCI can support other algorithms.
 
 ---
 
 ## 7. ChainID theorem
 
-R3G-B must implement the OCI/containerd ordered ChainID derivation exactly.
+R3G-B must implement the ordered ChainID derivation exactly.
 
 For one DiffID:
 
@@ -287,115 +262,99 @@ ChainID(D0...Dn)
 sha256(ChainID(D0...D(n-1)) + " " + Dn)
 ```
 
-where the hashed text uses canonical digest strings including the `sha256:` prefix and the result is represented as a canonical `sha256:<64 lowercase hex>` digest.
+The preimage uses canonical digest strings including the algorithm prefix.
 
-Ordering is security-significant.
+The output is canonical:
 
-Reordering, duplicating, dropping or inserting a DiffID must change or invalidate the expected ChainID.
+```text
+sha256:<64 lowercase hexadecimal characters>
+```
 
----
-
-## 8. V1 excludes zero-layer / scratch source lineage
-
-R3G-B v1 requires at least one canonical DiffID.
-
-Zero-layer/scratch images are deliberately deferred because their snapshot-parent theorem differs from the non-empty ChainID path.
-
-A zero-layer source must fail closed under v1.
-
-This is a bounded-scope choice, not a statement that scratch images are insecure.
+Reordering, dropping, duplicating, inserting or changing any DiffID must invalidate or change the expected ChainID.
 
 ---
 
-## 9. Why containerd-snapshotter-only is the first theorem
+## 8. Zero-layer/scratch images are deferred in v1
 
-At the pinned Moby source, Linux defaults to the containerd image store.
+R3G-B v1 requires at least one DiffID.
 
-Moby can still support legacy graphdriver configurations.
+Zero-layer/scratch images fail closed under this first theorem because their empty-rootfs/snapshot ancestry requires a distinct proof shape.
 
-R3G-B v1 does not attempt to prove both storage architectures at once.
+This is scope narrowing, not a security judgment about scratch images.
 
-Authorized v1 storage mode is exactly:
+---
+
+## 9. V1 supports only the Docker containerd image-store path
+
+Pinned Moby supports both containerd image-store/snapshotter mode and legacy graphdriver modes.
+
+R3G-B v1 authorizes exactly:
 
 ```text
 Docker Engine
-containerd image store
-containerd namespace = moby
-snapshotter = overlayfs
+containerd image store enabled
+Docker SystemInfo.Driver == "overlayfs"
+containerd namespace == "moby"
+containerd snapshotter == "overlayfs"
 ```
 
-Legacy graphdriver/overlay2 Docker storage is **not** silently accepted as equivalent.
+Legacy graphdriver/overlay2 mode is not silently treated as equivalent.
 
-If the running host does not expose the v1 containerd/overlayfs theorem, R3G-B v1 fails closed.
+Unsupported storage mode fails closed.
 
-A legacy graphdriver theorem requires a later independent authorization.
+A graphdriver theorem requires separate authorization.
 
 ---
 
-## 10. containerd container metadata theorem
+## 10. Corrected Moby active-snapshot theorem
 
-containerd's canonical `containers.Container` includes:
-
-```text
-ID
-Image
-Runtime
-Spec
-SnapshotKey
-Snapshotter
-```
-
-Upstream containerd states that `SnapshotKey` specifies the snapshot key to use for the container root filesystem and that task creation should look up the mounts from that snapshot service and include them in the task create request.
-
-R3G-B relies only on these security-relevant fields:
+Pinned Moby `ImageService.CreateLayer` calls its layer constructor with:
 
 ```text
-ID
-SnapshotKey
-Snapshotter
+layerName = exact Docker container ID
 ```
 
-The mutable `Image` field is diagnostic only and must not establish source identity.
+For containerd image-store mode, the constructor:
 
-The mutable `Spec` is not source identity.
+1. resolves the required image snapshot from the manifest;
+2. obtains the ordered image DiffIDs;
+3. derives `identity.ChainID(diffIDs).String()` as the image parent snapshot;
+4. optionally creates and commits `<containerId>-init` from that image parent;
+5. prepares the active container snapshot with exact key `<containerId>`.
 
-For v1:
+The authoritative v1 snapshot key is therefore derived from pinned Moby creation semantics:
 
 ```text
-ID == exact full R3F/R3E container ID
-SnapshotKey == exact full container ID
-Snapshotter == "overlayfs"
+activeSnapshotKey = exact full Docker container ID
 ```
 
-Any other `SnapshotKey` fails closed in v1 even if containerd itself supports arbitrary keys.
+It is **not** derived from `containerd Container.SnapshotKey` metadata.
 
 ---
 
-## 11. containerd snapshot model
+## 11. Explicit correction: containerd Container.SnapshotKey is not R3G-B authority
 
-The pinned containerd snapshot model distinguishes:
+Manual pinned-source review found that Moby's libcontainerd `ReplaceContainer` path creates the container with Moby's spec/runtime/bundle options and does not establish the physical Docker rootfs theorem through `containerd Container.SnapshotKey` metadata.
 
-```text
-Active
-View
-Committed
-```
-
-A running container uses an active snapshot derived from a committed image snapshot.
-
-R3G-B must query the exact snapshot key and validate:
+Therefore R3G-B MUST NOT require:
 
 ```text
-Name == exact SnapshotKey
-Kind == Active
-Parent != empty
+containerdContainer.SnapshotKey == containerId
 ```
 
-The parent chain must then match one of the two exact v1 shapes below.
+and MUST NOT treat a non-empty `SnapshotKey` as proof.
+
+`SnapshotKey` and `Snapshotter` fields returned by `ctr containers info` are non-authoritative for this theorem and may be ignored except for bounded diagnostics.
+
+The active snapshot is instead queried directly by the exact key defined by the pinned Moby theorem:
+
+```text
+ctr snapshots info <exactContainerId>
+```
 
 ---
 
-## 12. Authorized ancestry shape A — direct image parent
+## 12. Authorized snapshot ancestry shape A — direct image parent
 
 ```text
 ACTIVE container snapshot
@@ -408,15 +367,13 @@ name   = <expectedImageChainID>
 kind   = Committed
 ```
 
-No additional intermediate parent is accepted.
+No additional intermediate is accepted.
 
 ---
 
-## 13. Authorized ancestry shape B — canonical Docker init layer
+## 13. Authorized snapshot ancestry shape B — canonical Moby init snapshot
 
-Moby may create a container init layer.
-
-The only authorized one-intermediate shape is:
+Pinned Moby may create one init snapshot:
 
 ```text
 ACTIVE container snapshot
@@ -436,62 +393,251 @@ kind   = Committed
 
 No second arbitrary intermediate is accepted.
 
-No prefix/suffix approximation is allowed.
+No prefix/suffix approximation is permitted.
 
 ---
 
 ## 14. Snapshot labels are not lineage authority
 
-Snapshot labels may be retained for diagnostics but are not source identity.
+Snapshot labels and timestamps are diagnostics only.
 
-R3G-B must not accept a false parent chain because a label happens to mention an expected digest.
+The v1 ancestry identity uses exact ordered:
 
-Only `Name`, `Kind`, and `Parent` participate in the v1 ancestry theorem.
+```text
+Name
+Kind
+Parent
+```
+
+for the nodes actually required by the theorem.
+
+A label mentioning an expected digest cannot rescue a wrong parent chain.
 
 ---
 
-## 15. Pinned read-only `ctr` artifact
+## 15. Corrected Moby physical mount theorem
 
-R3G-B v1 may use the host `ctr` executable only as a pinned read-only client artifact for the exact containerd APIs below.
+On Linux start, pinned Moby calls its platform mount path before OCI spec construction.
 
-Trusted runtime configuration must include:
+`Daemon.Mount` invokes:
 
 ```text
+container.RWLayer.Mount(...)
+```
+
+and stores the returned path as:
+
+```text
+container.BaseFS
+```
+
+For the containerd image-store implementation, `rwLayer.Mount()` gets mounts for the exact active snapshot ID and passes them to Moby's ref-counted snapshotter mounter.
+
+Pinned Moby constructs the physical mount target as:
+
+```text
+<DockerRootDir>/rootfs/<snapshotter>/<containerId>
+```
+
+and performs the actual mount at that target.
+
+For R3G-B v1:
+
+```text
+snapshotter = overlayfs
+rootfsMountPath = DockerRootDir + /rootfs/overlayfs/<containerId>
+```
+
+---
+
+## 16. Corrected OCI Root.Path theorem
+
+Pinned Moby writes:
+
+```text
+OCI Spec.Root.Path = container.BaseFS
+```
+
+Therefore a successful R3G-B v1 observation must require that the stored container OCI spec reports:
+
+```text
+Spec.Root.Path == derived rootfsMountPath
+```
+
+The path value alone is not proof; it is a dynamic cross-check between stored runtime intent and the physical kernel mount.
+
+---
+
+## 17. Explicit correction: `<bundle>/rootfs` is not the Moby rootfs authority
+
+The initial candidate incorrectly imported a generic containerd runtime-v2 bundle/rootfs theorem into the Docker/Moby path.
+
+For the pinned Moby integration, Docker mounts the RW layer itself and places the resulting host path in OCI `Root.Path`.
+
+Therefore R3G-B MUST NOT require:
+
+```text
+rootfs == <R3E bundle>/rootfs
+```
+
+and MUST NOT reject a correct Moby execution merely because `<bundle>/rootfs` is not the active rootfs mount.
+
+The R3E bundle remains an important subject/provenance identity, but not the rootfs mount locator.
+
+---
+
+## 18. R3E bundle cross-check through Moby metadata
+
+Pinned Moby stores its bundle path in containerd container metadata under:
+
+```text
+com.docker/engine.bundle.path
+```
+
+R3G-B may read that exact label through bounded `ctr containers info` and MUST require it to equal the exact R3E bundle path already proven for the same container.
+
+This cross-check binds the local containerd metadata object to the exact R3E subject.
+
+The label does not establish source identity by itself.
+
+---
+
+## 19. Docker SystemInfo as a locator, not sole proof
+
+Pinned Moby's read-only system info reports:
+
+```text
+DockerRootDir = daemon config Root
+Driver        = imageService.StorageDriver()
+Containerd.Address and namespaces when externally configured
+```
+
+R3G-B may extend the already trusted R3F Docker read-only provider with a bounded SystemInfo observation.
+
+The security-relevant v1 fields are:
+
+```text
+OSType == "linux"
+Driver == "overlayfs"
+DockerRootDir = canonical absolute path
+Containerd.Address = exact trusted configured containerd Unix socket path
+Containerd.Namespaces.Containers == "moby"
+```
+
+If the pinned API representation omits the required external-containerd fields, v1 fails closed.
+
+SystemInfo supplies a trusted locator/configuration cross-check. It does not replace snapshot or kernel observation.
+
+---
+
+## 20. No hard-coded `/var/lib/docker`
+
+R3G-B MUST NOT assume:
+
+```text
+/var/lib/docker
+```
+
+as DockerRootDir.
+
+DockerRootDir must come from the bounded trusted Docker SystemInfo observation and be canonicalized before use.
+
+Caller input cannot override it.
+
+---
+
+## 21. Docker image-rootfs E2 extension
+
+R3G-B needs the ordered DiffIDs corresponding to the exact required manifest digest.
+
+The existing R3F provider may be extended only with bounded read-only methods necessary for:
+
+```text
+Docker SystemInfo
+exact image inspect/rootfs observation for the required manifest digest
+```
+
+The image-rootfs observation must:
+
+1. use the already trusted/pinned Docker Unix-socket endpoint model;
+2. use fixed Docker API v1.48;
+3. inspect only the exact source digest already proven by R3F;
+4. require returned manifest descriptor digest to equal `requirement.workload.source.digest`;
+5. extract only the ordered rootfs layer DiffIDs needed for ChainID derivation;
+6. never use RepoTags/RepoDigests/names as source authority;
+7. preserve Docker endpoint identity before/after;
+8. remain bounded by response/time/parser limits.
+
+This remains E2 metadata and becomes useful only through the R3G-B physical conjunction.
+
+---
+
+## 22. No remote registry authority
+
+R3G-B v1 MUST NOT contact:
+
+```text
+Docker Hub
+OCI registry
+credential helper
+registry authentication service
+remote content resolver
+```
+
+The theorem uses only already-local trusted host state.
+
+No registry credentials are accepted or emitted.
+
+---
+
+## 23. Pinned read-only `ctr` artifact
+
+R3G-B v1 may use the host `ctr` executable only as a pinned read-only local containerd client.
+
+Trusted R3G-B runtime configuration may contain exactly the source-lineage authority needed by this slice, purpose-equivalent to:
+
+```text
+version
 ctrPath
 expectedCtrSha256
 containerdAddress
 commitSourceLineageEvidence
 ```
 
-The implementation must open the `ctr` artifact once, bind its file identity and SHA-256, retain the descriptor, and execute only through that retained artifact handle or an equivalently race-resistant retained executable identity.
+The implementation must:
 
-A later path replacement must not change which bytes execute.
-
-Caller input must never select `ctrPath` or `containerdAddress`.
+- canonicalize the trusted configured paths;
+- open/hash/bind the `ctr` artifact before use;
+- retain an execution identity resistant to path replacement;
+- bind the containerd Unix-socket endpoint before/after use;
+- reject caller attempts to choose either path.
 
 ---
 
-## 16. Fixed containerd namespace
+## 24. Fixed containerd namespace and snapshotter
 
 R3G-B v1 fixes:
 
 ```text
-namespace = moby
+namespace   = moby
+snapshotter = overlayfs
 ```
 
-The caller cannot override it.
+No namespace or snapshotter discovery/list operation is authorized.
 
-No namespace discovery/list operation is authorized.
+Caller input cannot override either value.
 
 ---
 
-## 17. Allowed `ctr` command surfaces
+## 25. Allowed `ctr` surfaces
 
-Only two semantic command families are authorized:
+Only these semantic command families are authorized:
 
 ```text
 containers info <exactContainerId>
-snapshots info <exactSnapshotKeyOrAuthorizedParent>
+snapshots info <exactContainerId>
+snapshots info <exactContainerId>-init     # only when active parent requires it
+snapshots info <exactExpectedImageChainID>
 ```
 
 with fixed trusted:
@@ -499,18 +645,54 @@ with fixed trusted:
 ```text
 address
 namespace = moby
-snapshotter = overlayfs   # for snapshot operations
+snapshotter = overlayfs   # snapshot calls
 ```
 
-The pinned containerd `ctr` implementation serializes both container info and snapshot info as JSON.
+The pinned `ctr` source serializes container info and snapshot info as JSON.
 
-The implementation may materialize exact argv required by the pinned CLI, but no shell is permitted.
+No shell is permitted.
 
 ---
 
-## 18. Explicitly forbidden `ctr` surfaces
+## 26. `ctr containers info` security-relevant fields
 
-R3G-B must never execute:
+R3G-B uses `ctr containers info` only for subject/spec cross-checks.
+
+Required fields include:
+
+```text
+ID == exact full container ID
+Labels["com.docker/engine.bundle.path"] == exact R3E bundle
+Spec.Root.Path == derived Moby rootfsMountPath
+```
+
+`Image` is mutable metadata and is not source identity.
+
+`SnapshotKey` and `Snapshotter` in container metadata are not R3G-B lineage authority.
+
+Runtime metadata may be retained diagnostically but cannot replace R3E runtime identity.
+
+---
+
+## 27. `ctr snapshots info` security-relevant fields
+
+For every snapshot used in the proof, the bounded parser validates:
+
+```text
+Name
+Parent
+Kind
+```
+
+The exact role-specific kind must match the authorized ancestry shape.
+
+Labels and timestamps are not lineage authority.
+
+---
+
+## 28. Explicitly forbidden `ctr` surfaces
+
+R3G-B MUST NOT execute:
 
 ```text
 snapshots prepare
@@ -535,205 +717,121 @@ tasks kill
 tasks exec
 ```
 
-No generic caller-supplied ctr subcommand is authorized.
-
-No shell command string is authorized.
+No arbitrary caller-supplied ctr command or argv is authorized.
 
 ---
 
-## 19. Why `ctr snapshots mounts` is intentionally forbidden
+## 29. Why `ctr snapshots mounts` remains forbidden
 
-Although snapshotter `Mounts` is itself a read-oriented API, the pinned `ctr snapshots mounts` command also passes the result through the containerd mount manager and may activate mounts.
+The pinned command can pass snapshot mounts through the containerd mount manager and may activate mounts.
 
-R3G-B is an observation slice.
+R3G-B is observation-only.
 
-It must not create, activate, prepare, view, mount or mutate snapshot state.
+It must not create or activate a mount merely to prove one.
 
-Therefore R3G-B v1 does not invoke that CLI surface.
-
----
-
-## 20. Docker image-rootfs E2 extension
-
-R3G-B needs the ordered `rootfs.diff_ids` corresponding to the exact required manifest digest.
-
-The existing R3F Docker provider may be extended only with one bounded read-only image-rootfs observation method.
-
-That method must:
-
-1. use the already trusted/pinned Docker Unix-socket endpoint model;
-2. use fixed API version `v1.48`;
-3. inspect only the exact source digest already proven by the R3F container observation;
-4. require returned image descriptor digest to equal the exact required source digest;
-5. read only the ordered `RootFS.Layers` DiffIDs needed for ChainID derivation;
-6. preserve endpoint identity before/after;
-7. have bounded response size, timeout, UTF-8 and JSON parser limits;
-8. never treat RepoTags/RepoDigests/name/tag as source authority.
-
-This extension remains E2 metadata.
-
-It becomes useful to R3G-B only when conjoined with exact containerd snapshot ancestry, live bundle rootfs mount and R3E runtime identity.
+The existing Moby rootfs mount must already be present and is observed through the kernel.
 
 ---
 
-## 21. No registry or remote image authority
+## 30. Kernel physical rootfs mount observation
 
-R3G-B v1 must not contact:
+R3G-B derives exactly:
 
 ```text
-Docker Hub
-OCI registry
-credential helper
-registry auth service
-remote content resolver
+rootfsMountPath = canonicalJoin(
+  DockerRootDir,
+  "rootfs",
+  "overlayfs",
+  exactContainerId,
+)
 ```
 
-The theorem uses only already-local trusted host state.
-
-No registry credentials are accepted or emitted.
-
----
-
-## 22. Runtime bundle theorem
-
-Canonical R3D/R3E already observes the exact running gVisor state including:
+Then it must use a fixed internal Linux kernel surface to prove at least:
 
 ```text
-container ID
-running status
-PID
-bundle path
-process executable identity
-```
-
-containerd runtime-v2 creates a task bundle and a `rootfs` directory beneath it.
-
-The pinned shim path mounts the rootfs components at:
-
-```text
-<bundle>/rootfs
-```
-
-before runtime creation.
-
-Therefore R3G-B derives exactly:
-
-```text
-rootfsPath = <validated R3E bundle> + "/rootfs"
-```
-
-The caller cannot supply a rootfs path.
-
----
-
-## 23. Bundle path string is not proof
-
-The R3E bundle string is only a trusted subject locator.
-
-R3G-B must additionally prove the derived rootfs path is a live kernel-visible mount during the observation window.
-
-The following must not be accepted as physical proof:
-
-```text
-bundle string exists
-rootfs directory exists
-config.json says root.path=rootfs
-Docker metadata says overlayfs
-```
-
-A kernel mount observation is required.
-
----
-
-## 24. V1 bundle/rootfs path shape
-
-For the canonical Docker/containerd runtime-v2 configuration supported by v1, the exact R3E bundle must remain under the trusted runtime-v2 task state root for namespace `moby` and terminate in the full container ID.
-
-The implementation may encode the exact canonical prefix proven by the pinned stack, or bind an equivalent trusted constructor-level state-root configuration.
-
-It must not accept a caller-selected bundle root.
-
-At minimum:
-
-```text
-basename(bundle) == exact full container ID
-parent namespace component == moby
-rootfsPath == bundle + /rootfs
-```
-
-Any relative, non-canonical, NUL-containing or traversal path fails closed.
-
----
-
-## 25. Kernel rootfs mount observation
-
-R3G-B must observe the derived `rootfsPath` from a fixed internal Linux kernel surface.
-
-The implementation must prove at least:
-
-```text
-rootfs path exists
-rootfs path is a directory
-rootfs path is not a symlink
-exactly one canonical mount entry resolves to rootfsPath
+rootfsMountPath exists
+rootfsMountPath is a directory
+rootfsMountPath is not a symlink
+exactly one canonical mount record resolves to the exact path
 filesystem type == overlay
-mount root/options grammar is canonical and bounded
+mount record is bounded and structurally valid
+mount identity is stable across the observation window
 ```
 
-If the exact mount cannot be observed from Kodac's trusted host namespace, v1 fails closed.
+Directory existence without a mount is not proof.
 
-No ambient fallback to directory existence is allowed.
-
----
-
-## 26. Writable active upper layer is allowed
-
-An `overlay` rootfs mount may have a writable upper/work layer because the running container snapshot is active.
-
-That does not invalidate the immutable image-base theorem.
-
-R3G-B must not claim that the active upper layer is immutable.
-
-The source claim is only that the active snapshot's authorized ancestry terminates at the expected immutable image ChainID.
+If Kodac's trusted host namespace cannot see the exact mount, v1 fails closed.
 
 ---
 
-## 27. No lowerdir path hashing theorem in v1
+## 31. Mount namespace visibility is explicit
 
-R3G-B v1 does not recursively hash every file in overlay lowerdirs.
+R3G-B v1 assumes Kodac executes in a host observation context that can see the Moby rootfs mount used by the local Docker Engine.
 
-It instead uses the content-addressed OCI DiffID/ChainID theorem plus trusted containerd snapshot ancestry and live rootfs mount binding.
+If Docker/Kodac mount namespaces make that physical mount invisible, R3G-B does not downgrade to E2 metadata.
 
-No claim is made that Kodac independently recomputes every filesystem byte from a tar stream during observation.
+It fails closed.
 
-A future stronger byte-reconstruction theorem may be separately authorized.
+A cross-mount-namespace helper or `setns` theorem is not authorized by this document.
 
 ---
 
-## 28. R3E subject identity is mandatory
+## 32. Writable active upper layer is allowed
+
+The active container snapshot may contain a writable upper/work layer.
+
+That does not invalidate the immutable image-base ancestry theorem.
+
+R3G-B MUST NOT label the active upper layer immutable.
+
+The immutable claim terminates at the expected image ChainID.
+
+---
+
+## 33. No recursive lowerdir byte-hashing theorem in v1
+
+R3G-B v1 does not recursively hash every file beneath overlay lowerdirs and does not reconstruct every image tar stream during observation.
+
+It uses:
+
+```text
+required content-addressed manifest
++ ordered DiffIDs
++ deterministic ChainID
++ pinned Moby snapshot construction semantics
++ live containerd snapshot ancestry
++ stored OCI root path
++ live kernel mount
+```
+
+A stronger independent byte-reconstruction theorem may be authorized later.
+
+---
+
+## 34. R3E subject identity is mandatory
 
 R3G-B cannot operate on an arbitrary container ID.
 
-The exact subject must originate from the trusted R3E lineage already proven through the gateway.
+The exact subject must originate from canonical trusted R3E lineage through the gateway.
 
-At minimum the source candidate must bind:
+At minimum the source candidate binds:
 
 ```text
 requirementIdentity
 workloadIdentity
 executionAttemptIdentity
 containerBindingIdentity
-R3E runtimeLineageIdentity
+runtimeLineageIdentity
 containerId
 runsc process identity
-bundle identity/state identity
+R3E bundle identity/path
 ```
 
-No caller-created structurally valid R3E record is physical proof by itself.
+A caller-created structurally valid R3E record is not physical proof by itself.
 
 ---
 
-## 29. R3F subject identity is mandatory
+## 35. R3F subject identity is mandatory
 
 R3G-B must require the same exact R3F container binding/control-plane observation used for R3E.
 
@@ -749,122 +847,27 @@ Any mismatch fails closed.
 
 ---
 
-## 30. Source digest equality
+## 36. Source digest equality
 
-The exact immutable source digest is always:
+The immutable source authority is always:
 
 ```text
 requirement.workload.source.digest
 ```
 
-The Docker image-rootfs E2 observation must resolve this same digest.
-
-The R3G-B candidate may carry the digest only after equality is revalidated.
+The Docker image-rootfs observation must resolve that same digest.
 
 A tag or mutable image name never substitutes.
 
 ---
 
-## 31. Exact `ctr` container-info requirements
+## 37. Docker/containerd endpoint identity
 
-The bounded parser must validate the returned container info as an ordinary non-proxy object and reject parser ambiguity.
+R3G-B reuses the canonical R3F Docker Unix-socket endpoint identity theorem.
 
-Security-relevant requirements:
+The configured containerd address must likewise be a canonical absolute Unix-socket path and an actual socket.
 
-```text
-ID == exact containerId
-SnapshotKey == exact containerId
-Snapshotter == "overlayfs"
-```
-
-The parser may accept/ignore bounded non-authoritative metadata only if doing so cannot affect identity or execute getters/proxies.
-
-Duplicate JSON keys are forbidden.
-
-Unexpected structural ambiguity fails closed.
-
----
-
-## 32. Exact snapshot-info requirements
-
-For every snapshot info response used in the theorem, R3G-B must validate:
-
-```text
-Name
-Parent
-Kind
-```
-
-Kind must be one of the exact expected values for its role.
-
-Timestamps and labels are not lineage authority.
-
-The final source-lineage identity must bind the ordered canonical snapshot ancestry, not arbitrary serialized label maps.
-
----
-
-## 33. Output bounds
-
-R3G-B must define finite conservative bounds before implementation.
-
-At minimum bounds must cover:
-
-```text
-ctr artifact path bytes
-containerd socket path bytes
-ctr container-info output bytes
-ctr snapshot-info output bytes
-Docker image-inspect output bytes
-maximum DiffID count
-maximum JSON depth
-maximum JSON nodes
-maximum object keys
-maximum array items
-maximum string bytes
-mountinfo bytes
-maximum mount entries
-rootfs path bytes
-commit timeout
-maximum serialized E3 source-record bytes
-```
-
-Oversize input/output fails closed.
-
-No truncation-and-accept behavior is authorized.
-
----
-
-## 34. Suggested v1 conservative limits
-
-Implementation may choose equal or stricter bounds after tests, but may not silently loosen these without reconciliation:
-
-```text
-maxPathBytes                 = 4096
-maxCtrContainerInfoBytes     = 1 MiB
-maxCtrSnapshotInfoBytes      = 256 KiB each
-maxDockerImageInspectBytes   = 1 MiB
-maxDiffIds                   = 512
-maxMountInfoBytes            = 2 MiB
-maxMountEntries              = 16384
-maxJsonDepth                 = 64
-maxJsonNodes                 = 32768
-maxObjectKeys                = 4096
-maxArrayItems                = 8192
-maxStringBytes               = 65536
-ctrTimeoutMs                 = 5000
-commitTimeoutMs              = 5000
-maxRecordSerializedBytes     = 128 KiB
-```
-
----
-
-## 35. `ctr` endpoint identity
-
-The configured containerd address must be a canonical absolute Unix-socket path.
-
-R3G-B must snapshot its endpoint identity before trusted queries and require the same endpoint identity afterward.
-
-At minimum bind:
+Before/after observations must bind at least:
 
 ```text
 device
@@ -874,37 +877,36 @@ gid
 mode
 ```
 
-The endpoint must be an actual Unix socket.
-
-Socket replacement during observation fails closed.
+Endpoint replacement during the observation window fails closed.
 
 ---
 
-## 36. Artifact identity
+## 38. `ctr` artifact identity
 
-The trusted `ctr` artifact identity must bind at least:
+The trusted `ctr` executable identity must bind at least:
 
 ```text
-path configuration identity
-SHA-256 bytes
-stat identity from retained descriptor
+trusted configured canonical path
+SHA-256 executable bytes
+regular-file stat identity from retained descriptor
 ```
 
-The executable must be a non-empty regular file.
+A path replacement after binding must not change which executable bytes run.
 
-The implementation must execute the retained artifact, not reopen the path immediately before each invocation.
+No `PATH` lookup is authorized.
 
 ---
 
-## 37. No caller authority injection
+## 39. No caller authority injection
 
-The public gateway method may accept only the already-authorized execution requirement/subject inputs plus cancellation.
+The public gateway method may accept only already-authorized requirement/subject inputs plus cancellation.
 
 It must not expose caller options such as:
 
 ```text
 ctrPath
 containerdAddress
+DockerRootDir
 namespace
 snapshotter
 containerId
@@ -919,19 +921,19 @@ argv
 socketPath
 ```
 
-Container/snapshot/path values must be derived from trusted canonical records and fixed runtime configuration.
+All host-reading authority is fixed internally or supplied through trusted constructor configuration.
 
 ---
 
-## 38. Dedicated capability
+## 40. Dedicated capability
 
-R3G-B uses a dedicated protected capability, purpose-equivalent to:
+R3G-B uses a dedicated protected capability purpose-equivalent to:
 
 ```text
 runtime.observe.gvisor.source-lineage
 ```
 
-The gateway must remain policy-gated:
+Policy behavior:
 
 ```text
 allow -> may proceed
@@ -939,101 +941,98 @@ ask   -> block
  deny -> block
 ```
 
-This capability must not be added to generic workspace/K3 read policies as part of R3G-B.
-
-Doing so would widen the wrong authority surface.
+This capability MUST NOT be added to generic workspace/K3 policies.
 
 ---
 
-## 39. Linux only
+## 41. Linux only
 
 R3G-B v1 is Linux-only.
 
-On macOS or Windows production paths, the dedicated gateway method must fail closed before host observation.
+macOS/Windows production paths must fail closed before host observation.
 
-Cross-platform tests must still prove that non-Linux paths cannot accidentally proceed.
+Cross-platform tests must prove the non-Linux fail-closed boundary.
 
 ---
 
-## 40. Observation ordering
+## 42. Observation order
 
-A successful source-lineage observation must use a bounded order equivalent to:
+A successful invocation must use a bounded order equivalent to:
 
 ```text
-1. validate requirement and protected capability
-2. resolve/revalidate exact R3F container binding
-3. observe exact R3E state/process/runtime identity (pre)
-4. verify trusted ctr artifact + containerd socket endpoint
-5. obtain bounded Docker image-rootfs E2 observation for required manifest digest
-6. derive ordered DiffIDs + expected ChainID
-7. obtain ctr container info for exact container ID
-8. obtain active snapshot info
-9. if needed, obtain exact <containerId>-init snapshot info
-10. obtain expected image ChainID snapshot info
-11. observe derived bundle/rootfs kernel mount (pre)
-12. re-observe R3E exact subject
-13. re-observe/revalidate R3F exact container binding
-14. re-query container/snapshot lineage or equivalently prove stable exact identities
-15. re-observe bundle/rootfs kernel mount (post)
-16. re-check ctr artifact + containerd socket endpoint
-17. require exact stable identities across pre/post window
-18. create E3 physical source candidate
-19. durable commit + exact acknowledgment validation
-20. persist K2 receipt and return success
+1.  validate requirement and dedicated capability
+2.  resolve/revalidate exact R3F binding
+3.  observe exact R3E state/process/runtime identity (pre)
+4.  bind Docker socket, containerd socket and ctr artifact
+5.  read bounded Docker SystemInfo
+6.  require Linux + overlayfs + canonical DockerRootDir + expected containerd address/namespace
+7.  read bounded Docker image-rootfs observation for exact required manifest digest
+8.  derive ordered DiffIDs + exact expected image ChainID
+9.  read ctr container info for exact container ID
+10. derive Moby rootfsMountPath from DockerRootDir/overlayfs/containerId
+11. require stored Spec.Root.Path == derived rootfsMountPath
+12. require stored Moby bundle label == exact R3E bundle
+13. read active snapshot info using exact key containerId
+14. if required, read exact containerId-init snapshot info
+15. read exact expected image ChainID snapshot info
+16. validate one authorized ancestry shape
+17. observe exact kernel rootfs mount (pre)
+18. re-observe R3E exact subject
+19. re-observe/revalidate R3F exact binding
+20. re-query security-relevant Docker/containerd lineage or prove equivalent exact stable identities
+21. re-observe exact kernel rootfs mount (post)
+22. re-check endpoint/artifact identities
+23. require stable identities across the full window
+24. create/validate E3 physical source candidate
+25. durable commit + exact acknowledgment validation
+26. persist K2 receipt and return success
 ```
 
-Implementation may reorder independent checks only if the same or stronger race theorem is preserved.
+Independent checks may be reordered only if the same or stronger race theorem remains.
 
 ---
 
-## 41. Stable observation theorem
+## 43. Stability theorem
 
-The successful candidate must require exact identity equality across the observation window for every mutable boundary relied upon, including:
+Success requires exact stable identity across every mutable boundary relied upon:
 
 ```text
 R3E execution subject
 R3F container binding
-Docker socket endpoint
-containerd socket endpoint
-ctr executable artifact
-container info identity
-snapshot ancestry identity
-bundle/rootfs mount identity
+Docker endpoint
+Docker SystemInfo security fields
+containerd endpoint
+ctr artifact
+container info subject/spec identity
+snapshot ancestry
+physical rootfs mount
 ```
 
-If a value changes and is merely changed back later, the implementation must not silently certify the unstable interval if that change is observable by the bounded theorem.
+Observable drift fails closed.
 
 ---
 
-## 42. Rootfs mount identity
+## 44. Normalized identities
 
-R3G-B must create a deterministic rootfs mount identity from canonical parsed kernel mount fields.
-
-It must not hash raw unbounded mountinfo text.
-
-At minimum the identity should bind the canonical security-relevant mount record and derived rootfs path.
-
-For v1 it must include enough information to distinguish a mount replacement at the same path.
-
----
-
-## 43. Container metadata identity
-
-The container metadata identity must bind only security-relevant normalized fields, at minimum:
+R3G-B must create deterministic domain-separated identities for at least:
 
 ```text
-containerId
-snapshotKey
-snapshotter
+Docker storage locator
+image-rootfs / ordered DiffID observation
+expected image ChainID
+container metadata subject/spec observation
+snapshot ancestry
+physical rootfs mount
+final E3 source candidate
 ```
 
-Mutable image-name metadata, labels and timestamps must not control the source theorem.
+Validators rederive all derivable identities instead of shape-checking caller-supplied hashes.
 
 ---
 
-## 44. Snapshot ancestry identity
+## 45. Snapshot ancestry identity
 
-The snapshot ancestry identity must bind the exact ordered nodes used:
+The ancestry identity binds the exact ordered nodes used:
 
 ```text
 active container snapshot
@@ -1041,7 +1040,7 @@ optional canonical init snapshot
 committed expected image snapshot
 ```
 
-Each node identity must bind:
+Each node binds:
 
 ```text
 name
@@ -1049,28 +1048,33 @@ kind
 parent
 ```
 
-No unordered set representation is allowed.
+An unordered set is forbidden.
 
 ---
 
-## 45. Image-rootfs identity
+## 46. Physical mount identity
 
-The Docker image-rootfs E2 observation identity must bind at least:
+The mount identity must be computed from canonical parsed kernel mount fields rather than raw unbounded mountinfo bytes.
+
+It must bind enough information to detect replacement of the mount at the same target path.
+
+At minimum it binds:
 
 ```text
-required manifest digest
-ordered DiffIDs
-expected ChainID
-Docker endpoint identity
+derived rootfsMountPath
+mount ID / parent ID where applicable
+filesystem type
+mount root/source as normalized by the supported overlay theorem
+security-relevant canonical mount options
 ```
 
-It must not bind tags as authoritative source fields.
+Exact final normalized fields may be narrowed during implementation if replacement detection remains at least as strong.
 
 ---
 
-## 46. E3 source candidate
+## 47. E3 source candidate
 
-Purpose-equivalent v1 candidate fields:
+Purpose-equivalent v1 fields:
 
 ```text
 version
@@ -1083,45 +1087,32 @@ containerBindingIdentity
 runtimeLineageIdentity
 containerId
 sourceDigest
+dockerStorageIdentity
 imageRootfsIdentity
 expectedImageChainId
-containerdEndpointIdentity
 ctrArtifactIdentity
-containerMetadataIdentity
+containerdEndpointIdentity
+containerSpecIdentity
 snapshotAncestryIdentity
 rootfsMountIdentity
 candidateIdentity
 ```
 
-Exact final field names may be refined during implementation only if semantics stay within this authorization.
+Field names may be refined only without changing semantics or authority.
 
 ---
 
-## 47. Candidate identity
+## 48. Durable source-lineage commit
 
-`candidateIdentity` must be domain-separated and deterministic.
+Trusted runtime configuration may expose exactly one R3G-B durable commit callback.
 
-It must cover every security-relevant field of the normalized candidate.
+The acknowledgment must bind the exact source candidate/record identity.
 
-A caller may not supply a candidate identity that is merely shape-checked.
+Wrong, malformed, missing, timed-out or aborted acknowledgment prevents success.
 
-Validation must rederive it.
+Late completion after timeout/abort cannot upgrade failure to success.
 
----
-
-## 48. Durable source-lineage record
-
-The trusted runtime configuration may expose exactly one durable commit callback for the R3G-B source candidate/record.
-
-The commit acknowledgment must bind the exact candidate/record identity.
-
-Wrong, malformed, missing, timed-out or aborted acknowledgment prevents successful return.
-
-Late completion after timeout/abort cannot upgrade the invocation to success.
-
-No status-query/idempotency API is implicitly authorized by this document.
-
-Any wider commit protocol requires separate reconciliation.
+No status-query or idempotency API is implicitly authorized.
 
 ---
 
@@ -1130,32 +1121,100 @@ Any wider commit protocol requires separate reconciliation.
 Cancellation must be honored:
 
 ```text
-before first host observation
-while waiting for ctr
-while waiting for Docker image inspect
+before host observation
+during Docker read
+during ctr read
 between lineage observations
-before durable commit
-while waiting for commit acknowledgment
+before commit
+during commit acknowledgment wait
 before success receipt
 ```
 
-A cancelled or timed-out operation cannot later return success because an underlying non-cancellable callback finishes.
+A late underlying completion cannot change the returned failed/cancelled invocation into success.
 
 ---
 
 ## 50. Failure receipts
 
-A bounded attributable K2 failure receipt may be persisted when the observation invocation fails.
+A bounded attributable K2 failure receipt may record failure of the observation/proof invocation.
 
-A failure receipt describes failure of the observation/proof invocation.
-
-It must not overclaim rollback of an external durable store.
+It must not overclaim that an external durable store rolled back or never wrote after a timed-out non-cancellable callback.
 
 ---
 
-## 51. No mutation
+## 51. Strict output and parser bounds
 
-R3G-B implementation must not perform:
+Implementation must define finite conservative limits before accepting host data.
+
+At minimum:
+
+```text
+maxPathBytes                 <= 4096
+maxDockerSystemInfoBytes     <= 1 MiB
+maxDockerImageInspectBytes   <= 1 MiB
+maxCtrContainerInfoBytes     <= 1 MiB
+maxCtrSnapshotInfoBytes      <= 256 KiB per response
+maxDiffIds                   <= 512
+maxMountInfoBytes            <= 2 MiB
+maxMountEntries              <= 16384
+maxJsonDepth                 <= 64
+maxJsonNodes                 <= 32768
+maxObjectKeys                <= 4096
+maxArrayItems                <= 8192
+maxStringBytes               <= 65536
+ctrTimeoutMs                 <= 5000
+commitTimeoutMs              <= 5000
+maxRecordSerializedBytes     <= 128 KiB
+```
+
+Implementation may choose stricter values.
+
+Oversize data fails closed; truncation-and-accept is forbidden.
+
+---
+
+## 52. JSON parser safety
+
+Docker/ctr JSON parsing must be:
+
+```text
+bounded before parse
+duplicate-key safe
+finite-depth
+finite-node-count
+finite-key-count
+finite-array-count
+finite-string-size
+plain-object/data-property safe for in-memory validation
+```
+
+Proxy/accessor hostile validation fixtures must fail before attacker-controlled property access where the existing trust-module pattern supports that theorem.
+
+---
+
+## 53. Mount parser safety
+
+Kernel mount parsing must reject:
+
+```text
+oversized input
+NUL
+malformed separator
+missing mandatory fields
+invalid escaping
+non-canonical target
+ambiguous duplicate exact target
+unexpected filesystem type
+trailing structural ambiguity
+```
+
+Raw encoded path comparison is insufficient; mountinfo path escaping must be decoded canonically.
+
+---
+
+## 54. No mutation
+
+R3G-B MUST NOT perform:
 
 ```text
 container create/start/stop/delete
@@ -1167,53 +1226,20 @@ setns
 unshare
 pivot_root
 chroot
-filesystem write to bundle/rootfs
+filesystem write under DockerRootDir/rootfs
 containerd metadata update
 Docker metadata update
 cgroup mutation
 network mutation
 ```
 
-This slice is observation-only except for its own evidence/receipt persistence callbacks.
+The only writes are the existing evidence/receipt persistence callbacks.
 
 ---
 
-## 52. No direct containerd metadata-file parsing
+## 55. No shell / no discovery
 
-R3G-B must not parse containerd BoltDB metadata files or implementation-private storage files directly.
-
-That would create a brittle authority tied to private on-disk layouts and bypass the containerd API consistency model.
-
-The trusted source is the pinned local containerd API accessed through the pinned read-only `ctr` artifact.
-
----
-
-## 53. No environment discovery
-
-Production must not use:
-
-```text
-PATH search for ctr
-which ctr
-command -v ctr
-containerd socket scanning
-snapshotter enumeration
-namespace enumeration
-Docker data-root scanning
-recursive /var/lib discovery
-```
-
-Trusted constructor configuration and fixed constants define the supported surface.
-
-If unavailable, fail closed.
-
----
-
-## 54. No shell
-
-Every external executable invocation must use a fixed executable artifact and argument array.
-
-Forbidden:
+Forbidden production behavior includes:
 
 ```text
 sh -c
@@ -1221,93 +1247,85 @@ bash -c
 cmd /c
 PowerShell command strings
 eval
-string-concatenated shell pipelines
+PATH search for ctr
+which ctr
+command -v ctr
+containerd socket scanning
+Docker root scanning
+snapshotter enumeration
+namespace enumeration
+recursive /var/lib discovery
 ```
+
+Trusted constructor configuration and fixed protocol constants define the authority surface.
 
 ---
 
-## 55. JSON parser safety
+## 56. No direct containerd metadata-file parsing
 
-All Docker/ctr JSON parsing must be:
+R3G-B MUST NOT parse containerd BoltDB or implementation-private on-disk metadata directly.
 
-```text
-bounded before parse
-duplicate-key safe
-finite-depth
-finite-node-count
-finite-key-count
-finite-array-count
-finite-string-size
-plain-object / data-property safe for in-memory validation
-```
-
-Proxy/accessor hostile objects used in validator tests must fail before attacker-controlled property traps execute where the existing trust-module pattern supports that theorem.
+The authorized containerd observation source is the pinned read-only `ctr` artifact against the trusted local containerd API.
 
 ---
 
-## 56. Physical mount parser safety
+## 57. No new native helper in v1
 
-Mountinfo parsing must reject:
+The existing R3D C helper remains a tiny pidfd/process-identity primitive.
 
-```text
-oversized input
-NUL
-malformed separator
-missing mandatory fields
-ambiguous duplicate exact rootfs mountpoint
-invalid escaping
-non-canonical mountpoint
-unexpected filesystem type
-trailing structural ambiguity
-```
+R3G-B does not expand it into a containerd or filesystem helper.
 
-Raw path comparison without mountinfo escape decoding is insufficient.
+No new C/Go/Rust helper is authorized by this v1 document.
+
+If pinned `ctr` plus fixed internal kernel reads are insufficient, implementation must stop and reconcile authority rather than silently add a helper/dependency.
 
 ---
 
-## 57. Protected predecessor semantics
+## 58. Protected predecessor semantics
 
-R3G-B must preserve the already-canonical meanings of:
+R3G-B must preserve canonical meanings of:
 
 ```text
-R3A workload source
+R3A immutable workload source
 R3B pure backend evidence contracts
 R3D gVisor runtime candidate
 R3E runtime lineage
-R3F Docker control-plane E2
+R3F Docker E2 control-plane binding
 R3G-A cgroup-v2 E3 resource evidence
-H5 agent/guard behavior
+H5 guard/agent behavior
 ```
 
-R3G-B must not weaken a predecessor theorem in order to make its own theorem easier.
+A predecessor theorem cannot be weakened to make R3G-B pass.
 
 ---
 
-## 58. R3G-A remains independent
+## 59. R3G-A remains independent
 
 R3G-B source success does not imply resource success.
 
-R3G-A evidence is not required to derive the source ChainID, and R3G-B must not mutate cgroup logic.
+R3G-A evidence is not used as a substitute for source lineage.
 
-The final later R3B conjunction may require both independent facts.
+The later final R3B conjunction may require both independent facts.
 
 ---
 
-## 59. Protected physical-policy non-claims
+## 60. Explicit non-claims
 
 R3G-B does not prove:
 
 ```text
-physical CPU/memory/swap     # R3G-A owns this
-physical deny-all network    # R3G-C candidate
+physical CPU/memory/swap       # R3G-A owns this
+physical deny-all network      # R3G-C candidate
 TTL
 output limit
-rootfs globally read-only
-no writable upper layer
-registry authenticity beyond required local digest
-signature/Sigstore provenance
+running rootfs globally read-only
+absence of writable upper layer
+every rootfs file independently rehashed
+registry signature
+Sigstore provenance
 SBOM correctness
-source-code provenance of the image
+source-code-to-image provenance
+legacy graphdriver lineage
 R3B final SandboxBackendObservation
 R3B SandboxExecutionEvidence
 H4 complete
@@ -1316,16 +1334,16 @@ H6 authorized
 
 ---
 
-## 60. Exact current gateway byte-pin reconciliation
+## 61. Current gateway byte-pin reconciliation
 
-At the R3G-B authorization base, the current gateway blob is:
+At authorization base, gateway blob is:
 
 ```text
 packages/kodac-runtime/src/execution/gateway.ts
 5e4c3cea9982d7c774d0c18beb40f2fcbfde4e64
 ```
 
-Exact repository search at authorization preparation time found executable tests pinning this blob in exactly these nine paths:
+Exact repository search during authorization preparation found executable tests pinning this blob in exactly:
 
 ```text
 packages/kodac-runtime/test/kdo-h4-r3a-attested-sandbox-workload.test.ts
@@ -1339,17 +1357,17 @@ packages/kodac-runtime/test/kdo-h5-r3b-active-guarded-tool-pipeline.test.ts
 packages/kodac-runtime/test/kdo-h5-r4a-agent-step-reconstruction.test.ts
 ```
 
-The R3G-A evidence ledger also records the blob but is historical evidence and must not be rewritten merely because a later authorized gateway change supersedes the executable pin.
+The R3G-A evidence ledger also records the historical blob and must not be rewritten merely because a later authorized gateway change supersedes executable byte pins.
 
-Before any R3G-B implementation write, the exact repository search for this blob must be repeated.
+Before any R3G-B implementation write, the exact search MUST be repeated.
 
-If an additional executable test pins it, implementation must stop and reconcile the allowlist before modifying an unlisted path.
+An additional executable pin outside the allowlist stops implementation pending reconciliation.
 
 ---
 
-## 61. Exact pre-ledger implementation allowlist
+## 62. Exact pre-ledger implementation allowlist
 
-After this authorization becomes canonical, R3G-B implementation may modify exactly these fourteen paths before its evidence ledger exists:
+Only after this authorization becomes canonical, R3G-B implementation may modify exactly these fourteen paths before the evidence ledger exists:
 
 ```text
 1.  packages/kodac-runtime/src/trust/sandbox-observer-gvisor-source-lineage.ts
@@ -1370,32 +1388,37 @@ After this authorization becomes canonical, R3G-B implementation may modify exac
 
 No fifteenth pre-ledger path is authorized.
 
-The nine predecessor tests may change only to reconcile the superseded gateway blob pin and preserve their existing owned theorem.
+The nine predecessor tests may change only to reconcile a superseded gateway byte pin and preserve their owned theorem.
 
 ---
 
-## 62. Why the R3F module is in the allowlist
+## 63. R3F module allowance is narrow
 
-The only authorized R3F production change is a bounded read-only image-rootfs E2 observation needed to derive ordered DiffIDs from the exact required manifest digest.
-
-It must not change:
+The only authorized R3F production extension is bounded read-only Docker observation required for R3G-B:
 
 ```text
-R3F container discovery
-R3F exact container binding
-R3F network/resource assertions
-R3F provider identity meaning
-R3F ImageManifestDescriptor digest theorem
-R3F Docker socket authority
+SystemInfo security fields
+exact required image/rootfs DiffID observation
 ```
 
-The focused R3F regression test must prove predecessor semantics remain intact.
+It must not change canonical R3F semantics for:
+
+```text
+container discovery
+exact container binding
+network/resource assertions
+provider identity
+manifest digest equality
+Docker socket authority
+```
+
+The existing focused R3F test must prove predecessor behavior remains intact.
 
 ---
 
-## 63. Explicit protected paths
+## 64. Explicit protected paths
 
-R3G-B MUST NOT modify, unless separately reconciled:
+R3G-B MUST NOT modify without separate reconciliation:
 
 ```text
 packages/kodac-runtime/src/trust/sandbox-workload.ts
@@ -1417,27 +1440,13 @@ schema/*
 .github/workflows/*
 ```
 
-No dependency update, generated code, donor import, schema change or workflow change is authorized.
+No dependency, generated-code, donor, schema or workflow change is authorized.
 
 ---
 
-## 64. No new native helper in R3G-B v1
+## 65. Protected predecessor blob proof
 
-The existing R3D C helper is intentionally tiny and tied to pidfd/process executable identity.
-
-R3G-B does not expand it into a containerd client.
-
-No new C/Go/Rust helper is authorized by this v1 document.
-
-The pinned `ctr` artifact is the only newly authorized external read-only client executable.
-
-If this proves inadequate during implementation, stop and reconcile instead of silently introducing a new helper or dependency.
-
----
-
-## 65. Protected predecessor blob checks
-
-The focused R3G-B test must pin or otherwise prove byte identity for high-risk predecessor surfaces that R3G-B is not authorized to change, including at minimum:
+The focused R3G-B test must pin or equivalently prove byte identity for high-risk predecessor surfaces outside the allowlist, including at minimum:
 
 ```text
 packages/kodac-runtime/src/trust/sandbox-workload.ts
@@ -1449,7 +1458,7 @@ packages/kodac-runtime/native/gvisor-proc-observe.c
 packages/kodac-runtime/src/evidence/receipt.ts
 ```
 
-Exact canonical blob values must be collected from the implementation base before implementation.
+Exact blob values must be collected from the canonical implementation base immediately before implementation.
 
 ---
 
@@ -1458,43 +1467,48 @@ Exact canonical blob values must be collected from the implementation base befor
 The focused R3G-B proof must include deterministic hostile tests for at least:
 
 ```text
-wrong source manifest digest
+wrong required manifest digest
 uppercase/non-canonical digest
 empty DiffID list
 oversized DiffID list
 reordered DiffIDs
-malformed DiffID
-wrong ChainID
+duplicate/malformed DiffID
+wrong derived ChainID
+Docker SystemInfo non-Linux
+wrong Docker Driver
+non-canonical DockerRootDir
+containerd address mismatch
+containerd namespace mismatch
 wrong container ID
-wrong SnapshotKey
-wrong snapshotter
+stored bundle label mismatch
+stored Spec.Root.Path mismatch
+active snapshot missing
 active snapshot wrong kind
-empty active parent
-unexpected intermediate snapshot
+active snapshot wrong parent
+unexpected arbitrary intermediate
 wrong init snapshot name
 init snapshot wrong kind
 init snapshot wrong parent
-image snapshot wrong kind
-missing expected image snapshot
-container info drift
+expected image snapshot missing
+expected image snapshot wrong kind
 snapshot ancestry drift
-containerd socket replacement
-ctr artifact byte/path replacement
+Docker endpoint replacement
+containerd endpoint replacement
+ctr artifact replacement
 malformed ctr JSON
 duplicate ctr JSON keys
 oversized ctr output
-ctr timeout/nonzero exit/stderr policy violation
-bundle mismatch
-rootfs path symlink
+ctr timeout/nonzero exit
+rootfs target symlink
 missing rootfs mount
-ambiguous duplicate mount entry
+ambiguous duplicate mount target
 wrong filesystem type
 mount identity drift
 R3E subject drift
 R3F binding drift
 pre-cancel
-during-ctr cancellation
 during-Docker-read cancellation
+during-ctr cancellation
 pre-commit cancellation
 commit callback failure
 wrong commit acknowledgment
@@ -1506,41 +1520,43 @@ caller host-authority injection rejection
 
 ---
 
-## 67. Focused success fixture
+## 67. Focused synthetic success theorem
 
-A complete synthetic success theorem must establish:
+A complete synthetic success fixture must establish:
 
 ```text
-required manifest digest
--> bounded Docker image-rootfs observation
--> ordered DiffIDs
--> exact expected ChainID
--> exact containerd container SnapshotKey=containerId
--> overlayfs snapshotter
--> authorized direct OR init ancestry
--> exact stable live bundle/rootfs overlay mount
+exact required manifest digest
+-> bounded Docker SystemInfo
+-> canonical DockerRootDir + overlayfs + expected containerd authority
+-> bounded exact image-rootfs DiffIDs
+-> deterministic expected ChainID
+-> exact pinned-Moby active snapshot key = containerId
+-> direct OR canonical-init snapshot ancestry
+-> exact stored R3E bundle label
+-> exact stored OCI Spec.Root.Path == derived Moby rootfs path
+-> exact stable kernel-visible overlay mount at that path
 -> exact stable R3E/R3F subject
 -> deterministic E3 source candidate
 -> durable exact acknowledgment
 ```
 
-The fixture must make it impossible to pass merely by validating a caller-created candidate object.
+Success must not be achievable merely by validating a caller-created candidate object.
 
 ---
 
 ## 68. CI limitation
 
-Synthetic fixtures can prove parser, identity, ordering, fail-closed and integration logic.
+Synthetic fixtures prove parser, identity, ordering, fail-closed and integration logic.
 
-Ordinary GitHub Actions CI does not by itself prove a real production Docker+gVisor+containerd overlayfs instance was provisioned unless a future explicitly authorized live test actually does so.
+Ordinary GitHub Actions do not prove a live production Docker+gVisor+containerd overlayfs host unless a separately authorized live environment test actually provisions that stack.
 
-No test name or evidence ledger may misdescribe synthetic success as a live production deployment.
+Evidence language must not call fixture success a live production deployment.
 
 ---
 
 ## 69. Evidence ledger lifecycle
 
-Reserved R3G-B evidence ledger path:
+Reserved R3G-B evidence ledger:
 
 ```text
 docs/planning/KODAC_KDO_H4_R3G_B_IMMUTABLE_SOURCE_ROOTFS_PHYSICAL_LINEAGE_EVIDENCE_2026-08-16.md
@@ -1556,23 +1572,21 @@ Any implementation correction after ledger creation invalidates that ledger cycl
 
 ---
 
-## 70. Scope gate before tests
+## 70. Scope gate before test interpretation
 
 Before implementation can be accepted for ledger creation:
 
 ```text
-exact implementation base = canonical main containing this authorization
-changed paths = only the fourteen implementation allowlist paths
+implementation base = exact canonical main containing this authorization
+changed paths = only the fourteen allowlisted implementation paths
 reserved R3G-B ledger = absent
 ```
 
 Any extra production/test/docs/schema/workflow/dependency path invalidates the gate until reconciled.
 
-Tests are not interpreted as acceptance evidence before scope truth is established.
-
 ---
 
-## 71. Required repository gates
+## 71. Required implementation repository gates
 
 Any accepted R3G-B implementation head must pass at the exact accepted SHA:
 
@@ -1580,9 +1594,9 @@ Any accepted R3G-B implementation head must pass at the exact accepted SHA:
 governance / provenance
 legacy tests / ruff
 runtime-change classifier
-Ubuntu runtime Typecheck + full Test + benchmark
-Windows runtime Typecheck + full Test + benchmark
-macOS runtime Typecheck + full Test + benchmark
+Ubuntu Typecheck + full Test + benchmark
+Windows Typecheck + full Test + benchmark
+macOS Typecheck + full Test + benchmark
 K2 runtime aggregate gate
 K3-R4 regression gate
 K3-R5 regression gate
@@ -1592,46 +1606,49 @@ manual architecture/trust/security review
 0 unresolved actionable review threads
 ```
 
-External reviewer availability/status must be recorded accurately.
+External reviewer availability/status must be recorded truthfully.
 
 Pending/rate-limited/unavailable is not PASS.
 
 ---
 
-## 72. Manual security review questions
+## 72. Manual trust/security questions before ledger
 
-Before ledger creation, manual review must answer at minimum:
+Manual review must answer:
 
 ```text
-Can a caller choose ctr/containerd/socket/snapshot/path authority? -> must be NO
-Can mutable image names/tags establish source proof? -> must be NO
-Can ctr invoke a mutating command? -> must be NO
-Can ctr path replacement change executed bytes after binding? -> must be NO
-Can containerd socket replacement go unnoticed? -> must be NO
-Can arbitrary snapshot ancestry be accepted? -> must be NO
-Can bundle/rootfs directory existence substitute for a mount? -> must be NO
-Can writable active upper layer be mislabeled immutable? -> must be NO
-Can a late timed-out commit upgrade failure to success? -> must be NO
-Can R3G-B mint R3B final evidence? -> must be NO
-Can generic workspace/K3 policies receive the capability? -> must be NO
-Can unsupported graphdriver mode silently fall back? -> must be NO
+Can caller choose ctr/containerd/DockerRootDir/snapshot/rootfs authority? -> NO
+Can mutable image name/tag establish source proof? -> NO
+Can containerd Container.SnapshotKey establish lineage? -> NO
+Can bundle/rootfs be assumed as Moby rootfs? -> NO
+Can ctr invoke mutating commands? -> NO
+Can ctr path replacement change executed bytes after binding? -> NO
+Can Docker/containerd socket replacement go unnoticed? -> NO
+Can arbitrary snapshot ancestry pass? -> NO
+Can directory existence substitute for a mount? -> NO
+Can writable active upper layer be mislabeled immutable? -> NO
+Can mount namespace invisibility downgrade to metadata-only proof? -> NO
+Can late timed-out commit upgrade failure to success? -> NO
+Can R3G-B mint final R3B evidence? -> NO
+Can generic workspace/K3 policy gain this capability? -> NO
+Can graphdriver mode silently fall back? -> NO
 ```
 
 ---
 
-## 73. Successful R3G-B bounded claim after canonical merge
+## 73. Bounded claim after canonical implementation merge
 
 Only after:
 
 - this authorization is canonical;
-- implementation remains within the exact allowlist;
+- implementation stays within the exact allowlist;
 - exact-head pre-ledger PASS;
 - ledger-only transition PASS;
-- fresh exact-head post-ledger certification PASS;
+- fresh exact-head post-ledger PASS;
 - canonical implementation merge succeeds;
 - canonical post-merge quality succeeds;
 
-may Kodac make the bounded claim:
+may Kodac make:
 
 ```text
 KODAC_LINUX_GVISOR_IMMUTABLE_OCI_IMAGE_BASE_LINEAGE_PROVEN
@@ -1639,22 +1656,22 @@ KODAC_LINUX_GVISOR_IMMUTABLE_OCI_IMAGE_BASE_LINEAGE_PROVEN
 
 Meaning only:
 
-> K2 can bind one exact canonical R3E gVisor execution instance and exact R3F Docker container to a stable Linux containerd/overlayfs active-rootfs snapshot ancestry whose immutable image parent is the ChainID deterministically derived from the ordered local OCI DiffIDs belonging to the exact required content-addressed manifest digest, while also observing a stable live rootfs mount at the exact runtime bundle, and can durably record that conjunction as an E3 physical source candidate without mutating container, snapshot, image or mount state.
+> K2 can bind one exact canonical R3E gVisor execution instance and exact R3F Docker container to a stable Linux Docker/containerd-overlayfs rootfs whose active snapshot key is fixed by the pinned Moby container-ID construction theorem, whose bounded snapshot ancestry terminates at the exact image ChainID derived from the ordered local OCI DiffIDs belonging to the exact required manifest digest, whose stored OCI Root.Path and Moby bundle metadata agree with the exact runtime subject, and whose derived Moby rootfs target is observed as a stable live kernel overlay mount, with a durably acknowledged E3 source record and no mutation of container, snapshot, image or mount state.
 
 ---
 
-## 74. Explicit non-claims after successful R3G-B
+## 74. Explicit non-claims after R3G-B
 
-The bounded claim does NOT mean:
+The claim does NOT mean:
 
 ```text
 running rootfs globally read-only
 writable upper layer absent
-every rootfs file independently rehashed by Kodac
+every filesystem byte independently reconstructed/hashed
 registry signature verified
 Sigstore provenance verified
 SBOM verified
-source-code-to-image provenance verified
+source-code provenance verified
 legacy graphdriver lineage proven
 physical deny-all network proven
 TTL proven
@@ -1667,21 +1684,21 @@ H6 authorized
 
 ---
 
-## 75. Expected next candidate
+## 75. Expected next independent slice
 
-After proven canonical R3G-B, the next independent physical-policy candidate remains purpose-equivalent to:
+After proven canonical R3G-B, the next purpose-equivalent candidate remains:
 
 ```text
 KDO-H4-R3G-C — Physical Deny-All Network Observation
 ```
 
-R3G-B pre-authorizes none of R3G-C's kernel/network read surfaces or implementation choices.
+R3G-B pre-authorizes none of R3G-C's network/kernel read surfaces.
 
 ---
 
 ## 76. Authorization PR scope
 
-This authorization PR may add exactly one path:
+This authorization PR may change exactly one path:
 
 ```text
 docs/planning/KODAC_KDO_H4_R3G_B_IMMUTABLE_SOURCE_ROOTFS_PHYSICAL_LINEAGE_AUTHORIZATION_2026-08-16.md
@@ -1694,6 +1711,8 @@ Production/test/schema/workflow/dependency delta:
 ```
 
 The R3G-B evidence ledger must remain absent.
+
+Corrections to this same authorization document during review remain docs-only and require fresh exact-head review/CI before merge.
 
 ---
 
@@ -1715,7 +1734,7 @@ available external review = no unresolved actionable finding
 manual architecture/trust review = PASS
 ```
 
-No implementation branch may be treated as authorized until this docs-only authorization is merged to canonical `main`.
+No implementation branch may be treated as authorized until this document is merged to canonical `main`.
 
 ---
 
@@ -1724,7 +1743,9 @@ No implementation branch may be treated as authorized until this docs-only autho
 ```text
 SOURCE NAME/TAG IS NOT PHYSICAL IDENTITY.
 R3F MANIFEST E2 ALONE IS NOT PHYSICAL LINEAGE.
-BUNDLE PATH STRING ALONE IS NOT PHYSICAL LINEAGE.
+CONTAINERD CONTAINER SNAPSHOTKEY METADATA IS NOT THE MOBY V1 AUTHORITY.
+R3E BUNDLE/ROOTFS IS NOT ASSUMED TO BE THE MOBY ROOTFS MOUNT.
+ROOTFS PATH STRING ALONE IS NOT PHYSICAL LINEAGE.
 SNAPSHOT METADATA ALONE IS NOT PHYSICAL LINEAGE.
 
 R3G-B V1 REQUIRES THE CONJUNCTION:
@@ -1732,12 +1753,16 @@ R3G-B V1 REQUIRES THE CONJUNCTION:
 exact required manifest digest
 + ordered immutable DiffIDs
 + exact derived image ChainID
-+ exact containerd container snapshot key
-+ exact bounded snapshot ancestry
-+ exact stable live bundle/rootfs kernel mount
++ pinned Moby active-snapshot-key theorem (containerId)
++ exact bounded containerd snapshot ancestry
++ trusted DockerRootDir / overlayfs locator
++ stored OCI Root.Path equality
++ stored Moby bundle equality to exact R3E bundle
++ exact stable live kernel rootfs mount
 + exact stable R3E runtime subject
 + exact stable R3F container binding
-+ pinned read-only containerd client authority
++ pinned read-only ctr authority
++ stable Docker/containerd endpoints
 + durable acknowledged E3 source record
 
 OR IT FAILS CLOSED.
