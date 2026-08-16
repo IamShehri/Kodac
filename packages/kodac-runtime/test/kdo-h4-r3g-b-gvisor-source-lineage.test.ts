@@ -1,6 +1,29 @@
 import assert from "node:assert/strict"
+import { mkdtempSync, rmSync } from "node:fs"
+import { createServer, type Server } from "node:http"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import test from "node:test"
 
+import { createConfinementRequest } from "../src/trust/confinement.ts"
+import {
+  createSandboxExecutionRequirement,
+  type SandboxExecutionRequirement,
+} from "../src/trust/sandbox-backend-evidence.ts"
+import {
+  KDO_H4_R3A_NETWORK_MODE,
+  createSandboxEntrypoint,
+  createSandboxNetworkPolicy,
+  createSandboxOciImageSource,
+  createSandboxResourcePolicy,
+  createSandboxWorkloadRequest,
+} from "../src/trust/sandbox-workload.ts"
+import {
+  KDO_H4_R3F_DOCKER_API_VERSION,
+  KDO_H4_R3F_LIMITS,
+  createDockerControlPlaneBindingProvider,
+  observeDockerSourceControlPlaneForBindingResolver,
+} from "../src/trust/sandbox-observer-docker-control-plane.ts"
 import {
   KDO_H4_R3G_B_COMMIT_VERSION,
   KDO_H4_R3G_B_EVIDENCE_CLASS,
@@ -42,7 +65,108 @@ const DIFF_A = `sha256:${"1".repeat(64)}`
 const DIFF_B = `sha256:${"2".repeat(64)}`
 const DOCKER_ENDPOINT = "d".repeat(64)
 const ROOTFS = `/var/lib/docker/rootfs/overlayfs/${CONTAINER_ID}`
+const WORKSPACE_IDENTITY = "9".repeat(64)
+const EXECUTION_INTENT_IDENTITY = "8".repeat(64)
 const ID = (character: string) => character.repeat(64)
+
+function dockerRequirement(): SandboxExecutionRequirement {
+  const confinement = createConfinementRequest({
+    mode: "read-only",
+    workspaceIdentity: WORKSPACE_IDENTITY,
+    executionIntentIdentity: EXECUTION_INTENT_IDENTITY,
+    scope: { readPaths: ["src"], writePaths: [] },
+  })
+  const workload = createSandboxWorkloadRequest({
+    source: createSandboxOciImageSource({ repository: "ghcr.io/acme/r3g-b-fixture", digest: SOURCE_DIGEST }),
+    entrypoint: createSandboxEntrypoint({ executable: "/usr/bin/node", args: ["--version"] }),
+    resourcePolicy: createSandboxResourcePolicy({ cpuMillis: 1500, memoryBytes: 536_870_912, ttlMs: 60_000, maxOutputBytes: 1_048_576 }),
+    networkPolicy: createSandboxNetworkPolicy({ mode: KDO_H4_R3A_NETWORK_MODE }),
+    confinement,
+    credentialBindingIdentity: null,
+  })
+  return createSandboxExecutionRequirement({ workload, requiredSemanticRuntimeClass: "gvisor" })
+}
+
+type SourceDockerOptions = {
+  readonly systemInfoBody?: string | Buffer
+  readonly imageBody?: string | Buffer
+  readonly systemInfoStatus?: number
+  readonly imageStatus?: number
+}
+
+type SourceDocker = {
+  readonly socketPath: string
+  readonly requests: string[]
+  readonly server: Server
+  close(): Promise<void>
+}
+
+function defaultSystemInfo(): Record<string, unknown> {
+  return {
+    OSType: "linux",
+    Driver: "overlayfs",
+    DockerRootDir: "/var/lib/docker",
+    Containerd: {
+      Address: "/run/containerd/containerd.sock",
+      Namespaces: { Containers: "moby", Plugins: "plugins.moby" },
+    },
+  }
+}
+
+function defaultSourceImage(requirement: SandboxExecutionRequirement): Record<string, unknown> {
+  return {
+    Descriptor: { digest: requirement.workload.source.digest, mediaType: "application/vnd.oci.image.manifest.v1+json", size: 1234 },
+    RootFS: { Type: "layers", Layers: [DIFF_A, DIFF_A, DIFF_B] },
+  }
+}
+
+function expectedSourceImagePath(requirement: SandboxExecutionRequirement): string {
+  const reference = `${requirement.workload.source.repository}@${requirement.workload.source.digest}`
+  return `/v${KDO_H4_R3F_DOCKER_API_VERSION}/images/${reference}/json`
+}
+
+async function startSourceDocker(root: string, requirement: SandboxExecutionRequirement, options: SourceDockerOptions = {}): Promise<SourceDocker> {
+  const socketPath = join(root, "docker.sock")
+  const requests: string[] = []
+  const systemInfoPath = `/v${KDO_H4_R3F_DOCKER_API_VERSION}/info`
+  const imagePath = expectedSourceImagePath(requirement)
+  const systemInfoBody = options.systemInfoBody ?? JSON.stringify(defaultSystemInfo())
+  const imageBody = options.imageBody ?? JSON.stringify(defaultSourceImage(requirement))
+  const server = createServer((request, response) => {
+    const method = request.method ?? ""
+    const url = request.url ?? ""
+    requests.push(`${method} ${url}`)
+    if (method !== "GET") { response.statusCode = 405; response.end(); return }
+    if (url === systemInfoPath) {
+      response.statusCode = options.systemInfoStatus ?? 200
+      response.setHeader("content-type", "application/json")
+      response.end(systemInfoBody)
+      return
+    }
+    if (url === imagePath) {
+      response.statusCode = options.imageStatus ?? 200
+      response.setHeader("content-type", "application/json")
+      response.end(imageBody)
+      return
+    }
+    response.statusCode = 404
+    response.end()
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(socketPath, () => { server.off("error", reject); resolve() })
+  })
+  return {
+    socketPath,
+    requests,
+    server,
+    async close() {
+      server.closeAllConnections()
+      if (!server.listening) return
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+  }
+}
 
 function directory(path: string, inode: number) {
   return createGvisorSourcePathComponentIdentity({
@@ -272,4 +396,108 @@ test("H4-R3G-B runtime config is exact and rejects host authority injection", ()
   assert.equal(config.commitSourceLineageEvidence, commitSourceLineageEvidence)
   assert.throws(() => validateGvisorSourceLineageRuntimeConfig({ ...config, reader: () => "host" }), /exactly/)
   assert.throws(() => validateGvisorSourceLineageRuntimeConfig({ ...config, containerdAddress: "relative.sock" }), /canonical absolute/)
+})
+
+test("H4-R3G-B canonical R3F resolver exposes only bounded local Docker source surfaces", { skip: process.platform !== "linux" }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "kodac-r3g-b-source-"))
+  const requirement = dockerRequirement()
+  let fake: SourceDocker | undefined
+  try {
+    fake = await startSourceDocker(root, requirement)
+    const provider = createDockerControlPlaneBindingProvider({ socketPath: fake.socketPath, requirement })
+    const observed = await observeDockerSourceControlPlaneForBindingResolver(provider.resolveContainerBinding)
+    assert.equal(observed.socketEndpoint.endpointIdentity, provider.socketEndpoint.endpointIdentity)
+    assert.deepEqual(observed.systemInfo, {
+      socketEndpointIdentity: provider.socketEndpoint.endpointIdentity,
+      osType: "linux",
+      driver: "overlayfs",
+      dockerRootDir: "/var/lib/docker",
+      containerdAddress: "/run/containerd/containerd.sock",
+      containerdContainersNamespace: "moby",
+    })
+    assert.equal(observed.imageRootfs.sourceReference, `${requirement.workload.source.repository}@${requirement.workload.source.digest}`)
+    assert.equal(observed.imageRootfs.sourceDigest, requirement.workload.source.digest)
+    assert.equal(observed.imageRootfs.descriptorDigest, requirement.workload.source.digest)
+    assert.equal(observed.imageRootfs.rootfsType, "layers")
+    assert.deepEqual(observed.imageRootfs.diffIds, [DIFF_A, DIFF_A, DIFF_B])
+    assert.deepEqual(fake.requests, [
+      `GET /v1.48/info`,
+      `GET ${expectedSourceImagePath(requirement)}`,
+    ])
+
+    const requestCount = fake.requests.length
+    const wrapped = (...args: any[]) => (provider.resolveContainerBinding as any)(...args)
+    await assert.rejects(observeDockerSourceControlPlaneForBindingResolver(wrapped), /canonical R3F Docker binding resolver/)
+    assert.equal(fake.requests.length, requestCount)
+  } finally {
+    await fake?.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("H4-R3G-B Docker source observation rejects unsupported storage and image-rootfs shapes", { skip: process.platform !== "linux" }, async () => {
+  const requirement = dockerRequirement()
+  const cases: Array<{ name: string; system?: any; image?: any; pattern: RegExp }> = [
+    { name: "os", system: { ...defaultSystemInfo(), OSType: "windows" }, pattern: /OSType must be linux/ },
+    { name: "driver", system: { ...defaultSystemInfo(), Driver: "btrfs" }, pattern: /Driver must be overlayfs/ },
+    { name: "root", system: { ...defaultSystemInfo(), DockerRootDir: "relative" }, pattern: /DockerRootDir must be a canonical absolute POSIX path/ },
+    { name: "address", system: { ...defaultSystemInfo(), Containerd: { Address: "relative.sock", Namespaces: { Containers: "moby" } } }, pattern: /Containerd.Address must be a canonical absolute POSIX path/ },
+    { name: "namespace", system: { ...defaultSystemInfo(), Containerd: { Address: "/run/containerd/containerd.sock", Namespaces: { Containers: "default" } } }, pattern: /namespace must be moby/ },
+    { name: "descriptor", image: { ...defaultSourceImage(requirement), Descriptor: { digest: `sha256:${"b".repeat(64)}` } }, pattern: /descriptor digest/ },
+    { name: "rootfs-type", image: { ...defaultSourceImage(requirement), RootFS: { Type: "rootfs", Layers: [DIFF_A] } }, pattern: /RootFS.Type must be layers/ },
+    { name: "empty", image: { ...defaultSourceImage(requirement), RootFS: { Type: "layers", Layers: [] } }, pattern: /1\.\.512/ },
+    { name: "uppercase", image: { ...defaultSourceImage(requirement), RootFS: { Type: "layers", Layers: [`sha256:${"A".repeat(64)}`] } }, pattern: /lowercase/ },
+    { name: "too-many", image: { ...defaultSourceImage(requirement), RootFS: { Type: "layers", Layers: Array.from({ length: KDO_H4_R3F_LIMITS.maxDiffIds + 1 }, () => DIFF_A) } }, pattern: /1\.\.512/ },
+  ]
+
+  for (const item of cases) {
+    const root = mkdtempSync(join(tmpdir(), `kodac-r3g-b-source-${item.name}-`))
+    let fake: SourceDocker | undefined
+    try {
+      fake = await startSourceDocker(root, requirement, {
+        systemInfoBody: JSON.stringify(item.system ?? defaultSystemInfo()),
+        imageBody: JSON.stringify(item.image ?? defaultSourceImage(requirement)),
+      })
+      const provider = createDockerControlPlaneBindingProvider({ socketPath: fake.socketPath, requirement })
+      await assert.rejects(observeDockerSourceControlPlaneForBindingResolver(provider.resolveContainerBinding), item.pattern, item.name)
+    } finally {
+      await fake?.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test("H4-R3G-B missing local source image fails closed without remote fallback", { skip: process.platform !== "linux" }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "kodac-r3g-b-source-missing-"))
+  const requirement = dockerRequirement()
+  let fake: SourceDocker | undefined
+  try {
+    fake = await startSourceDocker(root, requirement, { imageStatus: 404 })
+    const provider = createDockerControlPlaneBindingProvider({ socketPath: fake.socketPath, requirement })
+    await assert.rejects(observeDockerSourceControlPlaneForBindingResolver(provider.resolveContainerBinding), /HTTP 404/)
+    assert.deepEqual(fake.requests, [
+      `GET /v1.48/info`,
+      `GET ${expectedSourceImagePath(requirement)}`,
+    ])
+  } finally {
+    await fake?.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("H4-R3G-B pre-aborted Docker source observation performs no Docker I/O", { skip: process.platform !== "linux" }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "kodac-r3g-b-source-abort-"))
+  const requirement = dockerRequirement()
+  let fake: SourceDocker | undefined
+  try {
+    fake = await startSourceDocker(root, requirement)
+    const provider = createDockerControlPlaneBindingProvider({ socketPath: fake.socketPath, requirement })
+    const controller = new AbortController()
+    controller.abort()
+    await assert.rejects(observeDockerSourceControlPlaneForBindingResolver(provider.resolveContainerBinding, { signal: controller.signal }), /aborted/)
+    assert.deepEqual(fake.requests, [])
+  } finally {
+    await fake?.close()
+    rmSync(root, { recursive: true, force: true })
+  }
 })
