@@ -1139,3 +1139,45 @@ export function parseGvisorSourceMountInfo(
   if (match === undefined) throw new TypeError("exact rootfs mountinfo target is missing")
   return match
 }
+
+export interface GvisorSourceCtrCommand {
+  readonly argv: readonly string[]
+  readonly maxStdoutBytes: number
+  readonly label: string
+}
+
+export function requireGvisorSourceCtrExecutablePolicy(value: unknown): GvisorSourceCtrArtifactIdentity {
+  const artifact = validateGvisorSourceCtrArtifactIdentity(value)
+  const bits = modeBits(artifact.mode, "ctr mode")
+  if ((bits & 0o111n) === 0n) throw new TypeError("ctr artifact must have at least one executable permission bit")
+  return artifact
+}
+
+export function materializeGvisorSourceCtrContainerInfoCommand(
+  configValue: unknown,
+  containerIdValue: unknown,
+): GvisorSourceCtrCommand {
+  const config = validateGvisorSourceLineageRuntimeConfig(configValue)
+  const exactContainerId = containerId(containerIdValue)
+  const argv = Object.freeze([
+    "--address", config.containerdAddress,
+    "--namespace", KDO_H4_R3G_B_CONTAINERD_NAMESPACE,
+    "containers", "info", exactContainerId,
+  ])
+  return Object.freeze({ argv, maxStdoutBytes: KDO_H4_R3G_B_LIMITS.maxCtrContainerInfoBytes, label: "R3G-B ctr containers info" })
+}
+
+export function materializeGvisorSourceCtrSnapshotInfoCommand(
+  configValue: unknown,
+  snapshotNameValue: unknown,
+): GvisorSourceCtrCommand {
+  const config = validateGvisorSourceLineageRuntimeConfig(configValue)
+  const snapshotName = nonEmptyBoundedString(snapshotNameValue, KDO_H4_R3G_B_LIMITS.maxStringBytes, "snapshot name")
+  const argv = Object.freeze([
+    "--address", config.containerdAddress,
+    "--namespace", KDO_H4_R3G_B_CONTAINERD_NAMESPACE,
+    "snapshots", "--snapshotter", KDO_H4_R3G_B_SNAPSHOTTER,
+    "info", snapshotName,
+  ])
+  return Object.freeze({ argv, maxStdoutBytes: KDO_H4_R3G_B_LIMITS.maxCtrSnapshotInfoBytes, label: "R3G-B ctr snapshots info" })
+}
