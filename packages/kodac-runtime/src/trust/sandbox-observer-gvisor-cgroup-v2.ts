@@ -340,7 +340,7 @@ function parseMount(value: string): string {
   const matches: string[] = []
   for (const line of text.split("\n").filter(Boolean)) {
     const fields = line.split(" "); const separator = fields.indexOf("-")
-    if (separator < 6 || separator + 3 > fields.length || fields[separator + 1] !== "cgroup2") continue
+    if (separator < 6 || separator + 3 >= fields.length || fields[separator + 1] !== "cgroup2") continue
     matches.push(JSON.stringify({ root: fields[3], mountpoint: fields[4], source: fields[separator + 2], superOptions: fields.slice(separator + 3).join(" ") }))
   }
   if (matches.length !== 1) fail("observer must see exactly one cgroup2 mount")
