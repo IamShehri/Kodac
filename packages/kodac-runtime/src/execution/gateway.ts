@@ -707,8 +707,11 @@ export class ExecutionGateway {
     const failureOnly = <T>(promise: Promise<T>): Promise<never> => promise.then(() => new Promise<never>(() => {}), (error) => Promise.reject(error))
     const waitForCtrClose = (child: ChildProcess): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> => new Promise((resolvePromise) => child.once("close", (exitCode, signal) => resolvePromise({ exitCode, signal })))
     const waitForCloseWithin = async (closePromise: Promise<unknown>, milliseconds: number): Promise<boolean> => new Promise<boolean>((resolvePromise) => {
+      const remainingNs = deadlineNs - process.hrtime.bigint()
+      const remainingGlobalMs = remainingNs <= 0n ? 0 : Number(remainingNs / 1_000_000n)
+      const effectiveMilliseconds = Math.min(milliseconds, remainingGlobalMs)
       let settled = false
-      const timer = setTimeout(() => { if (settled) return; settled = true; resolvePromise(false) }, milliseconds)
+      const timer = setTimeout(() => { if (settled) return; settled = true; resolvePromise(false) }, effectiveMilliseconds)
       closePromise.then(() => { if (settled) return; settled = true; clearTimeout(timer); resolvePromise(true) }, () => { if (settled) return; settled = true; clearTimeout(timer); resolvePromise(true) })
     })
     const terminateCtr = async (child: ChildProcess, closePromise: Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>): Promise<void> => {
