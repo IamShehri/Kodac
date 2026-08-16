@@ -892,3 +892,241 @@ test("H4-R3G-B trusted store exact same-record put is idempotent and conflicting
   assert.equal(stored.size, 1)
   assert.equal(stored.get(validated.recordIdentity), canonicalBytes)
 })
+
+type R3GBCtrLifecycleMode = "term-exit" | "term-ignore" | "late-output"
+
+async function runR3GBCtrLifecycleFailure(t: any, mode: R3GBCtrLifecycleMode, cancelAfterStart = false) {
+  const { spawn, spawnSync } = await import("node:child_process")
+  const { createHash } = await import("node:crypto")
+  const fs = await import("node:fs")
+  const { fileURLToPath } = await import("node:url")
+  const { NodeWorkspaceFileSystem } = await import("../src/edit/filesystem.ts")
+  const { ExecutionGateway } = await import("../src/execution/gateway.ts")
+  const { fixedPolicy } = await import("../src/trust/policy.ts")
+  const r3e = await import("../src/trust/sandbox-observer-gvisor-runtime.ts")
+  const r3f = await import("../src/trust/sandbox-observer-docker-control-plane.ts")
+  const sourceContract = await import("../src/trust/sandbox-observer-gvisor-source-lineage.ts")
+
+  const failOrSkip = (message: string): null => {
+    if (process.env.GITHUB_ACTIONS === "true") assert.fail(message)
+    t.skip(message)
+    return null
+  }
+  const compiler = spawnSync("cc", ["--version"], { encoding: "utf8", shell: false })
+  if (compiler.status !== 0) return failOrSkip(`C compiler unavailable: ${String(compiler.error ?? compiler.stderr)}`)
+  const sudoProbe = spawnSync("sudo", ["-n", "true"], { encoding: "utf8", shell: false })
+  if (sudoProbe.status !== 0) return failOrSkip(`passwordless sudo unavailable: ${String(sudoProbe.error ?? sudoProbe.stderr)}`)
+  if (typeof process.getuid !== "function" || typeof process.getgid !== "function") return failOrSkip("numeric uid/gid APIs are unavailable")
+
+  const scratch = mkdtempSync(join(tmpdir(), `kodac-r3g-b-ctr-${mode}-`))
+  const token = createHash("sha256").update(`${process.pid}:${Date.now()}:${scratch}:${mode}`, "utf8").digest("hex").slice(0, 16)
+  const secureStorageRoot = `/var/lib/kodac-r3g-b-ctr-${token}`
+  const dockerRootDir = `${secureStorageRoot}/docker`
+  const rootfsMountPath = `${dockerRootDir}/rootfs/overlayfs/${CONTAINER_ID}`
+  const ctrParent = `${secureStorageRoot}/bin`
+  const ctrPath = `${ctrParent}/ctr`
+  const secureRunRoot = `/run/kodac-r3g-b-ctr-${token}`
+  const containerdAddress = `${secureRunRoot}/containerd.sock`
+  const runtimeRoot = join(scratch, "runsc-root")
+  const workspace = join(scratch, "workspace")
+  const dockerSocketPath = join(scratch, "docker.sock")
+  const sandboxPidFile = join(runtimeRoot, "sandbox.pid")
+  const ctrPidFile = join(scratch, "ctr.pid")
+  const termMarker = join(scratch, "ctr.term")
+  const lateMarker = join(scratch, "ctr.late")
+  const uid = process.getuid()
+  const gid = process.getgid()
+  let sandbox: ReturnType<typeof spawn> | undefined
+  let dockerServer: Server | undefined
+  let containerdServer: Server | undefined
+  let commitCount = 0
+
+  const run = (executable: string, args: readonly string[]) => {
+    const result = spawnSync(executable, [...args], { encoding: "utf8", shell: false })
+    assert.equal(result.status, 0, `${executable} ${args.join(" ")} failed: ${String(result.error ?? result.stderr)}`)
+    return result
+  }
+  const sudo = (...args: string[]) => run("sudo", ["-n", ...args])
+  const cString = (value: string) => value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n").replaceAll("\r", "\\r")
+  const compileC = (name: string, text: string) => {
+    const sourcePath = join(scratch, `${name}.c`)
+    const binaryPath = join(scratch, name)
+    fs.writeFileSync(sourcePath, text, "utf8")
+    run("cc", ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", sourcePath, "-o", binaryPath])
+    return binaryPath
+  }
+  const waitForFile = async (path: string) => {
+    for (let index = 0; index < 400; index += 1) {
+      if (fs.existsSync(path)) return
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    }
+    throw new Error(`fixture file did not appear: ${path}`)
+  }
+  const closeServer = async (server: Server | undefined) => {
+    if (server === undefined) return
+    server.closeAllConnections()
+    if (!server.listening) return
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+  const reapSandbox = async () => {
+    if (sandbox === undefined) return
+    if (sandbox.exitCode === null && sandbox.signalCode === null) sandbox.kill("SIGKILL")
+    if (sandbox.exitCode === null && sandbox.signalCode === null) await new Promise<void>((resolve) => sandbox?.once("exit", () => resolve()))
+  }
+  const processAlive = (pid: number) => {
+    try { process.kill(pid, 0); return true }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false
+      throw error
+    }
+  }
+
+  try {
+    fs.mkdirSync(runtimeRoot)
+    fs.mkdirSync(workspace)
+    const fakeRunsc = compileC("fake-runsc-r3g-b-lifecycle", `#define _GNU_SOURCE\n#include <signal.h>\n#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\nstatic const char *PIDFILE="${cString(sandboxPidFile)}";\nstatic int write_pid(void){FILE*f=fopen(PIDFILE,"w");if(!f)return 125;if(fprintf(f,"%ld\\n",(long)getpid())<0){fclose(f);return 125;}return fclose(f)==0?0:125;}\nstatic long read_pid(void){FILE*f=fopen(PIDFILE,"r");long p=0;if(!f)return 0;if(fscanf(f,"%ld",&p)!=1)p=0;fclose(f);return p;}\nint main(int argc,char**argv){if(argc==2&&strcmp(argv[1],"sandbox")==0){if(write_pid()!=0)return 125;for(;;)pause();}if(argc>=5&&strcmp(argv[1],"--root")==0){if(strcmp(argv[3],"state")==0&&argc==5){long p=read_pid();if(p<=0)return 125;printf("{\\\"ociVersion\\\":\\\"1.2.0\\\",\\\"id\\\":\\\"%s\\\",\\\"status\\\":\\\"running\\\",\\\"pid\\\":%ld,\\\"bundle\\\":\\\"/run/kodac/%s\\\"}\\n",argv[4],p,argv[4]);return 0;}if(strcmp(argv[3],"events")==0&&argc==6&&strcmp(argv[4],"--stats")==0){printf("{\\\"type\\\":\\\"stats\\\",\\\"id\\\":\\\"%s\\\",\\\"data\\\":{\\\"cpu\\\":{\\\"usage\\\":1}}}\\n",argv[5]);return 0;}}return 125;}\n`)
+    const nativeHelper = fileURLToPath(new URL("../native/gvisor-proc-observe.c", import.meta.url))
+    const helperPath = join(scratch, "kodac-gvisor-proc-observe")
+    run("cc", ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", nativeHelper, "-o", helperPath])
+    sandbox = spawn(fakeRunsc, ["sandbox"], { stdio: "ignore", shell: false })
+    await waitForFile(sandboxPidFile)
+    const sandboxPid = Number(fs.readFileSync(sandboxPidFile, "utf8").trim())
+    assert.equal(Number.isSafeInteger(sandboxPid) && sandboxPid > 0, true)
+
+    sudo("mkdir", "-p", rootfsMountPath, ctrParent, secureRunRoot)
+    sudo("chown", `${uid}:${gid}`, secureRunRoot)
+    sudo("chmod", "0700", secureRunRoot)
+    containerdServer = createServer((_request, response) => { response.statusCode = 404; response.end() })
+    await new Promise<void>((resolve, reject) => {
+      containerdServer?.once("error", reject)
+      containerdServer?.listen(containerdAddress, () => { containerdServer?.off("error", reject); resolve() })
+    })
+    sudo("chown", "root:root", secureRunRoot)
+    sudo("chmod", "0755", secureRunRoot)
+
+    const latePrefix = `{"ID":"${CONTAINER_ID}","Spec":{"root":{"path":"`
+    const lateSuffix = `${rootfsMountPath}"}}}\n`
+    const handlerBody = mode === "term-ignore"
+      ? "mark(TERMFILE);"
+      : mode === "late-output"
+        ? "mark(TERMFILE);mark(LATEFILE);(void)write(STDOUT_FILENO,LATE_SUFFIX,sizeof(LATE_SUFFIX)-1);_exit(0);"
+        : "mark(TERMFILE);_exit(0);"
+    const beforePause = mode === "late-output" ? "(void)write(STDOUT_FILENO,LATE_PREFIX,sizeof(LATE_PREFIX)-1);" : ""
+    const compiledCtr = compileC(`fake-ctr-r3g-b-${mode}`, `#define _GNU_SOURCE\n#include <fcntl.h>\n#include <signal.h>\n#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\nstatic const char *ADDRESS="${cString(containerdAddress)}",*CID="${CONTAINER_ID}",*PIDFILE="${cString(ctrPidFile)}",*TERMFILE="${cString(termMarker)}",*LATEFILE="${cString(lateMarker)}";\nstatic const char LATE_PREFIX[]="${cString(latePrefix)}";\nstatic const char LATE_SUFFIX[]="${cString(lateSuffix)}";\nstatic void mark(const char*path){int fd=open(path,O_WRONLY|O_CREAT|O_TRUNC,0600);if(fd>=0){(void)write(fd,"1",1);(void)close(fd);}}\nstatic void on_term(int sig){(void)sig;${handlerBody}}\nint main(int argc,char**argv){(void)LATEFILE;(void)LATE_PREFIX;(void)LATE_SUFFIX;if(argc==8&&strcmp(argv[1],"--address")==0&&strcmp(argv[2],ADDRESS)==0&&strcmp(argv[3],"--namespace")==0&&strcmp(argv[4],"moby")==0&&strcmp(argv[5],"containers")==0&&strcmp(argv[6],"info")==0&&strcmp(argv[7],CID)==0){signal(SIGPIPE,SIG_IGN);signal(SIGTERM,on_term);char buf[64];int n=snprintf(buf,sizeof(buf),"%ld\\n",(long)getpid());int fd=open(PIDFILE,O_WRONLY|O_CREAT|O_TRUNC,0600);if(fd<0||n<=0||write(fd,buf,(size_t)n)!=(ssize_t)n)return 125;(void)close(fd);${beforePause}for(;;)pause();}return 125;}\n`)
+    sudo("install", "-o", "root", "-g", "root", "-m", "0755", compiledCtr, ctrPath)
+
+    const requirement = dockerRequirement()
+    const filters = JSON.stringify({
+      label: [
+        `${r3f.KDO_H4_R3F_LABELS.bindingVersion}=${r3f.KDO_H4_R3F_BINDING_VERSION}`,
+        `${r3f.KDO_H4_R3F_LABELS.requirementIdentity}=${requirement.requirementIdentity}`,
+        `${r3f.KDO_H4_R3F_LABELS.workloadIdentity}=${requirement.workload.workloadIdentity}`,
+      ],
+      status: ["running"],
+    })
+    const listPath = `/v${r3f.KDO_H4_R3F_DOCKER_API_VERSION}/containers/json?all=1&filters=${encodeURIComponent(filters)}`
+    const inspectPath = `/v${r3f.KDO_H4_R3F_DOCKER_API_VERSION}/containers/${CONTAINER_ID}/json?size=0`
+    const sourceImagePath = expectedSourceImagePath(requirement)
+    const inspect = {
+      Id: CONTAINER_ID,
+      Path: requirement.workload.entrypoint.executable,
+      Args: [...requirement.workload.entrypoint.args],
+      State: { Running: true, Paused: false, Restarting: false, Dead: false, Pid: sandboxPid },
+      RestartCount: 0,
+      Image: requirement.workload.source.digest,
+      HostConfig: {
+        Runtime: "runsc", NetworkMode: "none", NanoCpus: requirement.workload.resourcePolicy.cpuMillis * 1_000_000,
+        Memory: requirement.workload.resourcePolicy.memoryBytes, MemorySwap: requirement.workload.resourcePolicy.memoryBytes,
+        Privileged: false, RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
+      },
+      Config: { Image: requirement.workload.source.digest, Labels: {
+        [r3f.KDO_H4_R3F_LABELS.bindingVersion]: r3f.KDO_H4_R3F_BINDING_VERSION,
+        [r3f.KDO_H4_R3F_LABELS.requirementIdentity]: requirement.requirementIdentity,
+        [r3f.KDO_H4_R3F_LABELS.workloadIdentity]: requirement.workload.workloadIdentity,
+      } },
+      NetworkSettings: { Networks: {} },
+      ImageManifestDescriptor: { digest: requirement.workload.source.digest, mediaType: "application/vnd.oci.image.manifest.v1+json", size: 1234 },
+    }
+    dockerServer = createServer((request, response) => {
+      const method = request.method ?? ""; const url = request.url ?? ""
+      if (method !== "GET") { response.statusCode = 405; response.end(); return }
+      if (url === listPath) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify([{ Id: CONTAINER_ID, State: "running" }])); return }
+      if (url === inspectPath) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify(inspect)); return }
+      if (url === `/v${r3f.KDO_H4_R3F_DOCKER_API_VERSION}/info`) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ OSType: "linux", Driver: "overlayfs", DockerRootDir: dockerRootDir, Containerd: { Address: containerdAddress, Namespaces: { Containers: "moby", Plugins: "plugins.moby" } } })); return }
+      if (url === sourceImagePath) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ Descriptor: { digest: requirement.workload.source.digest, mediaType: "application/vnd.oci.image.manifest.v1+json", size: 1234 }, RootFS: { Type: "layers", Layers: [DIFF_A, DIFF_B] } })); return }
+      response.statusCode = 404; response.end()
+    })
+    await new Promise<void>((resolve, reject) => { dockerServer?.once("error", reject); dockerServer?.listen(dockerSocketPath, () => { dockerServer?.off("error", reject); resolve() }) })
+
+    const provider = r3f.createDockerControlPlaneBindingProvider({ socketPath: dockerSocketPath, requirement })
+    const sha256File = (path: string) => createHash("sha256").update(fs.readFileSync(path)).digest("hex")
+    const r3eRuntime = r3e.validateGvisorObserverRuntimeConfig({
+      version: r3e.KDO_H4_R3E_RUNTIME_CONFIG_VERSION, runscPath: fakeRunsc, expectedRunscSha256: sha256File(fakeRunsc),
+      observerHelperPath: helperPath, expectedObserverHelperSha256: sha256File(helperPath), runtimeRoot,
+      resolveContainerBinding: provider.resolveContainerBinding,
+      commitLineageEvidence(record) { return r3e.createGvisorRuntimeLineageCommit(record) },
+    })
+    const endpointStat = fs.lstatSync(containerdAddress, { bigint: true })
+    const sourceRuntime = sourceContract.validateGvisorSourceLineageRuntimeConfig({
+      version: sourceContract.KDO_H4_R3G_B_RUNTIME_CONFIG_VERSION, ctrPath, expectedCtrSha256: sha256File(ctrPath), containerdAddress,
+      expectedContainerdSocketUid: endpointStat.uid.toString(), expectedContainerdSocketGid: endpointStat.gid.toString(), expectedContainerdSocketMode: endpointStat.mode.toString(),
+      commitSourceLineageEvidence(record) { commitCount += 1; return sourceContract.createGvisorSourceLineageCommit(record) },
+    })
+    const gateway = new ExecutionGateway(new NodeWorkspaceFileSystem(workspace), fixedPolicy("allow"), undefined, undefined, r3eRuntime, undefined, sourceRuntime)
+    const controller = new AbortController()
+    const operation = gateway.observeGvisorSourceLineage(requirement, undefined, { signal: controller.signal })
+    await waitForFile(ctrPidFile)
+    if (cancelAfterStart) controller.abort()
+    let failure: unknown
+    try { await operation; assert.fail("hostile ctr lifecycle observation unexpectedly succeeded") }
+    catch (error) { failure = error }
+    const ctrPid = Number(fs.readFileSync(ctrPidFile, "utf8").trim())
+    assert.equal(Number.isSafeInteger(ctrPid) && ctrPid > 0, true)
+    assert.equal(processAlive(ctrPid), false, "ctr child must be gone before the gateway failure returns")
+    return {
+      failureMessage: failure instanceof Error ? failure.message : String(failure),
+      termObserved: fs.existsSync(termMarker),
+      lateObserved: fs.existsSync(lateMarker),
+      commitCount,
+    }
+  } finally {
+    await closeServer(dockerServer).catch(() => {})
+    await closeServer(containerdServer).catch(() => {})
+    await reapSandbox().catch(() => {})
+    spawnSync("sudo", ["-n", "rm", "-rf", secureStorageRoot, secureRunRoot], { stdio: "ignore", shell: false })
+    rmSync(scratch, { recursive: true, force: true })
+  }
+}
+
+test("H4-R3G-B ctr timeout sends TERM and returns only after the child is reaped", { skip: process.platform !== "linux" }, async (t) => {
+  const result = await runR3GBCtrLifecycleFailure(t, "term-exit")
+  if (result === null) return
+  assert.match(result.failureMessage, /timed out/)
+  assert.equal(result.termObserved, true)
+  assert.equal(result.commitCount, 0)
+})
+
+test("H4-R3G-B ctr that survives TERM is killed and reaped before failure returns", { skip: process.platform !== "linux" }, async (t) => {
+  const result = await runR3GBCtrLifecycleFailure(t, "term-ignore")
+  if (result === null) return
+  assert.match(result.failureMessage, /timed out/)
+  assert.equal(result.termObserved, true)
+  assert.equal(result.commitCount, 0)
+})
+
+test("H4-R3G-B cancellation during ctr reaps the child before returning failure", { skip: process.platform !== "linux" }, async (t) => {
+  const result = await runR3GBCtrLifecycleFailure(t, "term-exit", true)
+  if (result === null) return
+  assert.match(result.failureMessage, /aborted/)
+  assert.equal(result.termObserved, true)
+  assert.equal(result.commitCount, 0)
+})
+
+test("H4-R3G-B late partial ctr stdout after timeout is discarded and cannot become evidence", { skip: process.platform !== "linux" }, async (t) => {
+  const result = await runR3GBCtrLifecycleFailure(t, "late-output")
+  if (result === null) return
+  assert.match(result.failureMessage, /timed out/)
+  assert.equal(result.termObserved, true)
+  assert.equal(result.lateObserved, true)
+  assert.equal(result.commitCount, 0)
+})
