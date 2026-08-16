@@ -846,3 +846,296 @@ export function validateGvisorSourceLineageRuntimeConfig(value: unknown): Gvisor
     commitSourceLineageEvidence: record.commitSourceLineageEvidence as GvisorSourceLineageRuntimeConfig["commitSourceLineageEvidence"],
   })
 }
+
+export interface GvisorSourceRootfsPaths {
+  readonly rootfsParentPath: string
+  readonly rootfsMountPath: string
+}
+
+export interface GvisorSourceMountInfoObservation {
+  readonly rootfsMountPath: string
+  readonly mountId: string
+  readonly parentMountId: string
+  readonly majorMinor: string
+  readonly mountRoot: string
+  readonly mountOptions: string
+  readonly filesystemType: "overlay"
+  readonly mountSource: string
+  readonly superOptions: string
+}
+
+function decodeBoundedUtf8(value: string | Buffer, maximum: number, label: string): string {
+  if (Buffer.isBuffer(value)) {
+    if (value.byteLength > maximum) throw new TypeError(`${label} exceeds byte bound`)
+    const text = value.toString("utf8")
+    if (!Buffer.from(text, "utf8").equals(value)) throw new TypeError(`${label} is not valid UTF-8`)
+    if (text.includes("\0")) throw new TypeError(`${label} must not contain NUL`)
+    return text
+  }
+  if (typeof value !== "string") throw new TypeError(`${label} must be UTF-8 text or Buffer`)
+  if (byteLength(value) > maximum) throw new TypeError(`${label} exceeds byte bound`)
+  const encoded = Buffer.from(value, "utf8")
+  if (encoded.toString("utf8") !== value) throw new TypeError(`${label} is not valid UTF-8`)
+  if (value.includes("\0")) throw new TypeError(`${label} must not contain NUL`)
+  return value
+}
+
+function validateJsonSyntaxNoDuplicateKeys(text: string, label: string): void {
+  let index = 0
+  const length = text.length
+  const isWhitespace = (char: string) => char === " " || char === "\t" || char === "\r" || char === "\n"
+  const skipWhitespace = () => { while (index < length && isWhitespace(text[index] ?? "")) index += 1 }
+  const numberPattern = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y
+
+  const parseStringToken = (): string => {
+    if (text[index] !== '"') throw new TypeError(`${label} contains invalid JSON string syntax`)
+    const start = index
+    index += 1
+    while (index < length) {
+      const char = text[index] ?? ""
+      if (char === '"') {
+        index += 1
+        try { return JSON.parse(text.slice(start, index)) as string }
+        catch { throw new TypeError(`${label} contains invalid JSON string syntax`) }
+      }
+      if (char === "\\") {
+        index += 1
+        if (index >= length) throw new TypeError(`${label} contains an unterminated JSON escape`)
+        if (text[index] === "u") {
+          if (!/^[0-9a-fA-F]{4}$/.test(text.slice(index + 1, index + 5))) throw new TypeError(`${label} contains an invalid JSON unicode escape`)
+          index += 4
+        } else if (!'"\\/bfnrt'.includes(text[index] ?? "")) {
+          throw new TypeError(`${label} contains an invalid JSON escape`)
+        }
+      } else if (char.charCodeAt(0) < 0x20) {
+        throw new TypeError(`${label} contains an unescaped JSON control character`)
+      }
+      index += 1
+    }
+    throw new TypeError(`${label} contains an unterminated JSON string`)
+  }
+
+  const parseValue = (depth: number): void => {
+    if (depth > KDO_H4_R3G_B_LIMITS.maxJsonDepth) throw new TypeError(`${label} exceeds JSON nesting depth`)
+    skipWhitespace()
+    const char = text[index]
+    if (char === "{") {
+      index += 1
+      skipWhitespace()
+      const keys = new Set<string>()
+      if (text[index] === "}") { index += 1; return }
+      for (;;) {
+        skipWhitespace()
+        const key = parseStringToken()
+        if (keys.has(key)) throw new TypeError(`${label} contains duplicate JSON object key: ${key}`)
+        keys.add(key)
+        skipWhitespace()
+        if (text[index] !== ":") throw new TypeError(`${label} contains invalid JSON object syntax`)
+        index += 1
+        parseValue(depth + 1)
+        skipWhitespace()
+        if (text[index] === "}") { index += 1; return }
+        if (text[index] !== ",") throw new TypeError(`${label} contains invalid JSON object syntax`)
+        index += 1
+      }
+    }
+    if (char === "[") {
+      index += 1
+      skipWhitespace()
+      if (text[index] === "]") { index += 1; return }
+      for (;;) {
+        parseValue(depth + 1)
+        skipWhitespace()
+        if (text[index] === "]") { index += 1; return }
+        if (text[index] !== ",") throw new TypeError(`${label} contains invalid JSON array syntax`)
+        index += 1
+      }
+    }
+    if (char === '"') { parseStringToken(); return }
+    numberPattern.lastIndex = index
+    const number = numberPattern.exec(text)
+    if (number !== null) { index = numberPattern.lastIndex; return }
+    for (const literal of ["true", "false", "null"] as const) {
+      if (text.startsWith(literal, index)) { index += literal.length; return }
+    }
+    throw new TypeError(`${label} contains invalid JSON value syntax`)
+  }
+
+  parseValue(0)
+  skipWhitespace()
+  if (index !== length) throw new TypeError(`${label} contains trailing JSON content`)
+}
+
+function validateBoundedJson(value: unknown, label: string): void {
+  let nodes = 0
+  const visit = (current: unknown, depth: number): void => {
+    nodes += 1
+    if (nodes > KDO_H4_R3G_B_LIMITS.maxJsonNodes) throw new TypeError(`${label} exceeds JSON node bound`)
+    if (depth > KDO_H4_R3G_B_LIMITS.maxJsonDepth) throw new TypeError(`${label} exceeds JSON depth bound`)
+    if (current === null || typeof current === "boolean") return
+    if (typeof current === "number") {
+      if (!Number.isFinite(current)) throw new TypeError(`${label} contains a non-finite number`)
+      return
+    }
+    if (typeof current === "string") {
+      if (byteLength(current) > KDO_H4_R3G_B_LIMITS.maxStringBytes) throw new TypeError(`${label} contains an oversized string`)
+      return
+    }
+    if (Array.isArray(current)) {
+      if (current.length > KDO_H4_R3G_B_LIMITS.maxArrayItems) throw new TypeError(`${label} contains an oversized array`)
+      for (const item of current) visit(item, depth + 1)
+      return
+    }
+    const record = asPlainRecord(current, label)
+    const keys = Object.keys(record)
+    if (keys.length > KDO_H4_R3G_B_LIMITS.maxObjectKeys) throw new TypeError(`${label} contains too many object keys`)
+    for (const key of keys) {
+      if (byteLength(key) > KDO_H4_R3G_B_LIMITS.maxStringBytes) throw new TypeError(`${label} contains an oversized object key`)
+      visit(record[key], depth + 1)
+    }
+  }
+  visit(value, 0)
+}
+
+function parseBoundedJson(value: string | Buffer, maximum: number, label: string): unknown {
+  const text = decodeBoundedUtf8(value, maximum, label)
+  validateJsonSyntaxNoDuplicateKeys(text, label)
+  let parsed: unknown
+  try { parsed = JSON.parse(text) } catch { throw new TypeError(`${label} is not valid JSON`) }
+  validateBoundedJson(parsed, label)
+  return parsed
+}
+
+function requiredJsonRecord(record: Record<string, unknown>, key: string, label: string): Record<string, unknown> {
+  return asPlainRecord(record[key], `${label}.${key}`)
+}
+
+function requiredJsonString(record: Record<string, unknown>, key: string, label: string): string {
+  const value = record[key]
+  if (typeof value !== "string") throw new TypeError(`${label}.${key} must be a string`)
+  return nonEmptyBoundedString(value, KDO_H4_R3G_B_LIMITS.maxStringBytes, `${label}.${key}`)
+}
+
+export function deriveGvisorSourceRootfsPaths(dockerRootDirValue: unknown, containerIdValue: unknown): GvisorSourceRootfsPaths {
+  const dockerRootDir = canonicalPath(dockerRootDirValue, "DockerRootDir")
+  const exactContainerId = containerId(containerIdValue)
+  const rootfsParentPath = canonicalPath(posix.join(dockerRootDir, "rootfs", KDO_H4_R3G_B_SNAPSHOTTER), "rootfsParentPath")
+  const rootfsMountPath = canonicalPath(posix.join(rootfsParentPath, exactContainerId), "rootfsMountPath")
+  return Object.freeze({ rootfsParentPath, rootfsMountPath })
+}
+
+export function deriveGvisorSourcePathAuthorityPaths(terminalPathValue: unknown): readonly string[] {
+  const terminalPath = canonicalPath(terminalPathValue, "path authority terminal")
+  if (terminalPath === "/") return Object.freeze(["/"])
+  const segments = terminalPath.slice(1).split("/")
+  const paths = ["/"]
+  let current = ""
+  for (const segment of segments) {
+    current = `${current}/${segment}`
+    paths.push(current)
+  }
+  return Object.freeze(paths)
+}
+
+export function parseGvisorSourceCtrContainerInfo(
+  value: string | Buffer,
+  expectedContainerIdValue: unknown,
+  expectedRootfsMountPathValue: unknown,
+): GvisorSourceContainerSpecIdentity {
+  const expectedContainerId = containerId(expectedContainerIdValue, "expected containerId")
+  const expectedRootfsMountPath = canonicalPath(expectedRootfsMountPathValue, "expected rootfsMountPath")
+  const parsed = asPlainRecord(parseBoundedJson(value, KDO_H4_R3G_B_LIMITS.maxCtrContainerInfoBytes, "ctr containers info"), "ctr containers info")
+  const observedContainerId = containerId(requiredJsonString(parsed, "ID", "ctr containers info"), "ctr containers info.ID")
+  if (observedContainerId !== expectedContainerId) throw new TypeError("ctr container info ID does not match exact containerId")
+  const spec = requiredJsonRecord(parsed, "Spec", "ctr containers info")
+  const root = requiredJsonRecord(spec, "root", "ctr containers info.Spec")
+  const rootfsMountPath = canonicalPath(requiredJsonString(root, "path", "ctr containers info.Spec.root"), "ctr containers info Spec.Root.Path")
+  if (rootfsMountPath !== expectedRootfsMountPath) throw new TypeError("ctr container info Spec.Root.Path does not match exact rootfsMountPath")
+  return createGvisorSourceContainerSpecIdentity({ containerId: observedContainerId, rootfsMountPath })
+}
+
+export function parseGvisorSourceCtrSnapshotInfo(
+  value: string | Buffer,
+  expectedNameValue: unknown,
+): GvisorSourceSnapshotNodeIdentity {
+  const expectedName = nonEmptyBoundedString(expectedNameValue, KDO_H4_R3G_B_LIMITS.maxStringBytes, "expected snapshot name")
+  const parsed = asPlainRecord(parseBoundedJson(value, KDO_H4_R3G_B_LIMITS.maxCtrSnapshotInfoBytes, "ctr snapshots info"), "ctr snapshots info")
+  const name = requiredJsonString(parsed, "Name", "ctr snapshots info")
+  if (name !== expectedName) throw new TypeError("ctr snapshot info Name does not match exact requested snapshot")
+  const parentValue = parsed.Parent
+  if (typeof parentValue !== "string") throw new TypeError("ctr snapshots info.Parent must be a string")
+  const parent = boundedString(parentValue, KDO_H4_R3G_B_LIMITS.maxStringBytes, "ctr snapshots info.Parent")
+  const rawKind = requiredJsonString(parsed, "Kind", "ctr snapshots info")
+  const kind: GvisorSourceSnapshotKind = rawKind === "Active" ? "active" : rawKind === "Committed" ? "committed" : (() => { throw new TypeError("ctr snapshot info Kind must be Active or Committed") })()
+  return createGvisorSourceSnapshotNodeIdentity({ name, kind, parent })
+}
+
+function decodeMountInfoToken(value: string, label: string): string {
+  const source = nonEmptyBoundedString(value, KDO_H4_R3G_B_LIMITS.maxStringBytes, label)
+  let output = ""
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index] ?? ""
+    if (char !== "\\") {
+      output += char
+      continue
+    }
+    const escape = source.slice(index, index + 4)
+    const decoded = escape === "\\040" ? " " : escape === "\\011" ? "\t" : escape === "\\012" ? "\n" : escape === "\\134" ? "\\" : undefined
+    if (decoded === undefined) throw new TypeError(`${label} contains invalid mountinfo escaping`)
+    output += decoded
+    index += 3
+  }
+  if (output.includes("\0") || byteLength(output) > KDO_H4_R3G_B_LIMITS.maxStringBytes) throw new TypeError(`${label} decoded value is invalid`)
+  return output
+}
+
+export function parseGvisorSourceMountInfo(
+  value: string | Buffer,
+  expectedRootfsMountPathValue: unknown,
+): GvisorSourceMountInfoObservation {
+  const expectedRootfsMountPath = canonicalPath(expectedRootfsMountPathValue, "expected rootfsMountPath")
+  const text = decodeBoundedUtf8(value, KDO_H4_R3G_B_LIMITS.maxMountInfoBytes, "mountinfo")
+  const rawLines = text.split("\n")
+  if (rawLines[rawLines.length - 1] === "") rawLines.pop()
+  if (rawLines.length === 0 || rawLines.length > KDO_H4_R3G_B_LIMITS.maxMountEntries) throw new TypeError("mountinfo entry count is invalid")
+  let match: GvisorSourceMountInfoObservation | undefined
+  for (let lineIndex = 0; lineIndex < rawLines.length; lineIndex += 1) {
+    const line = rawLines[lineIndex]
+    if (line === undefined || line.length === 0 || line.includes("\r")) throw new TypeError("mountinfo contains malformed line structure")
+    const fields = line.split(" ")
+    if (fields.some((field) => field.length === 0)) throw new TypeError("mountinfo contains ambiguous whitespace structure")
+    const separatorIndexes = fields.map((field, index) => field === "-" ? index : -1).filter((index) => index >= 0)
+    if (separatorIndexes.length !== 1) throw new TypeError("mountinfo must contain exactly one separator per entry")
+    const separator = separatorIndexes[0]
+    if (separator === undefined || separator < 6 || fields.length !== separator + 4) throw new TypeError("mountinfo entry is missing mandatory fields or has trailing structural ambiguity")
+    const mountId = canonicalPositiveDecimal(fields[0], "mountinfo mount ID")
+    const parentMountId = canonicalPositiveDecimal(fields[1], "mountinfo parent mount ID")
+    const majorMinor = fields[2]
+    if (majorMinor === undefined || !MAJOR_MINOR.test(majorMinor)) throw new TypeError("mountinfo major:minor is invalid")
+    const mountRoot = canonicalPath(decodeMountInfoToken(fields[3] ?? "", "mountinfo root"), "mountinfo root")
+    const mountPoint = canonicalPath(decodeMountInfoToken(fields[4] ?? "", "mountinfo mountpoint"), "mountinfo mountpoint")
+    const mountOptions = nonEmptyBoundedString(fields[5], KDO_H4_R3G_B_LIMITS.maxStringBytes, "mountinfo mount options")
+    for (let optionalIndex = 6; optionalIndex < separator; optionalIndex += 1) {
+      nonEmptyBoundedString(fields[optionalIndex], KDO_H4_R3G_B_LIMITS.maxStringBytes, "mountinfo optional field")
+    }
+    const filesystemType = fields[separator + 1]
+    const mountSource = decodeMountInfoToken(fields[separator + 2] ?? "", "mountinfo mount source")
+    const superOptions = nonEmptyBoundedString(fields[separator + 3], KDO_H4_R3G_B_LIMITS.maxStringBytes, "mountinfo super options")
+    if (mountPoint !== expectedRootfsMountPath) continue
+    if (filesystemType !== "overlay") throw new TypeError("rootfs mount filesystem type must be overlay")
+    if (match !== undefined) throw new TypeError("rootfs mountinfo target is ambiguous")
+    match = Object.freeze({
+      rootfsMountPath: mountPoint,
+      mountId,
+      parentMountId,
+      majorMinor,
+      mountRoot,
+      mountOptions,
+      filesystemType: "overlay" as const,
+      mountSource,
+      superOptions,
+    })
+  }
+  if (match === undefined) throw new TypeError("exact rootfs mountinfo target is missing")
+  return match
+}
