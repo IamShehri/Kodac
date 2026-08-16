@@ -215,6 +215,9 @@ test("H4-R3F production surface has no Docker mutation SDK or R3B physical-evide
   assert.match(r3fSource, /method:\s*"GET"/)
   assert.match(r3fSource, /NetworkSettings/)
   assert.match(r3fSource, /effective executable/)
+  assert.doesNotMatch(r3fSource, /const rest\s*=\s*text\.slice\(index\)/)
+  assert.match(r3fSource, /numberPattern\.lastIndex\s*=\s*index/)
+  assert.match(r3fSource, /text\.startsWith\(literal, index\)/)
   assert.equal(gitBlobSha1(source("../src/execution/gateway.ts")), "420df04c5e0a42b371a250d75e580c36bb32f8cb")
   assert.equal(gitBlobSha1(source("../src/trust/sandbox-observer-gvisor-runtime.ts")), "1d02a5dbc1dc4071636c24327e7faf9906370ef5")
   assert.equal(gitBlobSha1(source("../src/trust/sandbox-observer-gvisor.ts")), "47c792ba01c9ba4b2db94d7558f282cdbd218660")
@@ -340,6 +343,27 @@ test("H4-R3F rejects non-200 Docker responses without following or downgrading",
   const requirement=fixtureRequirement()
   const root=mkdtempSync(join(tmpdir(),"kodac-r3f-http-"));let fake:FakeDocker|undefined
   try{fake=await startFakeDocker(root,requirement,{listStatus:503});const provider=createDockerControlPlaneBindingProvider({socketPath:fake.socketPath,requirement});await assert.rejects(provider.resolveDockerControlPlaneBinding(bindingRequest(requirement)),/HTTP 503/);assert.equal(fake.requests.length,1)}finally{await fake?.close();rmSync(root,{recursive:true,force:true})}
+})
+
+test("H4-R3F closes the abort race between precheck and listener registration", { skip: process.platform !== "linux" }, async () => {
+  const root=mkdtempSync(join(tmpdir(),"kodac-r3f-abort-race-"));const requirement=fixtureRequirement();let fake:FakeDocker|undefined
+  try{
+    fake=await startFakeDocker(root,requirement)
+    const provider=createDockerControlPlaneBindingProvider({socketPath:fake.socketPath,requirement})
+    let abortedReads=0
+    let registrations=0
+    let removals=0
+    const raceSignal={
+      get aborted(){abortedReads+=1;return abortedReads>=3},
+      addEventListener(type:string){assert.equal(type,"abort");registrations+=1},
+      removeEventListener(type:string){assert.equal(type,"abort");removals+=1},
+    } as unknown as AbortSignal
+    await assert.rejects(provider.resolveDockerControlPlaneBinding(bindingRequest(requirement),{signal:raceSignal}),/aborted/)
+    assert.equal(registrations,1)
+    assert.equal(removals,1)
+    assert.ok(abortedReads>=3)
+    assert.deepEqual(fake.requests,[])
+  }finally{await fake?.close();rmSync(root,{recursive:true,force:true})}
 })
 
 test("H4-R3F abort terminates owned Docker read and cannot become late success", { skip: process.platform !== "linux" }, async () => {
