@@ -65,8 +65,11 @@ export interface DockerControlPlaneObservation {
   readonly containerId: string
   readonly bindingIdentity: string
   readonly imageManifestDigest: string
+  readonly executable: string
+  readonly argsIdentity: string
   readonly runtimeName: "runsc"
   readonly networkMode: "none"
+  readonly networkAttachmentCount: 0
   readonly nanoCpus: number
   readonly memoryBytes: number
   readonly memorySwapBytes: number
@@ -183,6 +186,20 @@ function canonicalSocketPath(value: unknown): string {
   return value
 }
 
+function canonicalExecutable(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.includes("\0") || byteLength(value) > 4096) {
+    throw new TypeError("executable must be a bounded non-empty POSIX path")
+  }
+  if (!posix.isAbsolute(value) || posix.normalize(value) !== value || (value.length > 1 && value.endsWith("/"))) {
+    throw new TypeError("executable must be a canonical absolute POSIX path")
+  }
+  return value
+}
+
+function entrypointArgsIdentity(args: readonly string[]): string {
+  return sha256Domain("ENTRYPOINT_ARGS", JSON.stringify(args))
+}
+
 function endpointPreimage(input: Omit<DockerSocketEndpointIdentity, "endpointIdentity">): string {
   return JSON.stringify(input)
 }
@@ -282,6 +299,8 @@ export function createDockerControlPlaneObservation(input: {
   containerId: string
   bindingIdentity: string
   imageManifestDigest: string
+  executable: string
+  argsIdentity: string
   nanoCpus: number
   memoryBytes: number
   memorySwapBytes: number
@@ -289,7 +308,7 @@ export function createDockerControlPlaneObservation(input: {
   const record = asPlainRecord(input, "Docker control-plane observation input")
   exactKeys(record, [
     "providerIdentity", "socketEndpointIdentity", "executionAttemptIdentity", "requirementIdentity", "workloadIdentity",
-    "containerId", "bindingIdentity", "imageManifestDigest", "nanoCpus", "memoryBytes", "memorySwapBytes",
+    "containerId", "bindingIdentity", "imageManifestDigest", "executable", "argsIdentity", "nanoCpus", "memoryBytes", "memorySwapBytes",
   ], "Docker control-plane observation input")
   const memoryBytes = boundedPositiveInteger(record.memoryBytes, 1_099_511_627_776, "memoryBytes")
   const memorySwapBytes = boundedPositiveInteger(record.memorySwapBytes, 1_099_511_627_776, "memorySwapBytes")
@@ -309,8 +328,11 @@ export function createDockerControlPlaneObservation(input: {
     containerId: fullContainerId(record.containerId),
     bindingIdentity: identity(record.bindingIdentity, "bindingIdentity"),
     imageManifestDigest: digest(record.imageManifestDigest, "imageManifestDigest"),
+    executable: canonicalExecutable(record.executable),
+    argsIdentity: identity(record.argsIdentity, "argsIdentity"),
     runtimeName: "runsc" as const,
     networkMode: "none" as const,
+    networkAttachmentCount: 0 as const,
     nanoCpus,
     memoryBytes,
     memorySwapBytes,
@@ -329,7 +351,7 @@ export function validateDockerControlPlaneObservation(value: unknown): DockerCon
   exactKeys(record, [
     "version", "evidenceClass", "providerId", "providerIdentity", "apiVersion", "socketEndpointIdentity",
     "executionAttemptIdentity", "requirementIdentity", "workloadIdentity", "containerId", "bindingIdentity",
-    "imageManifestDigest", "runtimeName", "networkMode", "nanoCpus", "memoryBytes", "memorySwapBytes",
+    "imageManifestDigest", "executable", "argsIdentity", "runtimeName", "networkMode", "networkAttachmentCount", "nanoCpus", "memoryBytes", "memorySwapBytes",
     "restartCount", "restartPolicy", "privileged", "controlPlaneObservationIdentity",
   ], "Docker control-plane observation")
   if (record.version !== KDO_H4_R3F_CONTROL_PLANE_VERSION) throw new TypeError("Docker control-plane observation version mismatch")
@@ -337,6 +359,7 @@ export function validateDockerControlPlaneObservation(value: unknown): DockerCon
   if (record.providerId !== KDO_H4_R3F_PROVIDER_ID) throw new TypeError("Docker provider ID mismatch")
   if (record.apiVersion !== KDO_H4_R3F_DOCKER_API_VERSION) throw new TypeError("Docker API version mismatch")
   if (record.runtimeName !== "runsc" || record.networkMode !== "none") throw new TypeError("Docker control-plane runtime/network mismatch")
+  if (record.networkAttachmentCount !== 0) throw new TypeError("Docker control-plane network attachment count must be zero")
   if (record.restartCount !== 0 || record.restartPolicy !== "no" || record.privileged !== false) {
     throw new TypeError("Docker control-plane restart/privileged posture mismatch")
   }
@@ -349,6 +372,8 @@ export function validateDockerControlPlaneObservation(value: unknown): DockerCon
     containerId: record.containerId as string,
     bindingIdentity: record.bindingIdentity as string,
     imageManifestDigest: record.imageManifestDigest as string,
+    executable: record.executable as string,
+    argsIdentity: record.argsIdentity as string,
     nanoCpus: record.nanoCpus as number,
     memoryBytes: record.memoryBytes as number,
     memorySwapBytes: record.memorySwapBytes as number,
@@ -608,6 +633,19 @@ function requiredString(record: Record<string, unknown>, key: string, label: str
   return value
 }
 
+function requiredStringArray(record: Record<string, unknown>, key: string, label: string): readonly string[] {
+  const value = record[key]
+  if (!Array.isArray(value) || utilTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    throw new TypeError(`${label}.${key} must be a plain array`)
+  }
+  if (Object.getOwnPropertySymbols(value).length !== 0) throw new TypeError(`${label}.${key} must not contain symbol fields`)
+  const output = value.map((entry, index) => {
+    if (typeof entry !== "string") throw new TypeError(`${label}.${key}[${index}] must be a string`)
+    return entry
+  })
+  return Object.freeze(output)
+}
+
 function validateInspect(input: {
   value: unknown
   containerId: string
@@ -615,12 +653,23 @@ function validateInspect(input: {
   requirement: SandboxExecutionRequirement
 }): {
   imageManifestDigest: string
+  executable: string
+  argsIdentity: string
   nanoCpus: number
   memoryBytes: number
   memorySwapBytes: number
 } {
   const inspect = asPlainRecord(input.value, "Docker inspect response")
   if (fullContainerId(inspect.Id, "Docker inspect Id") !== input.containerId) throw new TypeError("Docker inspect ID does not match selected container")
+
+  const executable = requiredString(inspect, "Path", "Docker inspect")
+  if (executable !== input.requirement.workload.entrypoint.executable) throw new TypeError("Docker effective executable does not match the R3A workload entrypoint")
+  const args = requiredStringArray(inspect, "Args", "Docker inspect")
+  const expectedArgs = input.requirement.workload.entrypoint.args
+  if (args.length !== expectedArgs.length || args.some((arg, index) => arg !== expectedArgs[index])) {
+    throw new TypeError("Docker effective args do not match the R3A workload entrypoint")
+  }
+  const argsIdentity = entrypointArgsIdentity(args)
 
   const state = requiredRecord(inspect, "State", "Docker inspect")
   if (!requiredBoolean(state, "Running", "Docker inspect State")) throw new TypeError("Docker container must be running")
@@ -645,6 +694,10 @@ function validateInspect(input: {
   if (requiredString(hostConfig, "NetworkMode", "Docker inspect HostConfig") !== "none") throw new TypeError("Docker HostConfig.NetworkMode must be none")
   if (requiredBoolean(hostConfig, "Privileged", "Docker inspect HostConfig")) throw new TypeError("Docker privileged containers are forbidden")
 
+  const networkSettings = requiredRecord(inspect, "NetworkSettings", "Docker inspect")
+  const networks = requiredRecord(networkSettings, "Networks", "Docker inspect NetworkSettings")
+  if (Object.keys(networks).length !== 0) throw new TypeError("Docker NetworkSettings.Networks must contain zero live network attachments")
+
   const expectedNanoCpus = input.requirement.workload.resourcePolicy.cpuMillis * 1_000_000
   const nanoCpus = requiredSafeInteger(hostConfig, "NanoCpus", "Docker inspect HostConfig")
   if (nanoCpus !== expectedNanoCpus) throw new TypeError("Docker NanoCpus does not match the R3A cpuMillis policy")
@@ -660,7 +713,7 @@ function validateInspect(input: {
     throw new TypeError("Docker RestartPolicy.Name must be no")
   }
 
-  return Object.freeze({ imageManifestDigest, nanoCpus, memoryBytes, memorySwapBytes })
+  return Object.freeze({ imageManifestDigest, executable, argsIdentity, nanoCpus, memoryBytes, memorySwapBytes })
 }
 
 export function createDockerControlPlaneBindingProvider(value: unknown): DockerControlPlaneBindingProvider {
@@ -722,6 +775,8 @@ export function createDockerControlPlaneBindingProvider(value: unknown): DockerC
       containerId,
       bindingIdentity: binding.bindingIdentity,
       imageManifestDigest: observed.imageManifestDigest,
+      executable: observed.executable,
+      argsIdentity: observed.argsIdentity,
       nanoCpus: observed.nanoCpus,
       memoryBytes: observed.memoryBytes,
       memorySwapBytes: observed.memorySwapBytes,
