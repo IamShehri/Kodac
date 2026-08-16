@@ -634,3 +634,236 @@ test("H4-R3G-B materializes only fixed ctr reads and accepts omitted committed p
   })
   assert.throws(() => requireGvisorSourceCtrExecutablePolicy(nonExecutable), /executable permission bit/)
 })
+
+test("H4-R3G-B Linux production gateway proves one exact physical source lineage on a root-owned synthetic host", { skip: process.platform !== "linux" }, async (t) => {
+  const { spawn, spawnSync } = await import("node:child_process")
+  const { createHash } = await import("node:crypto")
+  const fs = await import("node:fs")
+  const { fileURLToPath } = await import("node:url")
+  const { NodeWorkspaceFileSystem } = await import("../src/edit/filesystem.ts")
+  const { ExecutionGateway } = await import("../src/execution/gateway.ts")
+  const { fixedPolicy } = await import("../src/trust/policy.ts")
+  const r3e = await import("../src/trust/sandbox-observer-gvisor-runtime.ts")
+  const r3f = await import("../src/trust/sandbox-observer-docker-control-plane.ts")
+  const sourceContract = await import("../src/trust/sandbox-observer-gvisor-source-lineage.ts")
+
+  const failOrSkip = (message: string): false => {
+    if (process.env.GITHUB_ACTIONS === "true") assert.fail(message)
+    t.skip(message)
+    return false
+  }
+  const compiler = spawnSync("cc", ["--version"], { encoding: "utf8", shell: false })
+  if (compiler.status !== 0) return failOrSkip(`C compiler unavailable: ${String(compiler.error ?? compiler.stderr)}`)
+  const sudoProbe = spawnSync("sudo", ["-n", "true"], { encoding: "utf8", shell: false })
+  if (sudoProbe.status !== 0) return failOrSkip(`passwordless sudo unavailable: ${String(sudoProbe.error ?? sudoProbe.stderr)}`)
+  if (typeof process.getuid !== "function" || typeof process.getgid !== "function") return failOrSkip("numeric uid/gid APIs are unavailable")
+
+  const scratch = mkdtempSync(join(tmpdir(), "kodac-r3g-b-live-"))
+  const token = createHash("sha256").update(`${process.pid}:${Date.now()}:${scratch}`, "utf8").digest("hex").slice(0, 16)
+  const secureStorageRoot = `/var/lib/kodac-r3g-b-${token}`
+  const dockerRootDir = `${secureStorageRoot}/docker`
+  const rootfsParentPath = `${dockerRootDir}/rootfs/overlayfs`
+  const rootfsMountPath = `${rootfsParentPath}/${CONTAINER_ID}`
+  const overlayRoot = `${secureStorageRoot}/overlay-fixture`
+  const lowerDir = `${overlayRoot}/lower`
+  const upperDir = `${overlayRoot}/upper`
+  const workDir = `${overlayRoot}/work`
+  const ctrParent = `${secureStorageRoot}/bin`
+  const ctrPath = `${ctrParent}/ctr`
+  const secureRunRoot = `/run/kodac-r3g-b-${token}`
+  const containerdAddress = `${secureRunRoot}/containerd.sock`
+  const runtimeRoot = join(scratch, "runsc-root")
+  const workspace = join(scratch, "workspace")
+  const dockerSocketPath = join(scratch, "docker.sock")
+  const pidFile = join(runtimeRoot, "sandbox.pid")
+  const uid = process.getuid()
+  const gid = process.getgid()
+  let overlayMounted = false
+  let sandbox: ReturnType<typeof spawn> | undefined
+  let dockerServer: Server | undefined
+  let containerdServer: Server | undefined
+
+  const run = (executable: string, args: readonly string[]) => {
+    const result = spawnSync(executable, [...args], { encoding: "utf8", shell: false })
+    assert.equal(result.status, 0, `${executable} ${args.join(" ")} failed: ${String(result.error ?? result.stderr)}`)
+    return result
+  }
+  const sudo = (...args: string[]) => run("sudo", ["-n", ...args])
+  const cString = (value: string) => value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')
+  const compileC = (name: string, text: string) => {
+    const sourcePath = join(scratch, `${name}.c`)
+    const binaryPath = join(scratch, name)
+    fs.writeFileSync(sourcePath, text, "utf8")
+    run("cc", ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", sourcePath, "-o", binaryPath])
+    return binaryPath
+  }
+  const waitForFile = async (path: string) => {
+    for (let index = 0; index < 200; index += 1) {
+      if (fs.existsSync(path)) return
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    }
+    throw new Error(`fixture file did not appear: ${path}`)
+  }
+  const closeServer = async (server: Server | undefined) => {
+    if (server === undefined) return
+    server.closeAllConnections()
+    if (!server.listening) return
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+  const reap = async () => {
+    if (sandbox === undefined) return
+    if (sandbox.exitCode === null && sandbox.signalCode === null) sandbox.kill("SIGKILL")
+    if (sandbox.exitCode === null && sandbox.signalCode === null) await new Promise<void>((resolve) => sandbox?.once("exit", () => resolve()))
+  }
+
+  try {
+    fs.mkdirSync(runtimeRoot)
+    fs.mkdirSync(workspace)
+    const fakeRunsc = compileC("fake-runsc-r3g-b", `#define _GNU_SOURCE\n#include <signal.h>\n#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\nstatic const char *PIDFILE="${cString(pidFile)}";\nstatic int write_pid(void){FILE*f=fopen(PIDFILE,"w");if(!f)return 125;if(fprintf(f,"%ld\\n",(long)getpid())<0){fclose(f);return 125;}return fclose(f)==0?0:125;}\nstatic long read_pid(void){FILE*f=fopen(PIDFILE,"r");long p=0;if(!f)return 0;if(fscanf(f,"%ld",&p)!=1)p=0;fclose(f);return p;}\nint main(int argc,char**argv){if(argc==2&&strcmp(argv[1],"sandbox")==0){if(write_pid()!=0)return 125;for(;;)pause();}if(argc>=5&&strcmp(argv[1],"--root")==0){if(strcmp(argv[3],"state")==0&&argc==5){long p=read_pid();if(p<=0)return 125;printf("{\\\"ociVersion\\\":\\\"1.2.0\\\",\\\"id\\\":\\\"%s\\\",\\\"status\\\":\\\"running\\\",\\\"pid\\\":%ld,\\\"bundle\\\":\\\"/run/kodac/%s\\\"}\\n",argv[4],p,argv[4]);return 0;}if(strcmp(argv[3],"events")==0&&argc==6&&strcmp(argv[4],"--stats")==0){printf("{\\\"type\\\":\\\"stats\\\",\\\"id\\\":\\\"%s\\\",\\\"data\\\":{\\\"cpu\\\":{\\\"usage\\\":1}}}\\n",argv[5]);return 0;}}return 125;}\n`)
+    const nativeHelper = fileURLToPath(new URL("../native/gvisor-proc-observe.c", import.meta.url))
+    const helperPath = join(scratch, "kodac-gvisor-proc-observe")
+    run("cc", ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", nativeHelper, "-o", helperPath])
+    sandbox = spawn(fakeRunsc, ["sandbox"], { stdio: "ignore", shell: false })
+    await waitForFile(pidFile)
+    const sandboxPid = Number(fs.readFileSync(pidFile, "utf8").trim())
+    assert.equal(Number.isSafeInteger(sandboxPid) && sandboxPid > 0, true)
+
+    sudo("mkdir", "-p", rootfsMountPath, lowerDir, upperDir, workDir, ctrParent, secureRunRoot)
+    sudo("chown", `${uid}:${gid}`, secureRunRoot)
+    sudo("chmod", "0700", secureRunRoot)
+
+    containerdServer = createServer((_request, response) => { response.statusCode = 404; response.end() })
+    await new Promise<void>((resolve, reject) => {
+      containerdServer?.once("error", reject)
+      containerdServer?.listen(containerdAddress, () => { containerdServer?.off("error", reject); resolve() })
+    })
+    sudo("chown", "root:root", secureRunRoot)
+    sudo("chmod", "0755", secureRunRoot)
+
+    const expectedChainId = deriveGvisorSourceImageChainId([DIFF_A, DIFF_B])
+    const compiledCtr = compileC("fake-ctr-r3g-b", `#include <stdio.h>\n#include <string.h>\nstatic const char *ADDRESS="${cString(containerdAddress)}",*CID="${CONTAINER_ID}",*ROOTFS="${cString(rootfsMountPath)}",*CHAIN="${cString(expectedChainId)}";\nint main(int argc,char**argv){if(argc==8&&strcmp(argv[1],"--address")==0&&strcmp(argv[2],ADDRESS)==0&&strcmp(argv[3],"--namespace")==0&&strcmp(argv[4],"moby")==0&&strcmp(argv[5],"containers")==0&&strcmp(argv[6],"info")==0&&strcmp(argv[7],CID)==0){printf("{\\\"ID\\\":\\\"%s\\\",\\\"Spec\\\":{\\\"root\\\":{\\\"path\\\":\\\"%s\\\"}}}\\n",CID,ROOTFS);return 0;}if(argc==10&&strcmp(argv[1],"--address")==0&&strcmp(argv[2],ADDRESS)==0&&strcmp(argv[3],"--namespace")==0&&strcmp(argv[4],"moby")==0&&strcmp(argv[5],"snapshots")==0&&strcmp(argv[6],"--snapshotter")==0&&strcmp(argv[7],"overlayfs")==0&&strcmp(argv[8],"info")==0){if(strcmp(argv[9],CID)==0){printf("{\\\"Kind\\\":\\\"Active\\\",\\\"Name\\\":\\\"%s\\\",\\\"Parent\\\":\\\"%s\\\"}\\n",CID,CHAIN);return 0;}if(strcmp(argv[9],CHAIN)==0){printf("{\\\"Kind\\\":\\\"Committed\\\",\\\"Name\\\":\\\"%s\\\"}\\n",CHAIN);return 0;}}return 125;}\n`)
+    sudo("install", "-o", "root", "-g", "root", "-m", "0755", compiledCtr, ctrPath)
+    sudo("mount", "-t", "overlay", "overlay", "-o", `lowerdir=${lowerDir},upperdir=${upperDir},workdir=${workDir}`, rootfsMountPath)
+    overlayMounted = true
+
+    const requirement = dockerRequirement()
+    const filters = JSON.stringify({
+      label: [
+        `${r3f.KDO_H4_R3F_LABELS.bindingVersion}=${r3f.KDO_H4_R3F_BINDING_VERSION}`,
+        `${r3f.KDO_H4_R3F_LABELS.requirementIdentity}=${requirement.requirementIdentity}`,
+        `${r3f.KDO_H4_R3F_LABELS.workloadIdentity}=${requirement.workload.workloadIdentity}`,
+      ],
+      status: ["running"],
+    })
+    const listPath = `/v${r3f.KDO_H4_R3F_DOCKER_API_VERSION}/containers/json?all=1&filters=${encodeURIComponent(filters)}`
+    const inspectPath = `/v${r3f.KDO_H4_R3F_DOCKER_API_VERSION}/containers/${CONTAINER_ID}/json?size=0`
+    const sourceImagePath = expectedSourceImagePath(requirement)
+    const requests: string[] = []
+    const inspect = {
+      Id: CONTAINER_ID,
+      Path: requirement.workload.entrypoint.executable,
+      Args: [...requirement.workload.entrypoint.args],
+      State: { Running: true, Paused: false, Restarting: false, Dead: false, Pid: sandboxPid },
+      RestartCount: 0,
+      Image: requirement.workload.source.digest,
+      HostConfig: {
+        Runtime: "runsc",
+        NetworkMode: "none",
+        NanoCpus: requirement.workload.resourcePolicy.cpuMillis * 1_000_000,
+        Memory: requirement.workload.resourcePolicy.memoryBytes,
+        MemorySwap: requirement.workload.resourcePolicy.memoryBytes,
+        Privileged: false,
+        RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
+      },
+      Config: {
+        Image: requirement.workload.source.digest,
+        Labels: {
+          [r3f.KDO_H4_R3F_LABELS.bindingVersion]: r3f.KDO_H4_R3F_BINDING_VERSION,
+          [r3f.KDO_H4_R3F_LABELS.requirementIdentity]: requirement.requirementIdentity,
+          [r3f.KDO_H4_R3F_LABELS.workloadIdentity]: requirement.workload.workloadIdentity,
+        },
+      },
+      NetworkSettings: { Networks: {} },
+      ImageManifestDescriptor: { digest: requirement.workload.source.digest, mediaType: "application/vnd.oci.image.manifest.v1+json", size: 1234 },
+    }
+    dockerServer = createServer((request, response) => {
+      const method = request.method ?? ""
+      const url = request.url ?? ""
+      requests.push(`${method} ${url}`)
+      if (method !== "GET") { response.statusCode = 405; response.end(); return }
+      if (url === listPath) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify([{ Id: CONTAINER_ID, State: "running" }])); return }
+      if (url === inspectPath) { response.setHeader("content-type", "application/json"); response.end(JSON.stringify(inspect)); return }
+      if (url === `/v${r3f.KDO_H4_R3F_DOCKER_API_VERSION}/info`) {
+        response.setHeader("content-type", "application/json")
+        response.end(JSON.stringify({ OSType: "linux", Driver: "overlayfs", DockerRootDir: dockerRootDir, Containerd: { Address: containerdAddress, Namespaces: { Containers: "moby", Plugins: "plugins.moby" } } }))
+        return
+      }
+      if (url === sourceImagePath) {
+        response.setHeader("content-type", "application/json")
+        response.end(JSON.stringify({ Descriptor: { digest: requirement.workload.source.digest, mediaType: "application/vnd.oci.image.manifest.v1+json", size: 1234 }, RootFS: { Type: "layers", Layers: [DIFF_A, DIFF_B] } }))
+        return
+      }
+      response.statusCode = 404
+      response.end()
+    })
+    await new Promise<void>((resolve, reject) => {
+      dockerServer?.once("error", reject)
+      dockerServer?.listen(dockerSocketPath, () => { dockerServer?.off("error", reject); resolve() })
+    })
+
+    const provider = r3f.createDockerControlPlaneBindingProvider({ socketPath: dockerSocketPath, requirement })
+    const sha256File = (path: string) => createHash("sha256").update(fs.readFileSync(path)).digest("hex")
+    const r3eRuntime = r3e.validateGvisorObserverRuntimeConfig({
+      version: r3e.KDO_H4_R3E_RUNTIME_CONFIG_VERSION,
+      runscPath: fakeRunsc,
+      expectedRunscSha256: sha256File(fakeRunsc),
+      observerHelperPath: helperPath,
+      expectedObserverHelperSha256: sha256File(helperPath),
+      runtimeRoot,
+      resolveContainerBinding: provider.resolveContainerBinding,
+      commitLineageEvidence(record) { return r3e.createGvisorRuntimeLineageCommit(record) },
+    })
+    const endpointStat = fs.lstatSync(containerdAddress, { bigint: true })
+    assert.equal(endpointStat.isSocket(), true)
+    const committed: string[] = []
+    const sourceRuntime = sourceContract.validateGvisorSourceLineageRuntimeConfig({
+      version: sourceContract.KDO_H4_R3G_B_RUNTIME_CONFIG_VERSION,
+      ctrPath,
+      expectedCtrSha256: sha256File(ctrPath),
+      containerdAddress,
+      expectedContainerdSocketUid: endpointStat.uid.toString(),
+      expectedContainerdSocketGid: endpointStat.gid.toString(),
+      expectedContainerdSocketMode: endpointStat.mode.toString(),
+      commitSourceLineageEvidence(record) {
+        committed.push(sourceContract.serializeGvisorSourceLineageRecord(record))
+        return sourceContract.createGvisorSourceLineageCommit(record)
+      },
+    })
+    const gateway = new ExecutionGateway(new NodeWorkspaceFileSystem(workspace), fixedPolicy("allow"), undefined, undefined, r3eRuntime, undefined, sourceRuntime)
+    const record = await gateway.observeGvisorSourceLineage(requirement)
+    assert.deepEqual(sourceContract.validateGvisorSourceLineageRecord(record), record)
+    assert.equal(record.evidenceClass, sourceContract.KDO_H4_R3G_B_EVIDENCE_CLASS)
+    assert.equal(record.containerId, CONTAINER_ID)
+    assert.equal(record.sourceDigest, requirement.workload.source.digest)
+    assert.equal(record.expectedImageChainId, expectedChainId)
+    assert.equal(committed.length, 1)
+    assert.equal(committed[0], sourceContract.serializeGvisorSourceLineageRecord(record))
+    assert.deepEqual(requests, [
+      `GET ${listPath}`,
+      `GET ${inspectPath}`,
+      `GET /v1.48/info`,
+      `GET ${sourceImagePath}`,
+      `GET ${listPath}`,
+      `GET ${inspectPath}`,
+      `GET /v1.48/info`,
+      `GET ${sourceImagePath}`,
+    ])
+  } finally {
+    await closeServer(dockerServer).catch(() => {})
+    await closeServer(containerdServer).catch(() => {})
+    await reap().catch(() => {})
+    if (overlayMounted) spawnSync("sudo", ["-n", "umount", rootfsMountPath], { stdio: "ignore", shell: false })
+    spawnSync("sudo", ["-n", "rm", "-rf", secureStorageRoot, secureRunRoot], { stdio: "ignore", shell: false })
+    rmSync(scratch, { recursive: true, force: true })
+  }
+})
