@@ -439,32 +439,44 @@ async function fixedGetNetworkConfigRpc(endpointPath: string, signal?: AbortSign
   const path = canonicalPath(endpointPath, "R3G-C derived endpoint path")
   return new Promise((resolvePromise, rejectPromise) => {
     const socket = createConnection({ path, allowHalfOpen: false })
-    let chunks: Buffer[] = []; let total = 0; let completedEnd: number | null = null; let parsed: GvisorNetworkTopologyObservation | undefined; let terminalError: Error | undefined; let finishing = false
-    const clear = () => { clearTimeout(connectTimer); clearTimeout(rpcTimer); signal?.removeEventListener("abort", onAbort) }
+    const responseBuffer = Buffer.allocUnsafe(KDO_H4_R3G_C_LIMITS.maxResponseBytes)
+    let total = 0; let completedEnd: number | null = null; let candidate: GvisorNetworkTopologyObservation | undefined; let successScheduled = false; let parsed: GvisorNetworkTopologyObservation | undefined; let terminalError: Error | undefined; let finishing = false
+    let rpcTimer: ReturnType<typeof setTimeout> | undefined
+    const clear = () => { clearTimeout(connectTimer); if (rpcTimer !== undefined) clearTimeout(rpcTimer); signal?.removeEventListener("abort", onAbort) }
     const finishError = (error: Error) => { if (finishing) return; finishing = true; terminalError = error; clear(); socket.destroy() }
     const finishSuccess = (value: GvisorNetworkTopologyObservation) => { if (finishing) return; finishing = true; parsed = value; clear(); socket.destroy() }
     const onAbort = () => finishError(new Error("R3G-C GetNetworkConfig aborted"))
     const connectTimer = setTimeout(() => finishError(new Error("R3G-C GetNetworkConfig connect timeout")), KDO_H4_R3G_C_LIMITS.connectTimeoutMs)
-    const rpcTimer = setTimeout(() => finishError(new Error("R3G-C GetNetworkConfig response timeout")), KDO_H4_R3G_C_LIMITS.rpcTimeoutMs)
     signal?.addEventListener("abort", onAbort, { once: true })
     if (signal?.aborted) onAbort()
-    socket.once("connect", () => { clearTimeout(connectTimer); if (!finishing) socket.write(REQUEST_BYTES) })
+    socket.once("connect", () => {
+      clearTimeout(connectTimer)
+      if (finishing) return
+      rpcTimer = setTimeout(() => finishError(new Error("R3G-C GetNetworkConfig response timeout")), KDO_H4_R3G_C_LIMITS.rpcTimeoutMs)
+      socket.write(REQUEST_BYTES)
+    })
     socket.on("data", (chunk: Buffer) => {
       if (finishing) return
-      total += chunk.byteLength
-      if (total > KDO_H4_R3G_C_LIMITS.maxResponseBytes) { finishError(new Error("R3G-C uRPC response exceeds byte bound")); return }
-      chunks.push(Buffer.from(chunk))
-      const combined = Buffer.concat(chunks, total)
+      const nextTotal = total + chunk.byteLength
+      if (nextTotal > KDO_H4_R3G_C_LIMITS.maxResponseBytes) { finishError(new Error("R3G-C uRPC response exceeds byte bound")); return }
+      chunk.copy(responseBuffer, total)
+      total = nextTotal
+      const received = responseBuffer.subarray(0, total)
       try {
-        if (completedEnd === null) completedEnd = findCompleteTopLevelJsonObjectEnd(combined)
+        if (completedEnd === null) completedEnd = findCompleteTopLevelJsonObjectEnd(received)
         if (completedEnd === null) return
-        if (!onlyJsonWhitespace(combined, completedEnd)) { finishError(new Error("R3G-C uRPC response contains trailing JSON content")); return }
-        const text = UTF8.decode(combined.subarray(0, completedEnd))
-        const candidate = parseGvisorGetNetworkConfigResponse(text)
+        if (!onlyJsonWhitespace(received, completedEnd)) { finishError(new Error("R3G-C uRPC response contains trailing JSON content")); return }
+        if (candidate === undefined) {
+          const text = UTF8.decode(responseBuffer.subarray(0, completedEnd))
+          candidate = parseGvisorGetNetworkConfigResponse(text)
+        }
+        if (successScheduled) return
+        successScheduled = true
         setImmediate(() => {
           if (finishing) return
-          const latest = Buffer.concat(chunks, total)
+          const latest = responseBuffer.subarray(0, total)
           if (!onlyJsonWhitespace(latest, completedEnd ?? latest.length)) { finishError(new Error("R3G-C uRPC response contains trailing JSON content")); return }
+          if (candidate === undefined) { finishError(new Error("R3G-C uRPC response completed without a parsed topology")); return }
           finishSuccess(candidate)
         })
       } catch (error) { finishError(error instanceof Error ? error : new Error(String(error))) }
@@ -472,7 +484,6 @@ async function fixedGetNetworkConfigRpc(endpointPath: string, signal?: AbortSign
     socket.once("error", (error) => { if (!finishing) finishError(error) })
     socket.once("close", () => {
       clear()
-      chunks = []
       if (terminalError !== undefined) rejectPromise(terminalError)
       else if (parsed !== undefined) resolvePromise(parsed)
       else rejectPromise(new Error("R3G-C GetNetworkConfig transport closed without a complete response"))
