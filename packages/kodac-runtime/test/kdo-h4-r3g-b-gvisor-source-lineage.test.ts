@@ -27,6 +27,7 @@ import {
 import {
   KDO_H4_R3G_B_COMMIT_VERSION,
   KDO_H4_R3G_B_EVIDENCE_CLASS,
+  KDO_H4_R3G_B_LIMITS,
   KDO_H4_R3G_B_RUNTIME_CLASS,
   KDO_H4_R3G_B_RUNTIME_CONFIG_VERSION,
   KDO_H4_R3G_B_VERSION,
@@ -895,7 +896,7 @@ test("H4-R3G-B trusted store exact same-record put is idempotent and conflicting
 
 type R3GBCtrLifecycleMode = "term-exit" | "term-ignore" | "late-output"
 
-async function runR3GBCtrLifecycleFailure(t: any, mode: R3GBCtrLifecycleMode, cancelAfterStart = false) {
+async function runR3GBCtrLifecycleFailure(t: any, mode: R3GBCtrLifecycleMode, cancelAfterStart = false, afterCtrStart?: () => Promise<void> | void) {
   const { spawn, spawnSync } = await import("node:child_process")
   const { createHash } = await import("node:crypto")
   const fs = await import("node:fs")
@@ -1076,6 +1077,7 @@ async function runR3GBCtrLifecycleFailure(t: any, mode: R3GBCtrLifecycleMode, ca
     const controller = new AbortController()
     const operation = gateway.observeGvisorSourceLineage(requirement, undefined, { signal: controller.signal })
     await waitForFile(ctrPidFile)
+    await afterCtrStart?.()
     if (cancelAfterStart) controller.abort()
     let failure: unknown
     try { await operation; assert.fail("hostile ctr lifecycle observation unexpectedly succeeded") }
@@ -1129,4 +1131,48 @@ test("H4-R3G-B late partial ctr stdout after timeout is discarded and cannot bec
   assert.equal(result.termObserved, true)
   assert.equal(result.lateObserved, true)
   assert.equal(result.commitCount, 0)
+})
+
+test("H4-R3G-B global deadline expiry during ctr reaps the child before returning failure", { skip: process.platform !== "linux" }, async (t) => {
+  const setTimeoutDescriptor = Object.getOwnPropertyDescriptor(globalThis, "setTimeout")
+  const hrtimeBigintDescriptor = Object.getOwnPropertyDescriptor(process.hrtime, "bigint")
+  if (setTimeoutDescriptor === undefined || hrtimeBigintDescriptor === undefined) assert.fail("required timer descriptors are unavailable")
+  const originalSetTimeout = globalThis.setTimeout
+  const originalHrtimeBigint = process.hrtime.bigint
+  let expireDeadline: (() => void) | undefined
+
+  Object.defineProperty(globalThis, "setTimeout", {
+    ...setTimeoutDescriptor,
+    value: ((callback: (...args: any[]) => void, delay?: number, ...args: any[]) => {
+      if (
+        expireDeadline === undefined
+        && typeof delay === "number"
+        && delay >= KDO_H4_R3G_B_LIMITS.totalObservationTimeoutMs - 1_000
+      ) {
+        expireDeadline = () => {
+          Object.defineProperty(process.hrtime, "bigint", {
+            ...hrtimeBigintDescriptor,
+            value: () => originalHrtimeBigint()
+              + BigInt(KDO_H4_R3G_B_LIMITS.totalObservationTimeoutMs + 1_000) * 1_000_000n,
+          })
+          callback(...args)
+        }
+      }
+      return (originalSetTimeout as any)(callback, delay, ...args)
+    }) as typeof globalThis.setTimeout,
+  })
+
+  try {
+    const result = await runR3GBCtrLifecycleFailure(t, "term-exit", false, () => {
+      assert.notEqual(expireDeadline, undefined)
+      expireDeadline!()
+    })
+    if (result === null) return
+    assert.match(result.failureMessage, /total monotonic observation deadline expired/)
+    assert.equal(result.termObserved, true)
+    assert.equal(result.commitCount, 0)
+  } finally {
+    Object.defineProperty(globalThis, "setTimeout", setTimeoutDescriptor)
+    Object.defineProperty(process.hrtime, "bigint", hrtimeBigintDescriptor)
+  }
 })
