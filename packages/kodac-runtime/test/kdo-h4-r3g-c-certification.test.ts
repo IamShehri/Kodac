@@ -242,7 +242,7 @@ test("H4-R3G-C RPC timeout closes the owned stream and late response bytes canno
       runtimeRoot: root,
       trustedHostUid: trustedUid(),
       runtimeLineage: syntheticR3e(),
-    }), /timed out/)
+    }), /R3G-C GetNetworkConfig response timeout/)
     await new Promise<void>((resolve) => setTimeout(resolve, 200))
     assert.equal(lateWriteAttempted, true)
     assert.ok(closeCount >= 1, "timed-out R3G-C transport must close before late bytes")
