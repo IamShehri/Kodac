@@ -6,7 +6,7 @@
 #include <limits.h>
 #include <linux/if_alg.h>
 #include <poll.h>
-#include <signal.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,8 +33,6 @@
 #define KODAC_MAX_RPC_BYTES 65536
 #define KODAC_MAX_PROC_STAT_BYTES 8192
 #define KODAC_MAX_RECORD_BYTES 16384
-#define KODAC_SHA256_HEX_BYTES 64
-#define KODAC_CONTAINER_ID_BYTES 64
 #define KODAC_BOOT_ID_BYTES 36
 #define KODAC_MAX_TTL_MS 86400000ULL
 #define KODAC_TERMINATION_ACK_TIMEOUT_MS 30000
@@ -202,7 +200,7 @@ static int exact_flag(const char *actual, const char *expected) {
 }
 
 static int parse_arm_request(int argc, char **argv, arm_request *request) {
-  if (argc != 35 || !exact_flag(argv[1], "--arm") ||
+  if (argc != 36 || !exact_flag(argv[1], "--arm") ||
       !exact_flag(argv[2], "--registry-root") ||
       !exact_flag(argv[4], "--arm-operation") ||
       !exact_flag(argv[6], "--arm-payload-digest") ||
@@ -366,7 +364,7 @@ static int read_process_start_ticks(pid_t pid, uint64_t *ticks_out) {
   return parse_proc_start_ticks(buffer, length, pid, ticks_out);
 }
 
-static int sha256_fd(int source_fd, char out_hex[65]) {
+static int open_sha256_operation(void) {
   int transform_fd = socket(AF_ALG, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
   if (transform_fd < 0) return -1;
   struct sockaddr_alg address;
@@ -377,79 +375,75 @@ static int sha256_fd(int source_fd, char out_hex[65]) {
   if (bind(transform_fd, (struct sockaddr *)&address, sizeof(address)) != 0) { close(transform_fd); return -1; }
   int operation_fd = accept4(transform_fd, NULL, NULL, SOCK_CLOEXEC);
   close(transform_fd);
-  if (operation_fd < 0) return -1;
-  if (lseek(source_fd, 0, SEEK_SET) < 0) { close(operation_fd); return -1; }
-  unsigned char buffer[65536];
-  for (;;) {
-    ssize_t count;
-    do { count = read(source_fd, buffer, sizeof(buffer)); } while (count < 0 && errno == EINTR);
-    if (count < 0) { close(operation_fd); return -1; }
-    if (count == 0) break;
-    size_t offset = 0;
-    while (offset < (size_t)count) {
-      ssize_t written;
-      do { written = write(operation_fd, buffer + offset, (size_t)count - offset); } while (written < 0 && errno == EINTR);
-      if (written <= 0) { close(operation_fd); return -1; }
-      offset += (size_t)written;
-    }
-  }
+  return operation_fd;
+}
+
+static int read_sha256_digest(int operation_fd, char out_hex[65]) {
   unsigned char digest[32]; size_t offset = 0;
   while (offset < sizeof(digest)) {
     ssize_t count;
     do { count = read(operation_fd, digest + offset, sizeof(digest) - offset); } while (count < 0 && errno == EINTR);
-    if (count <= 0) { close(operation_fd); return -1; }
+    if (count <= 0) return -1;
     offset += (size_t)count;
   }
-  close(operation_fd);
   static const char hex[] = "0123456789abcdef";
   for (size_t i = 0; i < sizeof(digest); ++i) { out_hex[i * 2] = hex[digest[i] >> 4]; out_hex[i * 2 + 1] = hex[digest[i] & 0x0f]; }
   out_hex[64] = '\0';
   return 0;
 }
 
-static int sha256_bytes(const void *bytes, size_t length, char out_hex[65]) {
-  int transform_fd = socket(AF_ALG, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
-  if (transform_fd < 0) return -1;
-  struct sockaddr_alg address;
-  memset(&address, 0, sizeof(address));
-  address.salg_family = AF_ALG;
-  memcpy(address.salg_type, "hash", 5);
-  memcpy(address.salg_name, "sha256", 7);
-  if (bind(transform_fd, (struct sockaddr *)&address, sizeof(address)) != 0) { close(transform_fd); return -1; }
-  int operation_fd = accept4(transform_fd, NULL, NULL, SOCK_CLOEXEC);
-  close(transform_fd);
+static int sha256_fd(int source_fd, char out_hex[65]) {
+  struct stat source_stat;
+  if (fstat(source_fd, &source_stat) != 0 || !S_ISREG(source_stat.st_mode) || source_stat.st_size < 0) return -1;
+  if ((uintmax_t)source_stat.st_size > UINT64_MAX) return -1;
+  uint64_t remaining = (uint64_t)source_stat.st_size;
+  if (lseek(source_fd, 0, SEEK_SET) < 0) return -1;
+  int operation_fd = open_sha256_operation();
   if (operation_fd < 0) return -1;
-  const unsigned char *cursor = (const unsigned char *)bytes; size_t offset = 0;
-  while (offset < length) {
-    ssize_t written;
-    do { written = write(operation_fd, cursor + offset, length - offset); } while (written < 0 && errno == EINTR);
-    if (written <= 0) { close(operation_fd); return -1; }
-    offset += (size_t)written;
+  if (remaining == 0) {
+    if (send(operation_fd, NULL, 0, 0) < 0) { close(operation_fd); return -1; }
   }
-  unsigned char digest[32]; offset = 0;
-  while (offset < sizeof(digest)) {
+  unsigned char buffer[65536];
+  while (remaining > 0) {
+    size_t wanted = remaining < sizeof(buffer) ? (size_t)remaining : sizeof(buffer);
     ssize_t count;
-    do { count = read(operation_fd, digest + offset, sizeof(digest) - offset); } while (count < 0 && errno == EINTR);
-    if (count <= 0) { close(operation_fd); return -1; }
-    offset += (size_t)count;
+    do { count = read(source_fd, buffer, wanted); } while (count < 0 && errno == EINTR);
+    if (count <= 0 || (uint64_t)count > remaining) { close(operation_fd); return -1; }
+    remaining -= (uint64_t)count;
+    int flags = remaining == 0 ? 0 : MSG_MORE;
+    ssize_t sent;
+    do { sent = send(operation_fd, buffer, (size_t)count, flags); } while (sent < 0 && errno == EINTR);
+    if (sent != count) { close(operation_fd); return -1; }
   }
+  int result = read_sha256_digest(operation_fd, out_hex);
   close(operation_fd);
-  static const char hex[] = "0123456789abcdef";
-  for (size_t i = 0; i < sizeof(digest); ++i) { out_hex[i * 2] = hex[digest[i] >> 4]; out_hex[i * 2 + 1] = hex[digest[i] & 0x0f]; }
-  out_hex[64] = '\0';
+  return result;
+}
+
+static int sha256_bytes(const void *bytes, size_t length, char out_hex[65]) {
+  int operation_fd = open_sha256_operation();
+  if (operation_fd < 0) return -1;
+  ssize_t sent;
+  do { sent = send(operation_fd, bytes, length, 0); } while (sent < 0 && errno == EINTR);
+  if (sent < 0 || (size_t)sent != length) { close(operation_fd); return -1; }
+  int result = read_sha256_digest(operation_fd, out_hex);
+  close(operation_fd);
+  return result;
+}
+
+static int append_hash_component(char *buffer, size_t capacity, size_t *offset, const char *value) {
+  size_t length = strlen(value);
+  if (*offset + length + 1 > capacity) return -1;
+  memcpy(buffer + *offset, value, length); *offset += length; buffer[(*offset)++] = '\0';
   return 0;
 }
 
 static int hash_joined(char out_hex[65], const char *domain, const char *const *parts, size_t count) {
-  char buffer[KODAC_MAX_RECORD_BYTES];
-  int used = snprintf(buffer, sizeof(buffer), "KODAC-H4-R3G-D-WATCHDOG\0%s\0V1", domain);
-  if (used < 0 || (size_t)used >= sizeof(buffer)) return -1;
-  size_t offset = (size_t)used + 1;
-  for (size_t i = 0; i < count; ++i) {
-    size_t length = strlen(parts[i]);
-    if (offset + length + 1 > sizeof(buffer)) return -1;
-    memcpy(buffer + offset, parts[i], length); offset += length; buffer[offset++] = '\0';
-  }
+  char buffer[KODAC_MAX_RECORD_BYTES]; size_t offset = 0;
+  if (append_hash_component(buffer, sizeof(buffer), &offset, "KODAC-H4-R3G-D-WATCHDOG") != 0 ||
+      append_hash_component(buffer, sizeof(buffer), &offset, domain) != 0 ||
+      append_hash_component(buffer, sizeof(buffer), &offset, "V1") != 0) return -1;
+  for (size_t i = 0; i < count; ++i) if (append_hash_component(buffer, sizeof(buffer), &offset, parts[i]) != 0) return -1;
   return sha256_bytes(buffer, offset, out_hex);
 }
 
@@ -508,9 +502,13 @@ static int open_registry(const arm_request *request, lease_registry *registry) {
 }
 
 static int durable_replace_at(int directory_fd, const char *final_name, const char *payload, size_t length) {
-  char temporary[128];
-  unsigned char nonce[8];
-  if (getrandom(nonce, sizeof(nonce), 0) != (ssize_t)sizeof(nonce)) return -1;
+  char temporary[128]; unsigned char nonce[8]; size_t random_offset = 0;
+  while (random_offset < sizeof(nonce)) {
+    ssize_t count;
+    do { count = getrandom(nonce + random_offset, sizeof(nonce) - random_offset, 0); } while (count < 0 && errno == EINTR);
+    if (count <= 0) return -1;
+    random_offset += (size_t)count;
+  }
   int written = snprintf(temporary, sizeof(temporary), ".tmp-%ld-%02x%02x%02x%02x%02x%02x%02x%02x", (long)getpid(), nonce[0], nonce[1], nonce[2], nonce[3], nonce[4], nonce[5], nonce[6], nonce[7]);
   if (written <= 0 || (size_t)written >= sizeof(temporary)) return -1;
   int fd = openat(directory_fd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
@@ -575,7 +573,7 @@ static int connect_pinned_socket(int path_fd, struct ucred expected_peer, int *o
   struct sockaddr_un address; memset(&address, 0, sizeof(address)); address.sun_family = AF_UNIX;
   int written = snprintf(address.sun_path, sizeof(address.sun_path), "/proc/self/fd/%d", path_fd);
   if (written <= 0 || (size_t)written >= sizeof(address.sun_path)) { close(fd); return -1; }
-  if (connect(fd, (struct sockaddr *)&address, sizeof(sa_family_t) + (size_t)written + 1) != 0) { close(fd); return -1; }
+  if (connect(fd, (struct sockaddr *)&address, offsetof(struct sockaddr_un, sun_path) + (size_t)written + 1) != 0) { close(fd); return -1; }
   struct ucred observed; socklen_t length = sizeof(observed);
   if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &observed, &length) != 0 || length != sizeof(observed)) { close(fd); return -1; }
   if (observed.pid != expected_peer.pid || observed.uid != expected_peer.uid || observed.gid != expected_peer.gid) { close(fd); return -1; }
@@ -667,9 +665,7 @@ static int read_json_object(int fd, char *buffer, size_t capacity, size_t *lengt
     else if (byte == '}' || byte == ']') {
       --depth;
       if (depth < 0) return -1;
-      if (depth == 0) {
-        buffer[used] = '\0'; *length_out = used; return 0;
-      }
+      if (depth == 0) { buffer[used] = '\0'; *length_out = used; return 0; }
     }
   }
 }
@@ -678,11 +674,10 @@ static const char *successful_result(const char *json) {
   static const char prefix[] = "{\"success\":true,\"err\":\"\",\"result\":";
   while (*json == ' ' || *json == '\t' || *json == '\r' || *json == '\n') ++json;
   size_t length = sizeof(prefix) - 1;
-  if (strncmp(json, prefix, length) != 0) return NULL;
-  return json + length;
+  return strncmp(json, prefix, length) == 0 ? json + length : NULL;
 }
 
-static int response_success(int fd, int require_nonempty_array, char identity_out[65], const char *identity_domain) {
+static int response_success(int fd, int require_nonempty_array, char identity_out[65]) {
   char response[KODAC_MAX_RPC_BYTES + 1]; size_t length = 0;
   if (read_json_object(fd, response, sizeof(response), &length) != 0) return -1;
   const char *result = successful_result(response);
@@ -693,9 +688,7 @@ static int response_success(int fd, int require_nonempty_array, char identity_ou
     ++result; while (*result == ' ' || *result == '\t' || *result == '\r' || *result == '\n') ++result;
     if (*result == ']') return 1;
   }
-  if (identity_out != NULL && sha256_bytes(response, length, identity_out) != 0) return -1;
-  (void)identity_domain;
-  return 0;
+  return identity_out == NULL ? 0 : sha256_bytes(response, length, identity_out);
 }
 
 static int revalidate_retained_subject(const arm_request *request, retained_subject *subject) {
@@ -728,11 +721,11 @@ static int read_timer(int fd) {
 }
 
 static int emit_arm_ack(const arm_request *request, const retained_subject *subject, const lease_state *lease) {
-  char arm_ack_identity[65];
+  char physical_ack_identity[65];
   const char *parts[] = { lease->lease_identity, request->arm_operation_identity, request->runtime_instance_identity, subject->control_peer_binding_identity, request->runsc_artifact_identity, request->expected_runsc_sha256, lease->registry_record_identity, lease->clock_domain_identity, lease->boot_id, lease->owner_instance_identity, lease->claim_record_identity };
-  if (hash_joined(arm_ack_identity, "PHYSICAL_ARM_ACK", parts, 11) != 0) return -1;
+  if (hash_joined(physical_ack_identity, "PHYSICAL_ARM_ACK", parts, 11) != 0) return -1;
   if (printf("%s lease=%s arm-operation=%s runtime-instance=%s control-peer=%s runsc-artifact=%s verified-runsc-sha256=%s registry-record=%s clock-domain=%s boot-id=%s lease-start-boottime-ns=%" PRIu64 " deadline-boottime-ns=%" PRIu64 " owner-instance=%s terminal-fence-token=%" PRIu64 " claim-record=%s physical-ack=%s\n",
-      KODAC_ARM_LINE_VERSION, lease->lease_identity, request->arm_operation_identity, request->runtime_instance_identity, subject->control_peer_binding_identity, request->runsc_artifact_identity, request->expected_runsc_sha256, lease->registry_record_identity, lease->clock_domain_identity, lease->boot_id, lease->lease_start_boottime_ns, lease->deadline_boottime_ns, lease->owner_instance_identity, lease->fence_token, lease->claim_record_identity, arm_ack_identity) < 0) return -1;
+      KODAC_ARM_LINE_VERSION, lease->lease_identity, request->arm_operation_identity, request->runtime_instance_identity, subject->control_peer_binding_identity, request->runsc_artifact_identity, request->expected_runsc_sha256, lease->registry_record_identity, lease->clock_domain_identity, lease->boot_id, lease->lease_start_boottime_ns, lease->deadline_boottime_ns, lease->owner_instance_identity, lease->fence_token, lease->claim_record_identity, physical_ack_identity) < 0) return -1;
   return fflush(stdout) == 0 ? 0 : -1;
 }
 
@@ -752,10 +745,18 @@ static int emit_terminal(const arm_request *request, const lease_state *lease, c
   return fflush(stdout) == 0 ? 0 : -1;
 }
 
-static int verify_no_prior_lease(lease_registry *registry) {
+static int registry_entry_exists(int directory_fd, const char *name) {
   struct stat value;
-  if (fstatat(registry->directory_fd, registry->lease_name, &value, AT_SYMLINK_NOFOLLOW) == 0) return 1;
+  if (fstatat(directory_fd, name, &value, AT_SYMLINK_NOFOLLOW) == 0) return 1;
   return errno == ENOENT ? 0 : -1;
+}
+
+static int verify_no_prior_state(lease_registry *registry) {
+  int lease = registry_entry_exists(registry->directory_fd, registry->lease_name);
+  int claim = registry_entry_exists(registry->directory_fd, registry->claim_name);
+  int terminal = registry_entry_exists(registry->directory_fd, registry->terminal_name);
+  if (lease < 0 || claim < 0 || terminal < 0) return -1;
+  return lease || claim || terminal ? 1 : 0;
 }
 
 static int wait_for_terminal_after_signal(retained_subject *subject, char termination_identity[65]) {
@@ -763,7 +764,7 @@ static int wait_for_terminal_after_signal(retained_subject *subject, char termin
   int result;
   do { result = poll(&pfd, 1, KODAC_TERMINATION_ACK_TIMEOUT_MS); } while (result < 0 && errno == EINTR);
   if (result <= 0 || (pfd.revents & POLLIN) == 0) return -1;
-  return response_success(subject->wait_fd, 0, termination_identity, "WAIT_TERMINATION");
+  return response_success(subject->wait_fd, 0, termination_identity);
 }
 
 static int run_lease(const arm_request *request, lease_registry *registry, retained_subject *subject, lease_state *lease) {
@@ -793,8 +794,9 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
 
   if ((events[0].revents & POLLIN) != 0 && observed_ns < lease->deadline_boottime_ns) {
     char termination_identity[65];
-    if (response_success(subject->wait_fd, 0, termination_identity, "NATURAL_WAIT") != 0) { close(timer_fd); return indeterminate("pre-deadline Wait response is malformed or unsuccessful"); }
-    if (revalidate_retained_subject(request, subject) == 0) { close(timer_fd); return indeterminate("Wait reported exit but retained pidfd still reports the admitted process alive"); }
+    if (response_success(subject->wait_fd, 0, termination_identity) != 0) { close(timer_fd); return indeterminate("pre-deadline Wait response is malformed or unsuccessful"); }
+    int alive = pidfd_is_alive(subject->pidfd);
+    if (alive != 0) { close(timer_fd); return indeterminate(alive > 0 ? "Wait reported exit but admitted peer remains alive" : "cannot validate pidfd after natural exit"); }
     char exit_ns[32]; snprintf(exit_ns, sizeof(exit_ns), "%" PRIu64, observed_ns);
     char registry_terminal[65];
     if (durable_terminal(request, registry, lease, subject, "natural-exit", exit_ns, "-", "-", "-", "-", termination_identity, registry_terminal) != 0) { close(timer_fd); return indeterminate("cannot durably commit natural-exit terminal record"); }
@@ -810,7 +812,7 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   if (revalidate_retained_subject(request, subject) != 0) return indeterminate("exact admitted runsc peer is not live at expiry");
   if (send_rpc(subject->processes_fd, "containerManager.Processes", request->container_id, 0) != 0) return indeterminate("retained Processes request failed at expiry");
   char process_set_identity[65];
-  int process_result = response_success(subject->processes_fd, 1, process_set_identity, "PROCESS_SET");
+  int process_result = response_success(subject->processes_fd, 1, process_set_identity);
   if (process_result == 1) return indeterminate("retained Processes proved no live process at expiry; kill causality is not authorized");
   if (process_result != 0) return indeterminate("retained Processes response is malformed or unsuccessful");
   uint64_t after_processes = 0;
@@ -822,7 +824,7 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   if (hash_joined(live_probe_identity, "LIVE_AT_EXPIRY", live_parts, 5) != 0) return indeterminate("cannot derive live-at-expiry proof identity");
   if (send_rpc(subject->signal_fd, "containerManager.Signal", request->container_id, 1) != 0) return indeterminate("retained Signal request failed");
   char signal_identity[65];
-  if (response_success(subject->signal_fd, 0, signal_identity, "SIGNAL_ACK") != 0) return indeterminate("fixed SIGKILL-all signal was not acknowledged");
+  if (response_success(subject->signal_fd, 0, signal_identity) != 0) return indeterminate("fixed SIGKILL-all signal was not acknowledged");
   char termination_identity[65];
   if (wait_for_terminal_after_signal(subject, termination_identity) != 0) return indeterminate("terminal Wait acknowledgement missing after signal");
   char registry_terminal[65];
@@ -843,10 +845,10 @@ int main(int argc, char **argv) {
 
   lease_registry registry;
   if (open_registry(&request, &registry) != 0) return fail("trusted watchdog registry or exclusive lease lock is unavailable");
-  int prior = verify_no_prior_lease(&registry);
+  int prior = verify_no_prior_state(&registry);
   if (prior != 0) {
     close_if_open(&registry.lock_fd); close_if_open(&registry.directory_fd);
-    return prior > 0 ? indeterminate("existing durable lease requires recovery; pathname reconnect/re-arm is forbidden") : fail("cannot inspect durable lease registry state");
+    return prior > 0 ? indeterminate("existing durable lease/claim/terminal state requires recovery; pathname reconnect or fresh deadline is forbidden") : fail("cannot inspect durable lease registry state");
   }
 
   retained_subject subject;
