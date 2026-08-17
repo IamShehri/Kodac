@@ -63,7 +63,6 @@ interface TrustedArtifact {
   readonly artifact: GvisorObserverArtifact
 }
 
-function sha256Bytes(value: Uint8Array): string { return createHash("sha256").update(value).digest("hex") }
 function identity(value: unknown, label: string): string {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new TypeError(`${label} must be a lowercase SHA-256 identity`)
   return value
@@ -115,8 +114,17 @@ function readBoundedStream(stream: Readable, maximum: number, label: string, onO
     stream.once("end", () => { if (settled) return; settled = true; resolvePromise(Buffer.concat(chunks, total)) })
   })
 }
-function waitForChild(child: ChildProcess): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolvePromise, rejectPromise) => { child.once("error", rejectPromise); child.once("exit", (exitCode, signal) => resolvePromise({ exitCode, signal })) })
+interface ChildSettlement {
+  readonly exitCode: number | null
+  readonly signal: NodeJS.Signals | null
+  readonly error?: Error
+}
+function waitForChildSettlement(child: ChildProcess): Promise<ChildSettlement> {
+  return new Promise((resolvePromise) => {
+    let processError: Error | undefined
+    child.once("error", (error) => { processError = error instanceof Error ? error : new Error(String(error)) })
+    child.once("close", (exitCode, signal) => resolvePromise(Object.freeze({ exitCode, signal, ...(processError === undefined ? {} : { error: processError }) })))
+  })
 }
 async function runRetainedCommand(options: {
   executableFd: typeof KDO_H4_R3E_RUNSC_FD | typeof KDO_H4_R3E_HELPER_FD
@@ -132,15 +140,23 @@ async function runRetainedCommand(options: {
   const child = options.helperParentFd === undefined
     ? spawn(`/proc/self/fd/${options.executableFd}`, [...options.args], { cwd: "/", env: { LANG: "C", LC_ALL: "C" }, windowsHide: true, shell: false, timeout: options.timeoutMs, signal: options.signal, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe", options.runscParentFd] })
     : spawn(`/proc/self/fd/${options.executableFd}`, [...options.args], { cwd: "/", env: { LANG: "C", LC_ALL: "C" }, windowsHide: true, shell: false, timeout: options.timeoutMs, signal: options.signal, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe", options.runscParentFd, options.helperParentFd] })
+  const settlementPromise = waitForChildSettlement(child)
   const stdout = child.stdout; const stderr = child.stderr
-  if (!stdout || !stderr) { child.kill("SIGKILL"); throw new Error(`${options.label} did not expose bounded stdout/stderr`) }
+  if (!stdout || !stderr) {
+    child.kill("SIGKILL")
+    await settlementPromise
+    throw new Error(`${options.label} did not expose bounded stdout/stderr`)
+  }
   const kill = () => child.kill("SIGKILL")
   const stdoutPromise = readBoundedStream(stdout, options.maxStdoutBytes, `${options.label} stdout`, kill)
   const stderrPromise = readBoundedStream(stderr, KDO_H4_R3E_LIMITS.maxStderrBytes, `${options.label} stderr`, kill)
-  void stdoutPromise.catch(() => {}); void stderrPromise.catch(() => {})
-  const exit = await waitForChild(child); const [stdoutBytes, stderrBytes] = await Promise.all([stdoutPromise, stderrPromise])
-  if (exit.exitCode !== 0) throw new Error(`${options.label} failed: code=${String(exit.exitCode)} signal=${String(exit.signal)} stderr=${stderrBytes.toString("utf8")}`)
-  return stdoutBytes.toString("utf8")
+  const settlement = await settlementPromise
+  const [stdoutResult, stderrResult] = await Promise.allSettled([stdoutPromise, stderrPromise])
+  if (settlement.error !== undefined) throw settlement.error
+  if (stdoutResult.status === "rejected") throw stdoutResult.reason
+  if (stderrResult.status === "rejected") throw stderrResult.reason
+  if (settlement.exitCode !== 0) throw new Error(`${options.label} failed: code=${String(settlement.exitCode)} signal=${String(settlement.signal)} stderr=${stderrResult.value.toString("utf8")}`)
+  return stdoutResult.value.toString("utf8")
 }
 
 function abortReason(signal: AbortSignal, fallback: string): Error {
