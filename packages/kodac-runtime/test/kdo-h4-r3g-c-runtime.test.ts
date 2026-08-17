@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { createServer, type Server } from "node:net"
+import { createServer, type Server, type Socket } from "node:net"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -127,10 +127,10 @@ test("H4-R3G-C gateway ASK blocks before R3F or observer activity", async () => 
 test("H4-R3G-C Linux production gateway proves one shared-attempt loopback-only physical-network candidate", { skip: process.platform !== "linux" }, async (t) => {
   if(!requireIntegrationHost(t))return
   const root=mkdtempSync(join(tmpdir(),"kodac-r3gc-live-")), runtimeRoot=mkdtempSync(join(homedir(),".kodac-r3gc-runtime-")), workspace=join(root,"workspace"); mkdirSync(workspace)
-  const runscPath=compileFakeRunsc(root,runtimeRoot), helperPath=compileHelper(root), pidFile=join(runtimeRoot,"sandbox.pid"); let sandbox:ChildProcess|undefined; const server=createServer(); const socketPath=deriveGvisorNetworkControlSocketPath(runtimeRoot,CONTAINER_ID)
+  const runscPath=compileFakeRunsc(root,runtimeRoot), helperPath=compileHelper(root), pidFile=join(runtimeRoot,"sandbox.pid"); let sandbox:ChildProcess|undefined; const server=createServer(); const sockets=new Set<Socket>(); const socketPath=deriveGvisorNetworkControlSocketPath(runtimeRoot,CONTAINER_ID)
   try {
     sandbox=spawn(runscPath,["sandbox"],{stdio:"ignore",shell:false}); await waitForFile(pidFile)
-    let rpcCalls=0; server.on("connection",(socket)=>socket.on("data",(chunk)=>{assert.equal(chunk.toString("utf8"),'{"method":"containerManager.GetNetworkConfig","arg":{}}');rpcCalls+=1;socket.write(topologyResponse())}))
+    let rpcCalls=0; server.on("connection",(socket)=>{sockets.add(socket);socket.once("close",()=>sockets.delete(socket));socket.on("data",(chunk)=>{assert.equal(chunk.toString("utf8"),'{"method":"containerManager.GetNetworkConfig","arg":{}}');rpcCalls+=1;socket.write(topologyResponse())})})
     await new Promise<void>((resolve,reject)=>server.listen(socketPath,(error?:Error)=>error?reject(error):resolve()))
     const requirement=fixtureRequirement(); const lineageRecords:GvisorRuntimeLineageRecord[]=[]; const attempts:string[]=[]
     let resolver!: DockerControlPlaneBindingProvider["resolveContainerBinding"]
@@ -143,6 +143,7 @@ test("H4-R3G-C Linux production gateway proves one shared-attempt loopback-only 
     const receipts:ExecutionReceipt[]=[]; const record=await gateway.observeGvisorPhysicalNetwork(requirement,{onReceipt(receipt){receipts.push(receipt)}})
     assert.equal(record.evidenceClass,KDO_H4_R3G_C_EVIDENCE_CLASS);assert.equal(record.executionAttemptIdentity,attempts[0]);assert.equal(lineageRecords.length,2);assert.equal(lineageRecords[0]?.executionAttemptIdentity,record.executionAttemptIdentity);assert.equal(lineageRecords[1]?.executionAttemptIdentity,record.executionAttemptIdentity);assert.equal(committed?.recordIdentity,record.recordIdentity);assert.equal(rpcCalls,2);assert.equal(receipts.length,1);assert.equal(receipts[0]?.capability,KDO_H4_R3G_C_CAPABILITY);assert.equal(receipts[0]?.result.status,"success")
   } finally {
+    for(const socket of sockets)socket.destroy()
     if(server.listening)await closeServer(server)
     if(sandbox!==undefined&&sandbox.exitCode===null&&sandbox.signalCode===null){const exited=new Promise<void>((resolve)=>sandbox?.once("exit",()=>resolve()));sandbox.kill("SIGKILL");await exited}
     rmSync(runtimeRoot,{recursive:true,force:true});rmSync(root,{recursive:true,force:true})
