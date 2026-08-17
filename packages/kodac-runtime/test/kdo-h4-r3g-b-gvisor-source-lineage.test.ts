@@ -677,6 +677,8 @@ test("H4-R3G-B Linux production gateway proves one exact physical source lineage
   const workspace = join(scratch, "workspace")
   const dockerSocketPath = join(scratch, "docker.sock")
   const pidFile = join(runtimeRoot, "sandbox.pid")
+  const runscLogPath = join(scratch, "runsc.log")
+  const ctrLogPath = join(scratch, "ctr.log")
   const uid = process.getuid()
   const gid = process.getgid()
   let overlayMounted = false
@@ -716,11 +718,12 @@ test("H4-R3G-B Linux production gateway proves one exact physical source lineage
     if (sandbox.exitCode === null && sandbox.signalCode === null) sandbox.kill("SIGKILL")
     if (sandbox.exitCode === null && sandbox.signalCode === null) await new Promise<void>((resolve) => sandbox?.once("exit", () => resolve()))
   }
+  const logCount = (path: string) => fs.existsSync(path) ? fs.readFileSync(path).byteLength : 0
 
   try {
     fs.mkdirSync(runtimeRoot)
     fs.mkdirSync(workspace)
-    const fakeRunsc = compileC("fake-runsc-r3g-b", `#define _GNU_SOURCE\n#include <signal.h>\n#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\nstatic const char *PIDFILE="${cString(pidFile)}";\nstatic int write_pid(void){FILE*f=fopen(PIDFILE,"w");if(!f)return 125;if(fprintf(f,"%ld\\n",(long)getpid())<0){fclose(f);return 125;}return fclose(f)==0?0:125;}\nstatic long read_pid(void){FILE*f=fopen(PIDFILE,"r");long p=0;if(!f)return 0;if(fscanf(f,"%ld",&p)!=1)p=0;fclose(f);return p;}\nint main(int argc,char**argv){if(argc==2&&strcmp(argv[1],"sandbox")==0){if(write_pid()!=0)return 125;for(;;)pause();}if(argc>=5&&strcmp(argv[1],"--root")==0){if(strcmp(argv[3],"state")==0&&argc==5){long p=read_pid();if(p<=0)return 125;printf("{\\\"ociVersion\\\":\\\"1.2.0\\\",\\\"id\\\":\\\"%s\\\",\\\"status\\\":\\\"running\\\",\\\"pid\\\":%ld,\\\"bundle\\\":\\\"/run/kodac/%s\\\"}\\n",argv[4],p,argv[4]);return 0;}if(strcmp(argv[3],"events")==0&&argc==6&&strcmp(argv[4],"--stats")==0){printf("{\\\"type\\\":\\\"stats\\\",\\\"id\\\":\\\"%s\\\",\\\"data\\\":{\\\"cpu\\\":{\\\"usage\\\":1}}}\\n",argv[5]);return 0;}}return 125;}\n`)
+    const fakeRunsc = compileC("fake-runsc-r3g-b", `#define _GNU_SOURCE\n#include <fcntl.h>\n#include <signal.h>\n#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\nstatic const char *PIDFILE="${cString(pidFile)}",*LOGFILE="${cString(runscLogPath)}";\nstatic void log_call(void){int fd=open(LOGFILE,O_WRONLY|O_CREAT|O_APPEND,0600);if(fd>=0){(void)!write(fd,"1",1);(void)close(fd);}}\nstatic int write_pid(void){FILE*f=fopen(PIDFILE,"w");if(!f)return 125;if(fprintf(f,"%ld\\n",(long)getpid())<0){fclose(f);return 125;}return fclose(f)==0?0:125;}\nstatic long read_pid(void){FILE*f=fopen(PIDFILE,"r");long p=0;if(!f)return 0;if(fscanf(f,"%ld",&p)!=1)p=0;fclose(f);return p;}\nint main(int argc,char**argv){if(argc==2&&strcmp(argv[1],"sandbox")==0){if(write_pid()!=0)return 125;for(;;)pause();}if(argc>=5&&strcmp(argv[1],"--root")==0){if(strcmp(argv[3],"state")==0&&argc==5){log_call();long p=read_pid();if(p<=0)return 125;printf("{\\\"ociVersion\\\":\\\"1.2.0\\\",\\\"id\\\":\\\"%s\\\",\\\"status\\\":\\\"running\\\",\\\"pid\\\":%ld,\\\"bundle\\\":\\\"/run/kodac/%s\\\"}\\n",argv[4],p,argv[4]);return 0;}if(strcmp(argv[3],"events")==0&&argc==6&&strcmp(argv[4],"--stats")==0){log_call();printf("{\\\"type\\\":\\\"stats\\\",\\\"id\\\":\\\"%s\\\",\\\"data\\\":{\\\"cpu\\\":{\\\"usage\\\":1}}}\\n",argv[5]);return 0;}}return 125;}\n`)
     const nativeHelper = fileURLToPath(new URL("../native/gvisor-proc-observe.c", import.meta.url))
     const helperPath = join(scratch, "kodac-gvisor-proc-observe")
     run("cc", ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", nativeHelper, "-o", helperPath])
@@ -742,7 +745,7 @@ test("H4-R3G-B Linux production gateway proves one exact physical source lineage
     sudo("chmod", "0755", secureRunRoot)
 
     const expectedChainId = deriveGvisorSourceImageChainId([DIFF_A, DIFF_B])
-    const compiledCtr = compileC("fake-ctr-r3g-b", `#include <stdio.h>\n#include <string.h>\nstatic const char *ADDRESS="${cString(containerdAddress)}",*CID="${CONTAINER_ID}",*ROOTFS="${cString(rootfsMountPath)}",*CHAIN="${cString(expectedChainId)}";\nint main(int argc,char**argv){if(argc==8&&strcmp(argv[1],"--address")==0&&strcmp(argv[2],ADDRESS)==0&&strcmp(argv[3],"--namespace")==0&&strcmp(argv[4],"moby")==0&&strcmp(argv[5],"containers")==0&&strcmp(argv[6],"info")==0&&strcmp(argv[7],CID)==0){printf("{\\\"ID\\\":\\\"%s\\\",\\\"Spec\\\":{\\\"root\\\":{\\\"path\\\":\\\"%s\\\"}}}\\n",CID,ROOTFS);return 0;}if(argc==10&&strcmp(argv[1],"--address")==0&&strcmp(argv[2],ADDRESS)==0&&strcmp(argv[3],"--namespace")==0&&strcmp(argv[4],"moby")==0&&strcmp(argv[5],"snapshots")==0&&strcmp(argv[6],"--snapshotter")==0&&strcmp(argv[7],"overlayfs")==0&&strcmp(argv[8],"info")==0){if(strcmp(argv[9],CID)==0){printf("{\\\"Kind\\\":\\\"Active\\\",\\\"Name\\\":\\\"%s\\\",\\\"Parent\\\":\\\"%s\\\"}\\n",CID,CHAIN);return 0;}if(strcmp(argv[9],CHAIN)==0){printf("{\\\"Kind\\\":\\\"Committed\\\",\\\"Name\\\":\\\"%s\\\"}\\n",CHAIN);return 0;}}return 125;}\n`)
+    const compiledCtr = compileC("fake-ctr-r3g-b", `#include <fcntl.h>\n#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\nstatic const char *ADDRESS="${cString(containerdAddress)}",*CID="${CONTAINER_ID}",*ROOTFS="${cString(rootfsMountPath)}",*CHAIN="${cString(expectedChainId)}",*LOGFILE="${cString(ctrLogPath)}";\nstatic void log_call(void){int fd=open(LOGFILE,O_WRONLY|O_CREAT|O_APPEND,0600);if(fd>=0){(void)!write(fd,"1",1);(void)close(fd);}}\nint main(int argc,char**argv){if(argc==8&&strcmp(argv[1],"--address")==0&&strcmp(argv[2],ADDRESS)==0&&strcmp(argv[3],"--namespace")==0&&strcmp(argv[4],"moby")==0&&strcmp(argv[5],"containers")==0&&strcmp(argv[6],"info")==0&&strcmp(argv[7],CID)==0){log_call();printf("{\\\"ID\\\":\\\"%s\\\",\\\"Spec\\\":{\\\"root\\\":{\\\"path\\\":\\\"%s\\\"}}}\\n",CID,ROOTFS);return 0;}if(argc==10&&strcmp(argv[1],"--address")==0&&strcmp(argv[2],ADDRESS)==0&&strcmp(argv[3],"--namespace")==0&&strcmp(argv[4],"moby")==0&&strcmp(argv[5],"snapshots")==0&&strcmp(argv[6],"--snapshotter")==0&&strcmp(argv[7],"overlayfs")==0&&strcmp(argv[8],"info")==0){if(strcmp(argv[9],CID)==0){log_call();printf("{\\\"Kind\\\":\\\"Active\\\",\\\"Name\\\":\\\"%s\\\",\\\"Parent\\\":\\\"%s\\\"}\\n",CID,CHAIN);return 0;}if(strcmp(argv[9],CHAIN)==0){log_call();printf("{\\\"Kind\\\":\\\"Committed\\\",\\\"Name\\\":\\\"%s\\\"}\\n",CHAIN);return 0;}}return 125;}\n`)
     sudo("install", "-o", "root", "-g", "root", "-m", "0755", compiledCtr, ctrPath)
     sudo("mount", "-t", "overlay", "overlay", "-o", `lowerdir=${lowerDir},upperdir=${upperDir},workdir=${workDir}`, rootfsMountPath)
     overlayMounted = true
@@ -759,6 +762,16 @@ test("H4-R3G-B Linux production gateway proves one exact physical source lineage
     const listPath = `/v${r3f.KDO_H4_R3F_DOCKER_API_VERSION}/containers/json?all=1&filters=${encodeURIComponent(filters)}`
     const inspectPath = `/v${r3f.KDO_H4_R3F_DOCKER_API_VERSION}/containers/${CONTAINER_ID}/json?size=0`
     const sourceImagePath = expectedSourceImagePath(requirement)
+    const expectedObservationRequests = [
+      `GET ${listPath}`,
+      `GET ${inspectPath}`,
+      `GET /v1.48/info`,
+      `GET ${sourceImagePath}`,
+      `GET ${listPath}`,
+      `GET ${inspectPath}`,
+      `GET /v1.48/info`,
+      `GET ${sourceImagePath}`,
+    ]
     const requests: string[] = []
     const inspect = {
       Id: CONTAINER_ID,
@@ -826,7 +839,14 @@ test("H4-R3G-B Linux production gateway proves one exact physical source lineage
     })
     const endpointStat = fs.lstatSync(containerdAddress, { bigint: true })
     assert.equal(endpointStat.isSocket(), true)
+    type SourceRecord = import("../src/trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRecord
+    type SourceCommitHandler = (record: SourceRecord) => Promise<unknown> | unknown
     const committed: string[] = []
+    const baselineCommitHandler: SourceCommitHandler = (record) => {
+      committed.push(sourceContract.serializeGvisorSourceLineageRecord(record))
+      return sourceContract.createGvisorSourceLineageCommit(record)
+    }
+    let commitHandler: SourceCommitHandler = baselineCommitHandler
     const sourceRuntime = sourceContract.validateGvisorSourceLineageRuntimeConfig({
       version: sourceContract.KDO_H4_R3G_B_RUNTIME_CONFIG_VERSION,
       ctrPath,
@@ -835,9 +855,8 @@ test("H4-R3G-B Linux production gateway proves one exact physical source lineage
       expectedContainerdSocketUid: endpointStat.uid.toString(),
       expectedContainerdSocketGid: endpointStat.gid.toString(),
       expectedContainerdSocketMode: endpointStat.mode.toString(),
-      commitSourceLineageEvidence(record: import("../src/trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRecord) {
-        committed.push(sourceContract.serializeGvisorSourceLineageRecord(record))
-        return sourceContract.createGvisorSourceLineageCommit(record)
+      commitSourceLineageEvidence(record: SourceRecord) {
+        return commitHandler(record)
       },
     })
     const gateway = new ExecutionGateway(new NodeWorkspaceFileSystem(workspace), fixedPolicy("allow"), undefined, undefined, r3eRuntime, undefined, sourceRuntime)
@@ -849,16 +868,110 @@ test("H4-R3G-B Linux production gateway proves one exact physical source lineage
     assert.equal(record.expectedImageChainId, expectedChainId)
     assert.equal(committed.length, 1)
     assert.equal(committed[0], sourceContract.serializeGvisorSourceLineageRecord(record))
-    assert.deepEqual(requests, [
-      `GET ${listPath}`,
-      `GET ${inspectPath}`,
-      `GET /v1.48/info`,
-      `GET ${sourceImagePath}`,
-      `GET ${listPath}`,
-      `GET ${inspectPath}`,
-      `GET /v1.48/info`,
-      `GET ${sourceImagePath}`,
-    ])
+    assert.deepEqual(requests, expectedObservationRequests)
+
+    await t.test("H4-R3G-B lost acknowledgment remains failed and later invocation performs fresh full observation", async () => {
+      const replayStore = new Map<string, string>()
+      const putReplayRecord = (value: SourceRecord) => {
+        const validated = sourceContract.validateGvisorSourceLineageRecord(value)
+        const bytes = sourceContract.serializeGvisorSourceLineageRecord(validated)
+        const existing = replayStore.get(validated.recordIdentity)
+        if (existing !== undefined && existing !== bytes) throw new Error("R3G-B replay fixture integrity violation")
+        if (existing === undefined) replayStore.set(validated.recordIdentity, bytes)
+        return { validated, bytes }
+      }
+      const replayStartRequests = requests.length
+      const runscStart = logCount(runscLogPath)
+      const ctrStart = logCount(ctrLogPath)
+      const firstController = new AbortController()
+      let firstRecord: SourceRecord | undefined
+      let firstCommitCalls = 0
+      let resolveLateAck: (() => void) | undefined
+      let firstTerminal: "pending" | "success" | "failure" = "pending"
+
+      try {
+        commitHandler = (candidate) => {
+          firstCommitCalls += 1
+          const stored = putReplayRecord(candidate)
+          firstRecord = stored.validated
+          const ack = sourceContract.createGvisorSourceLineageCommit(stored.validated)
+          return new Promise<unknown>((resolve) => {
+            resolveLateAck = () => resolve(ack)
+            setImmediate(() => firstController.abort())
+          })
+        }
+        const firstGateway = new ExecutionGateway(new NodeWorkspaceFileSystem(workspace), fixedPolicy("allow"), undefined, undefined, r3eRuntime, undefined, sourceRuntime)
+        const firstOperation = firstGateway.observeGvisorSourceLineage(requirement, undefined, { signal: firstController.signal }).then(
+          (value) => { firstTerminal = "success"; return value },
+          (error) => { firstTerminal = "failure"; throw error },
+        )
+        await assert.rejects(firstOperation, /aborted/)
+        assert.equal(firstTerminal, "failure")
+        assert.equal(firstCommitCalls, 1)
+        assert.notEqual(firstRecord, undefined)
+        const failedRecord = firstRecord as SourceRecord
+        assert.equal(replayStore.get(failedRecord.recordIdentity), sourceContract.serializeGvisorSourceLineageRecord(failedRecord))
+        assert.deepEqual(requests.slice(replayStartRequests), expectedObservationRequests)
+        const runscAfterFirst = logCount(runscLogPath)
+        const ctrAfterFirst = logCount(ctrLogPath)
+        assert.ok(runscAfterFirst > runscStart, "observation #1 must freshly execute R3E runsc reads")
+        assert.ok(ctrAfterFirst > ctrStart, "observation #1 must freshly execute ctr reads")
+
+        assert.notEqual(resolveLateAck, undefined)
+        resolveLateAck!()
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        assert.equal(firstTerminal, "failure")
+        assert.equal(firstCommitCalls, 1, "lost acknowledgment must not cause blind same-invocation retry")
+
+        let freshCommitCalls = 0
+        commitHandler = (candidate) => {
+          freshCommitCalls += 1
+          const stored = putReplayRecord(candidate)
+          return sourceContract.createGvisorSourceLineageCommit(stored.validated)
+        }
+        const freshGateway = new ExecutionGateway(new NodeWorkspaceFileSystem(workspace), fixedPolicy("allow"), undefined, undefined, r3eRuntime, undefined, sourceRuntime)
+        const freshRecord = await freshGateway.observeGvisorSourceLineage(requirement)
+        assert.equal(freshCommitCalls, 1)
+        assert.deepEqual(
+          requests.slice(replayStartRequests),
+          [...expectedObservationRequests, ...expectedObservationRequests],
+          "later recovery must repeat the complete R3F Docker observation from the beginning",
+        )
+        const runscAfterFresh = logCount(runscLogPath)
+        const ctrAfterFresh = logCount(ctrLogPath)
+        assert.ok(runscAfterFresh > runscAfterFirst, "observation #2 must freshly execute R3E runsc reads")
+        assert.ok(ctrAfterFresh > ctrAfterFirst, "observation #2 must freshly execute ctr reads")
+        assert.equal(runscAfterFresh - runscAfterFirst, runscAfterFirst - runscStart)
+        assert.equal(ctrAfterFresh - ctrAfterFirst, ctrAfterFirst - ctrStart)
+
+        assert.notEqual(freshRecord.executionAttemptIdentity, failedRecord.executionAttemptIdentity)
+        assert.notEqual(freshRecord.containerBindingIdentity, failedRecord.containerBindingIdentity)
+        assert.notEqual(freshRecord.runtimeLineageIdentity, failedRecord.runtimeLineageIdentity)
+        assert.notEqual(freshRecord.recordIdentity, failedRecord.recordIdentity)
+        for (const field of [
+          "requirementIdentity",
+          "workloadIdentity",
+          "containerId",
+          "sourceDigest",
+          "dockerStorageIdentity",
+          "imageRootfsIdentity",
+          "expectedImageChainId",
+          "ctrArtifactIdentity",
+          "containerdEndpointIdentity",
+          "rootfsParentAuthorityIdentity",
+          "containerSpecIdentity",
+          "snapshotAncestryIdentity",
+          "rootfsMountIdentity",
+        ] as const) {
+          assert.equal(freshRecord[field], failedRecord[field], `${field} must remain physically stable across the fresh observation`)
+        }
+        assert.equal(replayStore.size, 2)
+        assert.equal(replayStore.get(freshRecord.recordIdentity), sourceContract.serializeGvisorSourceLineageRecord(freshRecord))
+      } finally {
+        resolveLateAck?.()
+        commitHandler = baselineCommitHandler
+      }
+    })
   } finally {
     await closeServer(dockerServer).catch(() => {})
     await closeServer(containerdServer).catch(() => {})
