@@ -121,16 +121,28 @@ async function waitForFile(path: string): Promise<void> {
 function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex")
 }
+function trustedShortRoot(): string { return mkdtempSync(join(homedir(), ".k")) }
+function fixtureSocketPath(root: string): string {
+  const path = deriveGvisorNetworkControlSocketPath(root, CONTAINER_ID)
+  assert.ok(Buffer.byteLength(path, "utf8") <= 107, `R3G-C replay fixture socket path too long: ${path}`)
+  return path
+}
 async function reapSandbox(sandbox: ChildProcess | undefined): Promise<void> {
   if (sandbox === undefined || sandbox.exitCode !== null || sandbox.signalCode !== null) return
   const exited = new Promise<void>((resolve) => sandbox.once("exit", () => resolve()))
-  sandbox.kill("SIGKILL")
-  await exited
+  assert.equal(sandbox.kill("SIGKILL"), true, "R3G-C replay fixture sandbox SIGKILL must be delivered")
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("R3G-C replay fixture sandbox did not exit within 2000ms")), 2000) })
+  try { await Promise.race([exited, timeout]) } finally { if (timer !== undefined) clearTimeout(timer) }
 }
 async function closeServer(server: Server, sockets: Set<Socket>): Promise<void> {
+  let closePromise: Promise<void> | undefined
+  if (server.listening) closePromise = new Promise<void>((resolve, reject) => server.close((error?: Error) => error ? reject(error) : resolve()))
   for (const socket of sockets) socket.destroy()
-  if (!server.listening) return
-  await new Promise<void>((resolve) => server.close(() => resolve()))
+  if (closePromise === undefined) return
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("R3G-C replay fixture server did not close within 2000ms")), 2000) })
+  try { await Promise.race([closePromise, timeout]) } finally { if (timer !== undefined) clearTimeout(timer); server.unref() }
 }
 function fakeProvider(
   requirement: SandboxExecutionRequirement,
@@ -183,13 +195,13 @@ test("H4-R3G-C lost acknowledgment remains failed and later invocation repeats f
   }
 
   const scratch = mkdtempSync(join(tmpdir(), "kodac-r3gc-replay-"))
-  const runtimeRoot = mkdtempSync(join(homedir(), ".r3r-"))
+  const runtimeRoot = trustedShortRoot()
   const workspace = join(scratch, "workspace")
   mkdirSync(workspace)
   const runscPath = compileFakeRunsc(scratch, runtimeRoot)
   const helperPath = compileHelper(scratch)
   const pidFile = join(runtimeRoot, "sandbox.pid")
-  const socketPath = deriveGvisorNetworkControlSocketPath(runtimeRoot, CONTAINER_ID)
+  const socketPath = fixtureSocketPath(runtimeRoot)
   let sandbox: ChildProcess | undefined
   const server = createServer()
   const sockets = new Set<Socket>()
@@ -311,8 +323,8 @@ test("H4-R3G-C lost acknowledgment remains failed and later invocation repeats f
     assert.equal(store.size, 2)
   } finally {
     resolveLateAck?.()
-    await reapSandbox(sandbox).catch(() => {})
-    await closeServer(server, sockets).catch(() => {})
+    await reapSandbox(sandbox)
+    await closeServer(server, sockets)
     rmSync(runtimeRoot, { recursive: true, force: true })
     rmSync(scratch, { recursive: true, force: true })
   }
