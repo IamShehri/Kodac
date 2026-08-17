@@ -111,7 +111,7 @@ test("H4-R3G-C response timeout is created only after the Unix socket emits conn
 
     Socket.prototype.emit = (function (this: Socket, event: string | symbol, ...args: any[]): boolean {
       if (event === "connect") connectEmitted = true
-      return originalEmit.call(this, event, ...args)
+      return Reflect.apply(originalEmit as (...emitArgs: any[]) => boolean, this, [event, ...args])
     }) as typeof Socket.prototype.emit
 
     globalThis.setTimeout = ((callback: (...args: any[]) => void, delay?: number, ...args: any[]) => {
