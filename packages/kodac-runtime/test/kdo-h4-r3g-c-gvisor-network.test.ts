@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, unlinkSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, unlinkSync } from "node:fs"
 import { createServer, type Server } from "node:net"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -131,6 +131,12 @@ function observationRead(endpoint = syntheticEndpoint()): GvisorNetworkObservati
   return Object.freeze({ endpointBefore: endpoint, endpointAfter: endpoint, topology })
 }
 function trustedUid(): string { return typeof process.getuid === "function" ? String(process.getuid()) : "0" }
+function trustedShortRoot(): string { return mkdtempSync(join(homedir(), ".k")) }
+function fixtureSocketPath(root: string): string {
+  const path = deriveGvisorNetworkControlSocketPath(root, CONTAINER_ID)
+  assert.ok(Buffer.byteLength(path, "utf8") <= 107, `R3G-C fixture socket path too long: ${path}`)
+  return path
+}
 async function closeServer(server: Server): Promise<void> { await new Promise<void>((resolve) => server.close(() => resolve())) }
 
 test("H4-R3G-C constants and runtime config preserve bounded theorem", () => {
@@ -214,14 +220,15 @@ test("H4-R3G-C exact endpoint derivation never falls back or accepts alternate i
   assert.throws(() => deriveGvisorNetworkControlSocketPath("/run/runsc", "short"))
 })
 
-test("H4-R3G-C runtimeRoot authority rejects a world-writable ancestor", { skip: process.platform !== "linux" }, async () => {
+test("H4-R3G-C runtimeRoot authority rejects a world-writable ancestor", { skip: process.platform !== "linux" }, async (t) => {
+  if ((statSync("/tmp").mode & 0o022) === 0) { t.skip("/tmp is not group/world writable on this host"); return }
   const root = mkdtempSync("/tmp/kodac-r3gc-untrusted-")
-  try { await assert.rejects(observeGvisorNetworkRuntimeRootAuthority(root, trustedUid()), /group\/world writable/) }
+  try { await assert.rejects(observeGvisorNetworkRuntimeRootAuthority(root, trustedUid()), /runtimeRoot component \/tmp must not be group\/world writable/) }
   finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 test("H4-R3G-C live fixed uRPC uses only exact derived socket and canonical request", { skip: process.platform !== "linux" }, async () => {
-  const root = mkdtempSync(join(homedir(), ".r3gc-live-")); const socketPath = deriveGvisorNetworkControlSocketPath(root, CONTAINER_ID); const server = createServer()
+  const root = trustedShortRoot(); const socketPath = fixtureSocketPath(root); const server = createServer()
   try {
     let request = ""
     server.on("connection", (socket) => socket.on("data", (chunk) => { request += chunk.toString("utf8"); if (request === `{"method":"${KDO_H4_R3G_C_URPC_METHOD}","arg":{}}`) socket.write(responseFor()) }))
@@ -234,15 +241,20 @@ test("H4-R3G-C live fixed uRPC uses only exact derived socket and canonical requ
 })
 
 test("H4-R3G-C exact endpoint absence fails even when a fallback socket exists", { skip: process.platform !== "linux" }, async () => {
-  const root = mkdtempSync(join(homedir(), ".r3gc-missing-")); const fallback = join(root, "fallback.sock"); const server = createServer()
+  const root = trustedShortRoot(); const expectedPath = fixtureSocketPath(root); const fallback = join(root, "fallback.sock"); const server = createServer()
   try {
     await new Promise<void>((resolve, reject) => server.listen(fallback, (error?: Error) => error ? reject(error) : resolve()))
-    await assert.rejects(snapshotGvisorNetworkControlEndpoint({ runtimeRoot: root, containerId: CONTAINER_ID, trustedHostUid: trustedUid() }))
+    await assert.rejects(snapshotGvisorNetworkControlEndpoint({ runtimeRoot: root, containerId: CONTAINER_ID, trustedHostUid: trustedUid() }), (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      assert.ok(message.includes(expectedPath), `selected endpoint error must identify ${expectedPath}: ${message}`)
+      assert.ok(!message.includes(fallback), "R3G-C must not reach fallback socket")
+      return true
+    })
   } finally { if (server.listening) await closeServer(server); rmSync(root, { recursive: true, force: true }) }
 })
 
 test("H4-R3G-C endpoint rejects symlink and non-socket replacements", { skip: process.platform !== "linux" }, async () => {
-  const root = mkdtempSync(join(homedir(), ".r3gc-types-")); const path = deriveGvisorNetworkControlSocketPath(root, CONTAINER_ID); const target = join(root, "target")
+  const root = trustedShortRoot(); const path = fixtureSocketPath(root); const target = join(root, "target")
   try {
     writeFileSync(target, "not socket"); symlinkSync(target, path)
     await assert.rejects(snapshotGvisorNetworkControlEndpoint({ runtimeRoot: root, containerId: CONTAINER_ID, trustedHostUid: trustedUid() }), /Unix socket/)
@@ -252,7 +264,7 @@ test("H4-R3G-C endpoint rejects symlink and non-socket replacements", { skip: pr
 })
 
 test("H4-R3G-C endpoint replacement during fixed RPC fails the complete read", { skip: process.platform !== "linux" }, async () => {
-  const root = mkdtempSync(join(homedir(), ".r3gc-swap-")); const path = deriveGvisorNetworkControlSocketPath(root, CONTAINER_ID); const first = createServer(); const replacement = createServer()
+  const root = trustedShortRoot(); const path = fixtureSocketPath(root); const first = createServer(); const replacement = createServer()
   try {
     first.on("connection", (socket) => socket.once("data", () => {
       unlinkSync(path)
@@ -269,7 +281,7 @@ test("H4-R3G-C endpoint replacement during fixed RPC fails the complete read", {
 })
 
 test("H4-R3G-C cancellation closes owned transport and late bytes cannot become success", { skip: process.platform !== "linux" }, async () => {
-  const root = mkdtempSync(join(homedir(), ".r3gc-cancel-")); const path = deriveGvisorNetworkControlSocketPath(root, CONTAINER_ID); const server = createServer(); const abort = new AbortController()
+  const root = trustedShortRoot(); const path = fixtureSocketPath(root); const server = createServer(); const abort = new AbortController()
   try {
     server.on("connection", (socket) => socket.once("data", () => setTimeout(() => { if (!socket.destroyed) socket.write(responseFor()) }, 50)))
     await new Promise<void>((resolve, reject) => server.listen(path, (error?: Error) => error ? reject(error) : resolve()))
