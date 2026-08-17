@@ -30,6 +30,7 @@ export const KDO_H4_R3G_D_CAPABILITY = "runtime.enforce.gvisor.ttl" as const
 export const KDO_H4_R3G_D_RUNTIME_CONFIG_VERSION = "kodac-h4-r3g-d-runtime-config-v1" as const
 export const KDO_H4_R3G_D_SUBJECT_VERSION = "kodac-h4-r3g-d-subject-binding-v1" as const
 export const KDO_H4_R3G_D_PREPARED_VERSION = "kodac-h4-r3g-d-arm-intent-v1" as const
+export const KDO_H4_R3G_D_CONTROL_PEER_VERSION = "kodac-h4-r3g-d-control-peer-v1" as const
 export const KDO_H4_R3G_D_WATCHDOG_LEASE_VERSION = "kodac-h4-r3g-d-watchdog-lease-v1" as const
 export const KDO_H4_R3G_D_ARM_ACK_VERSION = "kodac-h4-r3g-d-arm-ack-v1" as const
 export const KDO_H4_R3G_D_ARM_RECORD_VERSION = "kodac-h4-r3g-d-arm-record-v1" as const
@@ -84,6 +85,24 @@ export interface GvisorTtlPreparedIntent {
   readonly intentIdentity: string
 }
 
+export interface GvisorTtlControlPeerBinding {
+  readonly version: typeof KDO_H4_R3G_D_CONTROL_PEER_VERSION
+  readonly runtimeInstanceIdentity: string
+  readonly socketDevice: string
+  readonly socketInode: string
+  readonly peerPid: number
+  readonly peerUid: string
+  readonly peerGid: string
+  readonly processStartTicks: string
+  readonly executableDevice: string
+  readonly executableInode: string
+  readonly executableSize: string
+  readonly runscArtifactIdentity: string
+  readonly verifiedRunscSha256: string
+  readonly helperProtocolVersion: typeof KDO_H4_R3G_D_WATCHDOG_PROTOCOL_VERSION
+  readonly controlPeerBindingIdentity: string
+}
+
 export interface GvisorTtlWatchdogLeaseRecord {
   readonly version: typeof KDO_H4_R3G_D_WATCHDOG_LEASE_VERSION
   readonly armOperationIdentity: string
@@ -110,6 +129,7 @@ export interface GvisorTtlArmAcknowledgement {
   readonly leaseIdentity: string
   readonly armOperationIdentity: string
   readonly runtimeInstanceIdentity: string
+  readonly controlPeer: GvisorTtlControlPeerBinding
   readonly controlPeerBindingIdentity: string
   readonly runscArtifactIdentity: string
   readonly verifiedRunscSha256: string
@@ -138,6 +158,7 @@ export interface GvisorTtlArmRecord {
   readonly runtimeInstanceIdentity: string
   readonly ttlMs: number
   readonly watchdogImplementationIdentity: string
+  readonly controlPeer: GvisorTtlControlPeerBinding
   readonly controlPeerBindingIdentity: string
   readonly runscArtifactIdentity: string
   readonly verifiedRunscSha256: string
@@ -340,7 +361,8 @@ export function validateGvisorTtlPreparedIntent(value: unknown): GvisorTtlPrepar
   exactKeys(record, ["version", "state", "armOperationIdentity", "executionAttemptIdentity", "requirementIdentity", "workloadIdentity", "containerBindingIdentity", "containerId", "runtimeInstanceIdentity", "ttlMs", "watchdogImplementationIdentity", "canonicalArmPayloadDigest", "intentIdentity"], "R3G-D prepared intent")
   if (record.version !== KDO_H4_R3G_D_PREPARED_VERSION || record.state !== "PREPARED") throw new TypeError("R3G-D prepared intent version/state mismatch")
   const armPayload = Object.freeze({ executionAttemptIdentity: identity(record.executionAttemptIdentity, "executionAttemptIdentity"), requirementIdentity: identity(record.requirementIdentity, "requirementIdentity"), workloadIdentity: identity(record.workloadIdentity, "workloadIdentity"), containerBindingIdentity: identity(record.containerBindingIdentity, "containerBindingIdentity"), containerId: fullContainerId(record.containerId), runtimeInstanceIdentity: identity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity"), ttlMs: positiveTtl(record.ttlMs), watchdogImplementationIdentity: identity(record.watchdogImplementationIdentity, "watchdogImplementationIdentity") })
-  const canonicalArmPayloadDigest = hash("ARM_PAYLOAD", armPayload); const armOperationIdentity = hash("ARM_OPERATION", armPayload)
+  const canonicalArmPayloadDigest = hash("ARM_PAYLOAD", armPayload)
+  const armOperationIdentity = hash("ARM_OPERATION", armPayload)
   if (identity(record.canonicalArmPayloadDigest, "canonicalArmPayloadDigest") !== canonicalArmPayloadDigest || identity(record.armOperationIdentity, "armOperationIdentity") !== armOperationIdentity) throw new TypeError("R3G-D prepared arm identity mismatch")
   const base = Object.freeze({ version: KDO_H4_R3G_D_PREPARED_VERSION, state: "PREPARED" as const, armOperationIdentity, ...armPayload, canonicalArmPayloadDigest })
   const intentIdentity = hash("PREPARED_INTENT", base)
@@ -348,17 +370,150 @@ export function validateGvisorTtlPreparedIntent(value: unknown): GvisorTtlPrepar
   return Object.freeze({ ...base, intentIdentity })
 }
 
-export function createGvisorTtlClockDomainIdentity(linuxBootIdValue: string): string { return hash("CLOCK_DOMAIN", [bootId(linuxBootIdValue), KDO_H4_R3G_D_CLOCK_NAME]) }
+export function createGvisorTtlClockDomainIdentity(linuxBootIdValue: string): string {
+  return hash("CLOCK_DOMAIN", [bootId(linuxBootIdValue), KDO_H4_R3G_D_CLOCK_NAME])
+}
 
-export function validateGvisorTtlArmAcknowledgement(value: unknown, preparedValue?: GvisorTtlPreparedIntent, subjectValue?: GvisorTtlSubjectBinding): GvisorTtlArmAcknowledgement {
+export function createGvisorTtlControlPeerBinding(input: {
+  subject: GvisorTtlSubjectBinding
+  socketDevice: string
+  socketInode: string
+  peerPid: number
+  peerUid: string
+  peerGid: string
+  processStartTicks: string
+  executableDevice: string
+  executableInode: string
+  executableSize: string
+  verifiedRunscSha256: string
+}): GvisorTtlControlPeerBinding {
+  const record = asPlainRecord(input, "R3G-D control peer input")
+  exactKeys(record, ["subject", "socketDevice", "socketInode", "peerPid", "peerUid", "peerGid", "processStartTicks", "executableDevice", "executableInode", "executableSize", "verifiedRunscSha256"], "R3G-D control peer input")
+  const subject = validateGvisorTtlSubjectBinding(record.subject)
+  const socketDevice = canonicalUint(record.socketDevice, "socketDevice")
+  const socketInode = canonicalUint(record.socketInode, "socketInode")
+  const peerPid = canonicalPid(record.peerPid)
+  const peerUid = canonicalUint(record.peerUid, "peerUid")
+  const peerGid = canonicalUint(record.peerGid, "peerGid")
+  const processStartTicks = canonicalUint(record.processStartTicks, "processStartTicks", false)
+  const executableDevice = canonicalUint(record.executableDevice, "executableDevice", false)
+  const executableInode = canonicalUint(record.executableInode, "executableInode", false)
+  const executableSize = canonicalUint(record.executableSize, "executableSize", false)
+  const verifiedRunscSha256 = identity(record.verifiedRunscSha256, "verifiedRunscSha256")
+  if (socketDevice !== subject.controlEndpoint.device || socketInode !== subject.controlEndpoint.inode) throw new TypeError("R3G-D control peer endpoint identity mismatch")
+  if (peerPid !== subject.process.pid || peerUid !== subject.expectedPeerUid || peerGid !== subject.expectedPeerGid) throw new TypeError("R3G-D control peer credentials do not match admitted subject")
+  if (processStartTicks !== subject.process.startTicks || executableDevice !== subject.process.exeDev || executableInode !== subject.process.exeIno || executableSize !== subject.process.exeSize) throw new TypeError("R3G-D control peer process instance does not match admitted R3E process")
+  if (verifiedRunscSha256 !== subject.runscArtifact.sha256) throw new TypeError("R3G-D control peer runsc digest mismatch")
+  const base = Object.freeze({
+    version: KDO_H4_R3G_D_CONTROL_PEER_VERSION,
+    runtimeInstanceIdentity: subject.lineage.runtimeInstanceIdentity,
+    socketDevice,
+    socketInode,
+    peerPid,
+    peerUid,
+    peerGid,
+    processStartTicks,
+    executableDevice,
+    executableInode,
+    executableSize,
+    runscArtifactIdentity: subject.runscArtifact.artifactIdentity,
+    verifiedRunscSha256,
+    helperProtocolVersion: KDO_H4_R3G_D_WATCHDOG_PROTOCOL_VERSION,
+  })
+  return Object.freeze({ ...base, controlPeerBindingIdentity: hash("CONTROL_PEER", [base.runtimeInstanceIdentity, base.peerPid, base.peerUid, base.peerGid, base.socketDevice, base.socketInode, base.processStartTicks, base.executableDevice, base.executableInode, base.executableSize, base.runscArtifactIdentity, base.verifiedRunscSha256, base.helperProtocolVersion]) })
+}
+
+export function validateGvisorTtlControlPeerBinding(value: unknown, subjectValue: GvisorTtlSubjectBinding): GvisorTtlControlPeerBinding {
+  const record = asPlainRecord(value, "R3G-D control peer")
+  exactKeys(record, ["version", "runtimeInstanceIdentity", "socketDevice", "socketInode", "peerPid", "peerUid", "peerGid", "processStartTicks", "executableDevice", "executableInode", "executableSize", "runscArtifactIdentity", "verifiedRunscSha256", "helperProtocolVersion", "controlPeerBindingIdentity"], "R3G-D control peer")
+  if (record.version !== KDO_H4_R3G_D_CONTROL_PEER_VERSION || record.helperProtocolVersion !== KDO_H4_R3G_D_WATCHDOG_PROTOCOL_VERSION) throw new TypeError("R3G-D control peer version/protocol mismatch")
+  const subject = validateGvisorTtlSubjectBinding(subjectValue)
+  const rebuilt = createGvisorTtlControlPeerBinding({ subject, socketDevice: record.socketDevice as string, socketInode: record.socketInode as string, peerPid: record.peerPid as number, peerUid: record.peerUid as string, peerGid: record.peerGid as string, processStartTicks: record.processStartTicks as string, executableDevice: record.executableDevice as string, executableInode: record.executableInode as string, executableSize: record.executableSize as string, verifiedRunscSha256: record.verifiedRunscSha256 as string })
+  if (identity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity") !== rebuilt.runtimeInstanceIdentity || identity(record.runscArtifactIdentity, "runscArtifactIdentity") !== rebuilt.runscArtifactIdentity || identity(record.controlPeerBindingIdentity, "controlPeerBindingIdentity") !== rebuilt.controlPeerBindingIdentity) throw new TypeError("R3G-D controlPeerBindingIdentity mismatch")
+  return rebuilt
+}
+
+export function createGvisorTtlWatchdogLeaseRecord(input: {
+  prepared: GvisorTtlPreparedIntent
+  linuxBootId: string
+  leaseStartBoottimeNs: string
+}): GvisorTtlWatchdogLeaseRecord {
+  const record = asPlainRecord(input, "R3G-D watchdog lease input")
+  exactKeys(record, ["prepared", "linuxBootId", "leaseStartBoottimeNs"], "R3G-D watchdog lease input")
+  const prepared = validateGvisorTtlPreparedIntent(record.prepared)
+  const linuxBootId = bootId(record.linuxBootId)
+  const leaseStartBoottimeNs = canonicalUint(record.leaseStartBoottimeNs, "leaseStartBoottimeNs")
+  const deadline = BigInt(leaseStartBoottimeNs) + BigInt(prepared.ttlMs) * 1_000_000n
+  if (deadline > MAX_UINT64) throw new TypeError("R3G-D watchdog lease deadline overflows uint64")
+  const deadlineBoottimeNs = deadline.toString()
+  const clockDomainIdentity = createGvisorTtlClockDomainIdentity(linuxBootId)
+  const leaseIdentity = hash("WATCHDOG_LEASE", [prepared.armOperationIdentity, prepared.canonicalArmPayloadDigest, prepared.runtimeInstanceIdentity, linuxBootId, clockDomainIdentity, leaseStartBoottimeNs, deadlineBoottimeNs, prepared.watchdogImplementationIdentity])
+  const base = Object.freeze({
+    version: KDO_H4_R3G_D_WATCHDOG_LEASE_VERSION,
+    armOperationIdentity: prepared.armOperationIdentity,
+    canonicalArmPayloadDigest: prepared.canonicalArmPayloadDigest,
+    leaseIdentity,
+    executionAttemptIdentity: prepared.executionAttemptIdentity,
+    requirementIdentity: prepared.requirementIdentity,
+    workloadIdentity: prepared.workloadIdentity,
+    containerBindingIdentity: prepared.containerBindingIdentity,
+    containerId: prepared.containerId,
+    runtimeInstanceIdentity: prepared.runtimeInstanceIdentity,
+    ttlMs: prepared.ttlMs,
+    linuxBootId,
+    clockDomainIdentity,
+    leaseStartBoottimeNs,
+    deadlineBoottimeNs,
+    watchdogImplementationIdentity: prepared.watchdogImplementationIdentity,
+    physicalArmState: "ARMED" as const,
+  })
+  return Object.freeze({ ...base, registryRecordIdentity: hash("WATCHDOG_LEASE_RECORD", base) })
+}
+
+export function validateGvisorTtlWatchdogLeaseRecord(value: unknown, preparedValue?: GvisorTtlPreparedIntent): GvisorTtlWatchdogLeaseRecord {
+  const record = asPlainRecord(value, "R3G-D watchdog lease")
+  exactKeys(record, ["version", "armOperationIdentity", "canonicalArmPayloadDigest", "leaseIdentity", "executionAttemptIdentity", "requirementIdentity", "workloadIdentity", "containerBindingIdentity", "containerId", "runtimeInstanceIdentity", "ttlMs", "linuxBootId", "clockDomainIdentity", "leaseStartBoottimeNs", "deadlineBoottimeNs", "watchdogImplementationIdentity", "physicalArmState", "registryRecordIdentity"], "R3G-D watchdog lease")
+  if (record.version !== KDO_H4_R3G_D_WATCHDOG_LEASE_VERSION || record.physicalArmState !== "ARMED") throw new TypeError("R3G-D watchdog lease version/state mismatch")
+  const prepared = preparedValue === undefined
+    ? Object.freeze({
+        version: KDO_H4_R3G_D_PREPARED_VERSION,
+        state: "PREPARED" as const,
+        armOperationIdentity: identity(record.armOperationIdentity, "armOperationIdentity"),
+        executionAttemptIdentity: identity(record.executionAttemptIdentity, "executionAttemptIdentity"),
+        requirementIdentity: identity(record.requirementIdentity, "requirementIdentity"),
+        workloadIdentity: identity(record.workloadIdentity, "workloadIdentity"),
+        containerBindingIdentity: identity(record.containerBindingIdentity, "containerBindingIdentity"),
+        containerId: fullContainerId(record.containerId),
+        runtimeInstanceIdentity: identity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity"),
+        ttlMs: positiveTtl(record.ttlMs),
+        watchdogImplementationIdentity: identity(record.watchdogImplementationIdentity, "watchdogImplementationIdentity"),
+        canonicalArmPayloadDigest: identity(record.canonicalArmPayloadDigest, "canonicalArmPayloadDigest"),
+        intentIdentity: "0".repeat(64),
+      })
+    : validateGvisorTtlPreparedIntent(preparedValue)
+  const rebuilt = createGvisorTtlWatchdogLeaseRecord({ prepared, linuxBootId: record.linuxBootId as string, leaseStartBoottimeNs: record.leaseStartBoottimeNs as string })
+  if (preparedValue === undefined) {
+    const armPayload = Object.freeze({ executionAttemptIdentity: prepared.executionAttemptIdentity, requirementIdentity: prepared.requirementIdentity, workloadIdentity: prepared.workloadIdentity, containerBindingIdentity: prepared.containerBindingIdentity, containerId: prepared.containerId, runtimeInstanceIdentity: prepared.runtimeInstanceIdentity, ttlMs: prepared.ttlMs, watchdogImplementationIdentity: prepared.watchdogImplementationIdentity })
+    if (hash("ARM_OPERATION", armPayload) !== prepared.armOperationIdentity || hash("ARM_PAYLOAD", armPayload) !== prepared.canonicalArmPayloadDigest) throw new TypeError("R3G-D watchdog lease arm payload identity mismatch")
+  }
+  if (identity(record.leaseIdentity, "leaseIdentity") !== rebuilt.leaseIdentity || identity(record.clockDomainIdentity, "clockDomainIdentity") !== rebuilt.clockDomainIdentity || canonicalUint(record.deadlineBoottimeNs, "deadlineBoottimeNs") !== rebuilt.deadlineBoottimeNs || identity(record.registryRecordIdentity, "registryRecordIdentity") !== rebuilt.registryRecordIdentity) throw new TypeError("R3G-D watchdog lease identity/clock/deadline/registry mismatch")
+  return rebuilt
+}
+
+export function validateGvisorTtlArmAcknowledgement(value: unknown, preparedValue: GvisorTtlPreparedIntent, subjectValue: GvisorTtlSubjectBinding, leaseValue: GvisorTtlWatchdogLeaseRecord): GvisorTtlArmAcknowledgement {
   const record = asPlainRecord(value, "R3G-D arm acknowledgement")
-  exactKeys(record, ["version", "leaseIdentity", "armOperationIdentity", "runtimeInstanceIdentity", "controlPeerBindingIdentity", "runscArtifactIdentity", "verifiedRunscSha256", "watchdogRegistryRecordIdentity", "clockDomainIdentity", "linuxBootId", "leaseStartBoottimeNs", "deadlineBoottimeNs", "ownerInstanceIdentity", "terminalFenceToken", "claimRecordIdentity", "armAcknowledgementIdentity"], "R3G-D arm acknowledgement")
+  exactKeys(record, ["version", "leaseIdentity", "armOperationIdentity", "runtimeInstanceIdentity", "controlPeer", "controlPeerBindingIdentity", "runscArtifactIdentity", "verifiedRunscSha256", "watchdogRegistryRecordIdentity", "clockDomainIdentity", "linuxBootId", "leaseStartBoottimeNs", "deadlineBoottimeNs", "ownerInstanceIdentity", "terminalFenceToken", "claimRecordIdentity", "armAcknowledgementIdentity"], "R3G-D arm acknowledgement")
   if (record.version !== KDO_H4_R3G_D_ARM_ACK_VERSION) throw new TypeError("R3G-D arm acknowledgement version mismatch")
+  const prepared = validateGvisorTtlPreparedIntent(preparedValue)
+  const subject = validateGvisorTtlSubjectBinding(subjectValue)
+  const lease = validateGvisorTtlWatchdogLeaseRecord(leaseValue, prepared)
+  const controlPeer = validateGvisorTtlControlPeerBinding(record.controlPeer, subject)
   const base = Object.freeze({
     version: KDO_H4_R3G_D_ARM_ACK_VERSION,
     leaseIdentity: identity(record.leaseIdentity, "leaseIdentity"),
     armOperationIdentity: identity(record.armOperationIdentity, "armOperationIdentity"),
     runtimeInstanceIdentity: identity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity"),
+    controlPeer,
     controlPeerBindingIdentity: identity(record.controlPeerBindingIdentity, "controlPeerBindingIdentity"),
     runscArtifactIdentity: identity(record.runscArtifactIdentity, "runscArtifactIdentity"),
     verifiedRunscSha256: identity(record.verifiedRunscSha256, "verifiedRunscSha256"),
@@ -371,40 +526,53 @@ export function validateGvisorTtlArmAcknowledgement(value: unknown, preparedValu
     terminalFenceToken: canonicalUint(record.terminalFenceToken, "terminalFenceToken", false),
     claimRecordIdentity: identity(record.claimRecordIdentity, "claimRecordIdentity"),
   })
-  if (BigInt(base.deadlineBoottimeNs) <= BigInt(base.leaseStartBoottimeNs)) throw new TypeError("R3G-D deadline must be after lease start")
-  if (createGvisorTtlClockDomainIdentity(base.linuxBootId) !== base.clockDomainIdentity) throw new TypeError("R3G-D clockDomainIdentity mismatch")
+  if (base.armOperationIdentity !== prepared.armOperationIdentity || base.runtimeInstanceIdentity !== prepared.runtimeInstanceIdentity || base.leaseIdentity !== lease.leaseIdentity || base.watchdogRegistryRecordIdentity !== lease.registryRecordIdentity || base.clockDomainIdentity !== lease.clockDomainIdentity || base.linuxBootId !== lease.linuxBootId || base.leaseStartBoottimeNs !== lease.leaseStartBoottimeNs || base.deadlineBoottimeNs !== lease.deadlineBoottimeNs) throw new TypeError("R3G-D arm acknowledgement does not match durable watchdog lease")
+  if (base.controlPeerBindingIdentity !== controlPeer.controlPeerBindingIdentity || base.runscArtifactIdentity !== subject.runscArtifact.artifactIdentity || base.verifiedRunscSha256 !== subject.runscArtifact.sha256) throw new TypeError("R3G-D arm acknowledgement trusted control-peer/artifact mismatch")
   const armAcknowledgementIdentity = hash("ARM_ACK", base)
   if (identity(record.armAcknowledgementIdentity, "armAcknowledgementIdentity") !== armAcknowledgementIdentity) throw new TypeError("R3G-D armAcknowledgementIdentity mismatch")
-  if (preparedValue !== undefined) {
-    const prepared = validateGvisorTtlPreparedIntent(preparedValue)
-    if (base.armOperationIdentity !== prepared.armOperationIdentity || base.runtimeInstanceIdentity !== prepared.runtimeInstanceIdentity) throw new TypeError("R3G-D arm acknowledgement does not match PREPARED intent")
-    const expectedDelta = BigInt(prepared.ttlMs) * 1_000_000n
-    if (BigInt(base.deadlineBoottimeNs) - BigInt(base.leaseStartBoottimeNs) !== expectedDelta) throw new TypeError("R3G-D arm acknowledgement deadline does not equal immutable ttlMs")
-  }
-  if (subjectValue !== undefined) {
-    const subject = validateGvisorTtlSubjectBinding(subjectValue)
-    if (base.runtimeInstanceIdentity !== subject.lineage.runtimeInstanceIdentity || base.runscArtifactIdentity !== subject.runscArtifact.artifactIdentity || base.verifiedRunscSha256 !== subject.runscArtifact.sha256) throw new TypeError("R3G-D arm acknowledgement trusted subject/artifact mismatch")
-  }
   return Object.freeze({ ...base, armAcknowledgementIdentity })
 }
 
-export function createGvisorTtlArmRecord(input: { prepared: GvisorTtlPreparedIntent; acknowledgement: GvisorTtlArmAcknowledgement; subject: GvisorTtlSubjectBinding }): GvisorTtlArmRecord {
+export function createGvisorTtlArmRecord(input: { prepared: GvisorTtlPreparedIntent; lease: GvisorTtlWatchdogLeaseRecord; acknowledgement: GvisorTtlArmAcknowledgement; subject: GvisorTtlSubjectBinding }): GvisorTtlArmRecord {
   const record = asPlainRecord(input, "R3G-D arm record input")
-  exactKeys(record, ["prepared", "acknowledgement", "subject"], "R3G-D arm record input")
+  exactKeys(record, ["prepared", "lease", "acknowledgement", "subject"], "R3G-D arm record input")
   const prepared = validateGvisorTtlPreparedIntent(record.prepared)
   const subject = validateGvisorTtlSubjectBinding(record.subject)
-  const acknowledgement = validateGvisorTtlArmAcknowledgement(record.acknowledgement, prepared, subject)
-  const base = Object.freeze({ version: KDO_H4_R3G_D_ARM_RECORD_VERSION, evidenceClass: KDO_H4_R3G_D_ARM_EVIDENCE_CLASS, armOperationIdentity: prepared.armOperationIdentity, canonicalArmPayloadDigest: prepared.canonicalArmPayloadDigest, leaseIdentity: acknowledgement.leaseIdentity, executionAttemptIdentity: prepared.executionAttemptIdentity, requirementIdentity: prepared.requirementIdentity, workloadIdentity: prepared.workloadIdentity, containerBindingIdentity: prepared.containerBindingIdentity, containerId: prepared.containerId, runtimeInstanceIdentity: prepared.runtimeInstanceIdentity, ttlMs: prepared.ttlMs, watchdogImplementationIdentity: prepared.watchdogImplementationIdentity, controlPeerBindingIdentity: acknowledgement.controlPeerBindingIdentity, runscArtifactIdentity: acknowledgement.runscArtifactIdentity, verifiedRunscSha256: acknowledgement.verifiedRunscSha256, watchdogRegistryRecordIdentity: acknowledgement.watchdogRegistryRecordIdentity, clockDomainIdentity: acknowledgement.clockDomainIdentity, linuxBootId: acknowledgement.linuxBootId, leaseStartBoottimeNs: acknowledgement.leaseStartBoottimeNs, deadlineBoottimeNs: acknowledgement.deadlineBoottimeNs, ownerInstanceIdentity: acknowledgement.ownerInstanceIdentity, terminalFenceToken: acknowledgement.terminalFenceToken, claimRecordIdentity: acknowledgement.claimRecordIdentity, armAcknowledgementIdentity: acknowledgement.armAcknowledgementIdentity })
+  const lease = validateGvisorTtlWatchdogLeaseRecord(record.lease, prepared)
+  const acknowledgement = validateGvisorTtlArmAcknowledgement(record.acknowledgement, prepared, subject, lease)
+  const base = Object.freeze({ version: KDO_H4_R3G_D_ARM_RECORD_VERSION, evidenceClass: KDO_H4_R3G_D_ARM_EVIDENCE_CLASS, armOperationIdentity: prepared.armOperationIdentity, canonicalArmPayloadDigest: prepared.canonicalArmPayloadDigest, leaseIdentity: lease.leaseIdentity, executionAttemptIdentity: prepared.executionAttemptIdentity, requirementIdentity: prepared.requirementIdentity, workloadIdentity: prepared.workloadIdentity, containerBindingIdentity: prepared.containerBindingIdentity, containerId: prepared.containerId, runtimeInstanceIdentity: prepared.runtimeInstanceIdentity, ttlMs: prepared.ttlMs, watchdogImplementationIdentity: prepared.watchdogImplementationIdentity, controlPeer: acknowledgement.controlPeer, controlPeerBindingIdentity: acknowledgement.controlPeerBindingIdentity, runscArtifactIdentity: acknowledgement.runscArtifactIdentity, verifiedRunscSha256: acknowledgement.verifiedRunscSha256, watchdogRegistryRecordIdentity: lease.registryRecordIdentity, clockDomainIdentity: lease.clockDomainIdentity, linuxBootId: lease.linuxBootId, leaseStartBoottimeNs: lease.leaseStartBoottimeNs, deadlineBoottimeNs: lease.deadlineBoottimeNs, ownerInstanceIdentity: acknowledgement.ownerInstanceIdentity, terminalFenceToken: acknowledgement.terminalFenceToken, claimRecordIdentity: acknowledgement.claimRecordIdentity, armAcknowledgementIdentity: acknowledgement.armAcknowledgementIdentity })
   return Object.freeze({ ...base, recordIdentity: hash("ARM_RECORD", base) })
 }
 
 export function validateGvisorTtlArmRecord(value: unknown): GvisorTtlArmRecord {
   const record = asPlainRecord(value, "R3G-D arm record")
-  exactKeys(record, ["version", "evidenceClass", "armOperationIdentity", "canonicalArmPayloadDigest", "leaseIdentity", "executionAttemptIdentity", "requirementIdentity", "workloadIdentity", "containerBindingIdentity", "containerId", "runtimeInstanceIdentity", "ttlMs", "watchdogImplementationIdentity", "controlPeerBindingIdentity", "runscArtifactIdentity", "verifiedRunscSha256", "watchdogRegistryRecordIdentity", "clockDomainIdentity", "linuxBootId", "leaseStartBoottimeNs", "deadlineBoottimeNs", "ownerInstanceIdentity", "terminalFenceToken", "claimRecordIdentity", "armAcknowledgementIdentity", "recordIdentity"], "R3G-D arm record")
+  exactKeys(record, ["version", "evidenceClass", "armOperationIdentity", "canonicalArmPayloadDigest", "leaseIdentity", "executionAttemptIdentity", "requirementIdentity", "workloadIdentity", "containerBindingIdentity", "containerId", "runtimeInstanceIdentity", "ttlMs", "watchdogImplementationIdentity", "controlPeer", "controlPeerBindingIdentity", "runscArtifactIdentity", "verifiedRunscSha256", "watchdogRegistryRecordIdentity", "clockDomainIdentity", "linuxBootId", "leaseStartBoottimeNs", "deadlineBoottimeNs", "ownerInstanceIdentity", "terminalFenceToken", "claimRecordIdentity", "armAcknowledgementIdentity", "recordIdentity"], "R3G-D arm record")
   if (record.version !== KDO_H4_R3G_D_ARM_RECORD_VERSION || record.evidenceClass !== KDO_H4_R3G_D_ARM_EVIDENCE_CLASS) throw new TypeError("R3G-D arm record version/evidence class mismatch")
-  const base = Object.freeze({ version: KDO_H4_R3G_D_ARM_RECORD_VERSION, evidenceClass: KDO_H4_R3G_D_ARM_EVIDENCE_CLASS, armOperationIdentity: identity(record.armOperationIdentity, "armOperationIdentity"), canonicalArmPayloadDigest: identity(record.canonicalArmPayloadDigest, "canonicalArmPayloadDigest"), leaseIdentity: identity(record.leaseIdentity, "leaseIdentity"), executionAttemptIdentity: identity(record.executionAttemptIdentity, "executionAttemptIdentity"), requirementIdentity: identity(record.requirementIdentity, "requirementIdentity"), workloadIdentity: identity(record.workloadIdentity, "workloadIdentity"), containerBindingIdentity: identity(record.containerBindingIdentity, "containerBindingIdentity"), containerId: fullContainerId(record.containerId), runtimeInstanceIdentity: identity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity"), ttlMs: positiveTtl(record.ttlMs), watchdogImplementationIdentity: identity(record.watchdogImplementationIdentity, "watchdogImplementationIdentity"), controlPeerBindingIdentity: identity(record.controlPeerBindingIdentity, "controlPeerBindingIdentity"), runscArtifactIdentity: identity(record.runscArtifactIdentity, "runscArtifactIdentity"), verifiedRunscSha256: identity(record.verifiedRunscSha256, "verifiedRunscSha256"), watchdogRegistryRecordIdentity: identity(record.watchdogRegistryRecordIdentity, "watchdogRegistryRecordIdentity"), clockDomainIdentity: identity(record.clockDomainIdentity, "clockDomainIdentity"), linuxBootId: bootId(record.linuxBootId), leaseStartBoottimeNs: canonicalUint(record.leaseStartBoottimeNs, "leaseStartBoottimeNs"), deadlineBoottimeNs: canonicalUint(record.deadlineBoottimeNs, "deadlineBoottimeNs"), ownerInstanceIdentity: identity(record.ownerInstanceIdentity, "ownerInstanceIdentity"), terminalFenceToken: canonicalUint(record.terminalFenceToken, "terminalFenceToken", false), claimRecordIdentity: identity(record.claimRecordIdentity, "claimRecordIdentity"), armAcknowledgementIdentity: identity(record.armAcknowledgementIdentity, "armAcknowledgementIdentity") })
-  if (createGvisorTtlClockDomainIdentity(base.linuxBootId) !== base.clockDomainIdentity) throw new TypeError("R3G-D arm record clock domain mismatch")
-  if (BigInt(base.deadlineBoottimeNs) - BigInt(base.leaseStartBoottimeNs) !== BigInt(base.ttlMs) * 1_000_000n) throw new TypeError("R3G-D arm record immutable deadline mismatch")
+  const controlPeerRecord = asPlainRecord(record.controlPeer, "R3G-D arm control peer")
+  const controlPeer = Object.freeze({
+    version: KDO_H4_R3G_D_CONTROL_PEER_VERSION,
+    runtimeInstanceIdentity: identity(controlPeerRecord.runtimeInstanceIdentity, "runtimeInstanceIdentity"),
+    socketDevice: canonicalUint(controlPeerRecord.socketDevice, "socketDevice"),
+    socketInode: canonicalUint(controlPeerRecord.socketInode, "socketInode"),
+    peerPid: canonicalPid(controlPeerRecord.peerPid),
+    peerUid: canonicalUint(controlPeerRecord.peerUid, "peerUid"),
+    peerGid: canonicalUint(controlPeerRecord.peerGid, "peerGid"),
+    processStartTicks: canonicalUint(controlPeerRecord.processStartTicks, "processStartTicks", false),
+    executableDevice: canonicalUint(controlPeerRecord.executableDevice, "executableDevice", false),
+    executableInode: canonicalUint(controlPeerRecord.executableInode, "executableInode", false),
+    executableSize: canonicalUint(controlPeerRecord.executableSize, "executableSize", false),
+    runscArtifactIdentity: identity(controlPeerRecord.runscArtifactIdentity, "runscArtifactIdentity"),
+    verifiedRunscSha256: identity(controlPeerRecord.verifiedRunscSha256, "verifiedRunscSha256"),
+    helperProtocolVersion: controlPeerRecord.helperProtocolVersion,
+    controlPeerBindingIdentity: identity(controlPeerRecord.controlPeerBindingIdentity, "controlPeerBindingIdentity"),
+  }) as GvisorTtlControlPeerBinding
+  exactKeys(controlPeerRecord, ["version", "runtimeInstanceIdentity", "socketDevice", "socketInode", "peerPid", "peerUid", "peerGid", "processStartTicks", "executableDevice", "executableInode", "executableSize", "runscArtifactIdentity", "verifiedRunscSha256", "helperProtocolVersion", "controlPeerBindingIdentity"], "R3G-D arm control peer")
+  if (controlPeerRecord.version !== KDO_H4_R3G_D_CONTROL_PEER_VERSION || controlPeerRecord.helperProtocolVersion !== KDO_H4_R3G_D_WATCHDOG_PROTOCOL_VERSION) throw new TypeError("R3G-D arm control peer version/protocol mismatch")
+  const expectedPeerIdentity = hash("CONTROL_PEER", [controlPeer.runtimeInstanceIdentity, controlPeer.peerPid, controlPeer.peerUid, controlPeer.peerGid, controlPeer.socketDevice, controlPeer.socketInode, controlPeer.processStartTicks, controlPeer.executableDevice, controlPeer.executableInode, controlPeer.executableSize, controlPeer.runscArtifactIdentity, controlPeer.verifiedRunscSha256, KDO_H4_R3G_D_WATCHDOG_PROTOCOL_VERSION])
+  if (controlPeer.controlPeerBindingIdentity !== expectedPeerIdentity) throw new TypeError("R3G-D arm controlPeerBindingIdentity mismatch")
+  const base = Object.freeze({ version: KDO_H4_R3G_D_ARM_RECORD_VERSION, evidenceClass: KDO_H4_R3G_D_ARM_EVIDENCE_CLASS, armOperationIdentity: identity(record.armOperationIdentity, "armOperationIdentity"), canonicalArmPayloadDigest: identity(record.canonicalArmPayloadDigest, "canonicalArmPayloadDigest"), leaseIdentity: identity(record.leaseIdentity, "leaseIdentity"), executionAttemptIdentity: identity(record.executionAttemptIdentity, "executionAttemptIdentity"), requirementIdentity: identity(record.requirementIdentity, "requirementIdentity"), workloadIdentity: identity(record.workloadIdentity, "workloadIdentity"), containerBindingIdentity: identity(record.containerBindingIdentity, "containerBindingIdentity"), containerId: fullContainerId(record.containerId), runtimeInstanceIdentity: identity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity"), ttlMs: positiveTtl(record.ttlMs), watchdogImplementationIdentity: identity(record.watchdogImplementationIdentity, "watchdogImplementationIdentity"), controlPeer, controlPeerBindingIdentity: identity(record.controlPeerBindingIdentity, "controlPeerBindingIdentity"), runscArtifactIdentity: identity(record.runscArtifactIdentity, "runscArtifactIdentity"), verifiedRunscSha256: identity(record.verifiedRunscSha256, "verifiedRunscSha256"), watchdogRegistryRecordIdentity: identity(record.watchdogRegistryRecordIdentity, "watchdogRegistryRecordIdentity"), clockDomainIdentity: identity(record.clockDomainIdentity, "clockDomainIdentity"), linuxBootId: bootId(record.linuxBootId), leaseStartBoottimeNs: canonicalUint(record.leaseStartBoottimeNs, "leaseStartBoottimeNs"), deadlineBoottimeNs: canonicalUint(record.deadlineBoottimeNs, "deadlineBoottimeNs"), ownerInstanceIdentity: identity(record.ownerInstanceIdentity, "ownerInstanceIdentity"), terminalFenceToken: canonicalUint(record.terminalFenceToken, "terminalFenceToken", false), claimRecordIdentity: identity(record.claimRecordIdentity, "claimRecordIdentity"), armAcknowledgementIdentity: identity(record.armAcknowledgementIdentity, "armAcknowledgementIdentity") })
+  if (createGvisorTtlClockDomainIdentity(base.linuxBootId) !== base.clockDomainIdentity || BigInt(base.deadlineBoottimeNs) - BigInt(base.leaseStartBoottimeNs) !== BigInt(base.ttlMs) * 1_000_000n) throw new TypeError("R3G-D arm record clock/deadline mismatch")
+  if (base.controlPeerBindingIdentity !== controlPeer.controlPeerBindingIdentity || base.runtimeInstanceIdentity !== controlPeer.runtimeInstanceIdentity || base.runscArtifactIdentity !== controlPeer.runscArtifactIdentity || base.verifiedRunscSha256 !== controlPeer.verifiedRunscSha256) throw new TypeError("R3G-D arm record control-peer/artifact mismatch")
   const expected = hash("ARM_RECORD", base)
   if (identity(record.recordIdentity, "recordIdentity") !== expected) throw new TypeError("R3G-D arm record identity mismatch")
   return Object.freeze({ ...base, recordIdentity: expected })
@@ -426,8 +594,12 @@ export function validateGvisorTtlTerminalRecord(value: unknown, armValue?: Gviso
   if (armValue !== undefined) {
     const arm = validateGvisorTtlArmRecord(armValue)
     if (base.armOperationIdentity !== arm.armOperationIdentity || base.leaseIdentity !== arm.leaseIdentity || base.armRecordIdentity !== arm.recordIdentity || base.runtimeInstanceIdentity !== arm.runtimeInstanceIdentity || base.controlPeerBindingIdentity !== arm.controlPeerBindingIdentity || base.runscArtifactIdentity !== arm.runscArtifactIdentity || base.verifiedRunscSha256 !== arm.verifiedRunscSha256 || base.clockDomainIdentity !== arm.clockDomainIdentity || base.linuxBootId !== arm.linuxBootId) throw new TypeError("R3G-D terminal record does not match authoritative arm record")
+    if (base.socketDevice !== arm.controlPeer.socketDevice || base.socketInode !== arm.controlPeer.socketInode || base.peerPid !== arm.controlPeer.peerPid || base.peerUid !== arm.controlPeer.peerUid || base.peerGid !== arm.controlPeer.peerGid) throw new TypeError("R3G-D terminal control peer does not match authoritative arm peer")
     if (BigInt(base.terminalFenceToken) < BigInt(arm.terminalFenceToken)) throw new TypeError("R3G-D terminal fence token is stale")
-    if (base.terminalOutcome === "natural-exit" && BigInt(base.exitEventObservedBoottimeNs as string) >= BigInt(arm.deadlineBoottimeNs)) throw new TypeError("R3G-D natural-exit winner must be observed before deadline")
+    if (base.terminalOutcome === "natural-exit") {
+      const event = BigInt(base.exitEventObservedBoottimeNs as string)
+      if (event < BigInt(arm.leaseStartBoottimeNs) || event >= BigInt(arm.deadlineBoottimeNs)) throw new TypeError("R3G-D natural-exit winner must be observed during the lease")
+    }
     if (base.terminalOutcome === "ttl-expired" && BigInt(base.liveAtExpiryObservedBoottimeNs as string) < BigInt(arm.deadlineBoottimeNs)) throw new TypeError("R3G-D expiry liveness must be observed at/after deadline")
   }
   const expected = hash("TERMINAL_RECORD", base)
