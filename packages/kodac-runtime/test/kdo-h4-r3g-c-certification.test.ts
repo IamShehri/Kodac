@@ -174,6 +174,21 @@ test("H4-R3G-C rejects an independently valid R3E record when runtime-instance i
   }), /bracket mismatch/)
 })
 
+test("H4-R3G-C rejects an R3F network-mode mismatch before physical-network record acceptance", () => {
+  const tamperedDockerObservation = {
+    ...dockerObservation(),
+    networkMode: "bridge",
+  } as unknown as ReturnType<typeof dockerObservation>
+  assert.throws(() => createGvisorPhysicalNetworkRecord({
+    r3eBefore: syntheticR3e(),
+    r3eAfter: syntheticR3e({ statsIdentity: "f".repeat(64) }),
+    dockerControlPlane: tamperedDockerObservation,
+    firstRead: observationRead(),
+    secondRead: observationRead(),
+    trustedHostSerializationTheoremVersion: KDO_H4_R3G_C_SERIALIZATION_THEOREM_VERSION,
+  }), /runtime\/network mismatch/)
+})
+
 test("H4-R3G-C trusted store exact replay is idempotent and conflicting canonical bytes fail closed", () => {
   const record = validateGvisorPhysicalNetworkRecord(fixtureRecord())
   const canonicalBytes = JSON.stringify(record)
