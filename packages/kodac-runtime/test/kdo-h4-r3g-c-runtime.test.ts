@@ -78,6 +78,21 @@ function compileFakeRunsc(root: string, runtimeRoot: string): string {
   return compileC(root, "fake-runsc", `#include <signal.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <unistd.h>\nstatic const char *PIDFILE="${cString(pidFile)}";\nstatic int write_pid(void){FILE*f=fopen(PIDFILE,"w");if(!f)return 125;if(fprintf(f,"%ld\\n",(long)getpid())<0){fclose(f);return 125;}return fclose(f)==0?0:125;}\nstatic long read_pid(void){FILE*f=fopen(PIDFILE,"r");long p=0;if(!f)return 0;if(fscanf(f,"%ld",&p)!=1)p=0;fclose(f);return p;}\nint main(int argc,char**argv){if(argc==2&&strcmp(argv[1],"sandbox")==0){if(write_pid()!=0)return 125;for(;;)pause();}if(argc>=5&&strcmp(argv[1],"--root")==0){long p=read_pid();if(p<=0)return 125;if(strcmp(argv[3],"state")==0&&argc==5){printf("{\\\"ociVersion\\\":\\\"1.2.0\\\",\\\"id\\\":\\\"%s\\\",\\\"status\\\":\\\"running\\\",\\\"pid\\\":%ld,\\\"bundle\\\":\\\"/run/kodac/%s\\\"}\\n",argv[4],p,argv[4]);return 0;}if(strcmp(argv[3],"events")==0&&argc==6&&strcmp(argv[4],"--stats")==0){printf("{\\\"type\\\":\\\"stats\\\",\\\"id\\\":\\\"%s\\\",\\\"data\\\":{\\\"cpu\\\":{\\\"usage\\\":1}}}\\n",argv[5]);return 0;}}return 125;}\n`)
 }
 async function waitForFile(path: string): Promise<void> { for (let i=0;i<100;i+=1){if(existsSync(path))return;await new Promise<void>((resolve)=>setTimeout(resolve,10))}throw new Error(`fixture file did not appear: ${path}`) }
+async function reapSandbox(sandbox: ChildProcess | undefined): Promise<void> {
+  if(sandbox===undefined||sandbox.exitCode!==null||sandbox.signalCode!==null)return
+  const exited=new Promise<void>((resolve)=>sandbox.once("exit",()=>resolve()))
+  assert.equal(sandbox.kill("SIGKILL"),true,"R3G-C fixture sandbox SIGKILL must be delivered")
+  await exited
+}
+async function closeFixtureServer(server: Server, sockets: Set<Socket>): Promise<void> {
+  let closePromise: Promise<void>|undefined
+  if(server.listening)closePromise=new Promise<void>((resolve,reject)=>server.close((error?:Error)=>error?reject(error):resolve()))
+  for(const socket of sockets)socket.destroy()
+  if(closePromise===undefined)return
+  let timer:NodeJS.Timeout|undefined
+  const timeout=new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error("R3G-C fixture server did not close within 2000ms")),2000)})
+  try{await Promise.race([closePromise,timeout])}finally{if(timer!==undefined)clearTimeout(timer);server.unref()}
+}
 function topologyResponse(): string {
   return JSON.stringify({ success: true, err: "", result: { LoopbackLinks: [{ Name: "lo", Addresses: [{ Address: "127.0.0.1", PrefixLen: 8 }, { Address: "::1", PrefixLen: 128 }], Routes: [{ Destination: { IP: "127.0.0.0", Mask: "/wAAAA==" }, Gateway: "", MTU: 0 }, { Destination: { IP: "::1", Mask: "/////////////////////w==" }, Gateway: "", MTU: 0 }], GVisorGRO: false }], FDBasedLinks: null, XDPLinks: null, Defaultv4Gateway: { Route: { Destination: { IP: "", Mask: null }, Gateway: "", MTU: 0 }, Name: "" }, Defaultv6Gateway: { Route: { Destination: { IP: "", Mask: null }, Gateway: "", MTU: 0 }, Name: "" }, PCAP: false, LogPackets: false, NATBlob: false, PauseExternalNetworking: false, AllowConnectedOnSave: false, IsRestore: false } })
 }
@@ -143,8 +158,8 @@ test("H4-R3G-C Linux production gateway proves one shared-attempt loopback-only 
     assert.equal(record.evidenceClass,KDO_H4_R3G_C_EVIDENCE_CLASS);assert.equal(record.executionAttemptIdentity,attempts[0]);assert.equal(lineageRecords.length,2);assert.equal(lineageRecords[0]?.executionAttemptIdentity,record.executionAttemptIdentity);assert.equal(lineageRecords[1]?.executionAttemptIdentity,record.executionAttemptIdentity);assert.equal(committed?.recordIdentity,record.recordIdentity);assert.equal(rpcCalls,2);assert.equal(receipts.length,1);assert.equal(receipts[0]?.capability,KDO_H4_R3G_C_CAPABILITY);assert.equal(receipts[0]?.result.status,"success")
   } finally {
     closingServer=true
-    if(server.listening){const closed=new Promise<void>((resolve,reject)=>server.close((error?:Error)=>error?reject(error):resolve()));for(const socket of sockets)socket.destroy();await closed}else{for(const socket of sockets)socket.destroy()}
-    if(sandbox!==undefined&&sandbox.exitCode===null&&sandbox.signalCode===null){const exited=new Promise<void>((resolve)=>sandbox?.once("exit",()=>resolve()));sandbox.kill("SIGKILL");await exited}
+    await reapSandbox(sandbox)
+    await closeFixtureServer(server,sockets)
     rmSync(runtimeRoot,{recursive:true,force:true});rmSync(root,{recursive:true,force:true})
   }
 })
