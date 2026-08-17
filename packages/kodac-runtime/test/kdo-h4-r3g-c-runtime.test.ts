@@ -142,10 +142,12 @@ test("H4-R3G-C Linux production gateway proves one shared-attempt loopback-only 
   if(!requireIntegrationHost(t))return
   const root=mkdtempSync(join(tmpdir(),"kodac-r3gc-live-")), runtimeRoot=mkdtempSync(join(homedir(),".kodac-r3gc-runtime-")), workspace=join(root,"workspace"); mkdirSync(workspace)
   const runscPath=compileFakeRunsc(root,runtimeRoot), helperPath=compileHelper(root), pidFile=join(runtimeRoot,"sandbox.pid"); let sandbox:ChildProcess|undefined; const server=createServer(); const sockets=new Set<Socket>(); let closingServer=false; const socketPath=deriveGvisorNetworkControlSocketPath(runtimeRoot,CONTAINER_ID)
+  let phase="starting fixture sandbox"
+  const watchdog=setTimeout(()=>{throw new Error(`R3G-C Linux integration watchdog expired in phase: ${phase}`)},20_000)
   try {
-    sandbox=spawn(runscPath,["sandbox"],{stdio:"ignore",shell:false}); await waitForFile(pidFile)
+    sandbox=spawn(runscPath,["sandbox"],{stdio:"ignore",shell:false}); phase="waiting for fixture sandbox pid"; await waitForFile(pidFile)
     let rpcCalls=0; server.on("connection",(socket)=>{if(closingServer){socket.destroy();return}sockets.add(socket);socket.once("close",()=>sockets.delete(socket));socket.on("data",(chunk)=>{assert.equal(chunk.toString("utf8"),'{"method":"containerManager.GetNetworkConfig","arg":{}}');rpcCalls+=1;socket.write(topologyResponse())})})
-    await new Promise<void>((resolve,reject)=>server.listen(socketPath,(error?:Error)=>error?reject(error):resolve()))
+    phase="starting fixture network listener"; await new Promise<void>((resolve,reject)=>server.listen(socketPath,(error?:Error)=>error?reject(error):resolve()))
     const requirement=fixtureRequirement(); const lineageRecords:GvisorRuntimeLineageRecord[]=[]; const attempts:string[]=[]
     let resolver!: DockerControlPlaneBindingProvider["resolveContainerBinding"]
     const providerPlaceholder={current:undefined as DockerControlPlaneBindingProvider|undefined}
@@ -154,13 +156,14 @@ test("H4-R3G-C Linux production gateway proves one shared-attempt loopback-only 
     const gvisor=validateGvisorObserverRuntimeConfig({version:KDO_H4_R3E_RUNTIME_CONFIG_VERSION,runscPath,expectedRunscSha256:sha256File(runscPath),observerHelperPath:helperPath,expectedObserverHelperSha256:sha256File(helperPath),runtimeRoot,resolveContainerBinding:resolver,commitLineageEvidence(record:GvisorRuntimeLineageRecord){lineageRecords.push(record);return createGvisorRuntimeLineageCommit(record)}})
     let committed:GvisorPhysicalNetworkRecord|undefined
     const gateway=new GvisorNetworkExecutionGateway({filesystem:new NodeWorkspaceFileSystem(workspace),policy:fixedPolicy("allow"),gvisorObserver:gvisor,dockerControlPlane:provider,networkObserver:networkRuntime((record)=>{committed=record;return createGvisorPhysicalNetworkCommit(record)})})
-    const receipts:ExecutionReceipt[]=[]; const record=await gateway.observeGvisorPhysicalNetwork(requirement,{onReceipt(receipt){receipts.push(receipt)}})
-    assert.equal(record.evidenceClass,KDO_H4_R3G_C_EVIDENCE_CLASS);assert.equal(record.executionAttemptIdentity,attempts[0]);assert.equal(lineageRecords.length,2);assert.equal(lineageRecords[0]?.executionAttemptIdentity,record.executionAttemptIdentity);assert.equal(lineageRecords[1]?.executionAttemptIdentity,record.executionAttemptIdentity);assert.equal(committed?.recordIdentity,record.recordIdentity);assert.equal(rpcCalls,2);assert.equal(receipts.length,1);assert.equal(receipts[0]?.capability,KDO_H4_R3G_C_CAPABILITY);assert.equal(receipts[0]?.result.status,"success")
+    const receipts:ExecutionReceipt[]=[]; phase="observing physical network"; const record=await gateway.observeGvisorPhysicalNetwork(requirement,{onReceipt(receipt){receipts.push(receipt)}})
+    phase="asserting physical-network evidence"; assert.equal(record.evidenceClass,KDO_H4_R3G_C_EVIDENCE_CLASS);assert.equal(record.executionAttemptIdentity,attempts[0]);assert.equal(lineageRecords.length,2);assert.equal(lineageRecords[0]?.executionAttemptIdentity,record.executionAttemptIdentity);assert.equal(lineageRecords[1]?.executionAttemptIdentity,record.executionAttemptIdentity);assert.equal(committed?.recordIdentity,record.recordIdentity);assert.equal(rpcCalls,2);assert.equal(receipts.length,1);assert.equal(receipts[0]?.capability,KDO_H4_R3G_C_CAPABILITY);assert.equal(receipts[0]?.result.status,"success")
   } finally {
     closingServer=true
-    await reapSandbox(sandbox)
-    await closeFixtureServer(server,sockets)
-    rmSync(runtimeRoot,{recursive:true,force:true});rmSync(root,{recursive:true,force:true})
+    phase="reaping fixture sandbox"; await reapSandbox(sandbox)
+    phase="closing fixture network server"; await closeFixtureServer(server,sockets)
+    phase="removing fixture roots"; rmSync(runtimeRoot,{recursive:true,force:true});rmSync(root,{recursive:true,force:true})
+    phase="complete"; clearTimeout(watchdog)
   }
 })
 
