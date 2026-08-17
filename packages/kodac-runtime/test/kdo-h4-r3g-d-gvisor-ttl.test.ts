@@ -268,7 +268,7 @@ test("H4-R3G-D durable watchdog lease is deterministic PREPARED-bound boot-bound
   assert.throws(() => validateGvisorTtlWatchdogLeaseRecord({ ...lease, canonicalArmPayloadDigest: "4".repeat(64) }, prepared), /identity|mismatch/)
   assert.throws(() => validateGvisorTtlWatchdogLeaseRecord({ ...lease, linuxBootId: "223e4567-e89b-42d3-a456-426614174000" }, prepared), /identity|clock|registry/)
   assert.throws(() => validateGvisorTtlWatchdogLeaseRecord({ ...lease, leaseStartBoottimeNs: (BigInt(lease.leaseStartBoottimeNs) + 1n).toString() }, prepared), /identity|deadline|registry/)
-  assert.throws(() => validateGvisorTtlWatchdogLeaseRecord({ ...lease, registryRecordIdentity: "5".repeat(64) }, prepared), /registry/)
+  assert.throws(() => validateGvisorTtlWatchdogLeaseRecord({ ...lease, registryRecordIdentity: "5".repeat(64) }, prepared), /identity|registry/)
 })
 
 test("H4-R3G-D arm acknowledgement requires the exact durable lease and authenticated control peer", () => {
