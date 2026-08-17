@@ -9,7 +9,8 @@ const allTests = readdirSync("test")
 
 // TEMPORARY R3G-C DIAGNOSTIC: isolate the hanging Linux integration worker.
 // Remove this branch immediately after the exact hang phase is identified.
-const tests = process.platform === "linux" && process.env.GITHUB_ACTIONS === "true"
+const diagnostic = process.platform === "linux" && process.env.GITHUB_ACTIONS === "true"
+const tests = diagnostic
   ? [join("test", "kdo-h4-r3g-c-runtime.test.ts")]
   : allTests
 
@@ -20,7 +21,13 @@ if (tests.length === 0) {
   const result = spawnSync(
     process.execPath,
     ["--experimental-strip-types", "--test", ...tests],
-    { stdio: "inherit" },
+    {
+      stdio: "inherit",
+      ...(diagnostic ? { timeout: 30_000, killSignal: "SIGKILL" } : {}),
+    },
   )
+  if (diagnostic && result.signal === "SIGKILL") {
+    console.error("R3G-C Linux diagnostic test runner exceeded 30000ms and was killed")
+  }
   process.exitCode = result.status ?? 1
 }
