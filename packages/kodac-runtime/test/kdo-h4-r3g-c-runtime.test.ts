@@ -78,6 +78,12 @@ function compileFakeRunsc(root: string, runtimeRoot: string): string {
   return compileC(root, "fake-runsc", `#include <signal.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <unistd.h>\nstatic const char *PIDFILE="${cString(pidFile)}";\nstatic int write_pid(void){FILE*f=fopen(PIDFILE,"w");if(!f)return 125;if(fprintf(f,"%ld\\n",(long)getpid())<0){fclose(f);return 125;}return fclose(f)==0?0:125;}\nstatic long read_pid(void){FILE*f=fopen(PIDFILE,"r");long p=0;if(!f)return 0;if(fscanf(f,"%ld",&p)!=1)p=0;fclose(f);return p;}\nint main(int argc,char**argv){if(argc==2&&strcmp(argv[1],"sandbox")==0){if(write_pid()!=0)return 125;for(;;)pause();}if(argc>=5&&strcmp(argv[1],"--root")==0){long p=read_pid();if(p<=0)return 125;if(strcmp(argv[3],"state")==0&&argc==5){printf("{\\\"ociVersion\\\":\\\"1.2.0\\\",\\\"id\\\":\\\"%s\\\",\\\"status\\\":\\\"running\\\",\\\"pid\\\":%ld,\\\"bundle\\\":\\\"/run/kodac/%s\\\"}\\n",argv[4],p,argv[4]);return 0;}if(strcmp(argv[3],"events")==0&&argc==6&&strcmp(argv[4],"--stats")==0){printf("{\\\"type\\\":\\\"stats\\\",\\\"id\\\":\\\"%s\\\",\\\"data\\\":{\\\"cpu\\\":{\\\"usage\\\":1}}}\\n",argv[5]);return 0;}}return 125;}\n`)
 }
 async function waitForFile(path: string): Promise<void> { for (let i=0;i<100;i+=1){if(existsSync(path))return;await new Promise<void>((resolve)=>setTimeout(resolve,10))}throw new Error(`fixture file did not appear: ${path}`) }
+function trustedShortRoot(): string { return mkdtempSync(join(homedir(), ".k")) }
+function fixtureSocketPath(root: string): string {
+  const path = deriveGvisorNetworkControlSocketPath(root, CONTAINER_ID)
+  assert.ok(Buffer.byteLength(path, "utf8") <= 107, `R3G-C fixture socket path too long: ${path}`)
+  return path
+}
 async function reapSandbox(sandbox: ChildProcess | undefined): Promise<void> {
   if(sandbox===undefined||sandbox.exitCode!==null||sandbox.signalCode!==null)return
   const exited=new Promise<void>((resolve)=>sandbox.once("exit",()=>resolve()))
@@ -140,8 +146,8 @@ test("H4-R3G-C gateway ASK blocks before R3F or observer activity", async () => 
 
 test("H4-R3G-C Linux production gateway proves one shared-attempt loopback-only physical-network candidate", { skip: process.platform !== "linux" }, async (t) => {
   if(!requireIntegrationHost(t))return
-  const root=mkdtempSync(join(tmpdir(),"kodac-r3gc-live-")), runtimeRoot=mkdtempSync(join(homedir(),".r3c-")), workspace=join(root,"workspace"); mkdirSync(workspace)
-  const runscPath=compileFakeRunsc(root,runtimeRoot), helperPath=compileHelper(root), pidFile=join(runtimeRoot,"sandbox.pid"); let sandbox:ChildProcess|undefined; const server=createServer(); const sockets=new Set<Socket>(); let closingServer=false; const socketPath=deriveGvisorNetworkControlSocketPath(runtimeRoot,CONTAINER_ID)
+  const root=mkdtempSync(join(tmpdir(),"kodac-r3gc-live-")), runtimeRoot=trustedShortRoot(), workspace=join(root,"workspace"); mkdirSync(workspace)
+  const runscPath=compileFakeRunsc(root,runtimeRoot), helperPath=compileHelper(root), pidFile=join(runtimeRoot,"sandbox.pid"); let sandbox:ChildProcess|undefined; const server=createServer(); const sockets=new Set<Socket>(); let closingServer=false; const socketPath=fixtureSocketPath(runtimeRoot)
   try {
     sandbox=spawn(runscPath,["sandbox"],{stdio:"ignore",shell:false}); await waitForFile(pidFile)
     let rpcCalls=0; server.on("connection",(socket)=>{if(closingServer){socket.destroy();return}sockets.add(socket);socket.once("close",()=>sockets.delete(socket));socket.on("data",(chunk)=>{assert.equal(chunk.toString("utf8"),'{"method":"containerManager.GetNetworkConfig","arg":{}}');rpcCalls+=1;socket.write(topologyResponse())})})
