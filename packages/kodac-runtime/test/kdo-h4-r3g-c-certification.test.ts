@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, type Server, type Socket } from "node:net"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -280,7 +280,7 @@ function cString(value: string): string { return value.replaceAll("\\", "\\\\").
 function compileC(root: string, name: string, text: string): string {
   const sourcePath = join(root, `${name}.c`)
   const binary = join(root, name)
-  require("node:fs").writeFileSync(sourcePath, text, "utf8")
+  writeFileSync(sourcePath, text, "utf8")
   const result = spawnSync("cc", ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", sourcePath, "-o", binary], { encoding: "utf8", shell: false })
   assert.equal(result.status, 0, `${name} compile failed: ${String(result.stderr)}`)
   return binary
@@ -398,6 +398,7 @@ test("H4-R3G-C lost acknowledgment remains failed and a later invocation repeats
     let physicalCommitCalls = 0
     let failedRecord: GvisorPhysicalNetworkRecord | undefined
     let resolveLateAck: (() => void) | undefined
+    const firstController = new AbortController()
     const network = {
       version: KDO_H4_R3G_C_RUNTIME_CONFIG_VERSION,
       trustedHostUid: trustedUid(),
@@ -418,7 +419,6 @@ test("H4-R3G-C lost acknowledgment remains failed and a later invocation repeats
       },
     } as const
 
-    const firstController = new AbortController()
     let firstTerminal: "pending" | "success" | "failure" = "pending"
     const firstGateway = new GvisorNetworkExecutionGateway({ filesystem: new NodeWorkspaceFileSystem(workspace), policy: fixedPolicy("allow"), gvisorObserver: gvisor, dockerControlPlane: provider, networkObserver: network })
     const firstOperation = firstGateway.observeGvisorPhysicalNetwork(requirement, undefined, { signal: firstController.signal }).then(
