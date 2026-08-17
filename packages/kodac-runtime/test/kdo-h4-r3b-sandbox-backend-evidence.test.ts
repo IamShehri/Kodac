@@ -160,7 +160,7 @@ test("H4-R3B constants protected authority and pure dependency boundary are exac
     "../src/trust/confinement.ts": "873f235120645c0a12f10a5bff7e9591db6bb341",
     "../src/trust/confinement-linux-landlock.ts": "94b325f73246514f31b950ba4fed38023e3e3cfc",
     "../src/trust/confinement-runtime.ts": "1ca0313fb25c62e549445ebcf1aef029b18e6b86",
-    "../src/execution/gateway.ts": "8de6063a929381d0c889a0638507a41f5fbdc645",
+    "../src/execution/gateway.ts": "1732dae059fc878c04e6b1bb6a117385efe9ed6a",
     "../src/evidence/receipt.ts": "214403398751c9d22bf695786c7fd7c6fd7e35e1",
     "../src/verification/done-gate.ts": "067e147569fa52cc2b04c5df26fbe20a01e958e9",
     "../src/agent/loop.ts": "576ad425db7e845b9705c982e95dd4f7522f8c43",
