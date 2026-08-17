@@ -234,7 +234,7 @@ test("H5-R1A production source is pure attributed and R1B integration cannot wid
   const protectedBlobs: Record<string, string> = {
     "../src/session/model-visible-request.ts": "0f4c7ef7ef0f4e4e1baa90944c39639c1dfa07a6",
     "../src/trust/policy.ts": "b4134e430204123bebe053ffc9105f05fca611c9",
-    "../src/execution/gateway.ts": "8de6063a929381d0c889a0638507a41f5fbdc645",
+    "../src/execution/gateway.ts": "1732dae059fc878c04e6b1bb6a117385efe9ed6a",
     "../src/verification/done-gate.ts": "067e147569fa52cc2b04c5df26fbe20a01e958e9",
     "../package.json": "af4c20a3dae387c15cc5fb2eb28d415c8f115b95",
     "../scripts/run-tests.mjs": "9a0bcde0e565168c78eb7fe4d3cf08236d24baa7",
