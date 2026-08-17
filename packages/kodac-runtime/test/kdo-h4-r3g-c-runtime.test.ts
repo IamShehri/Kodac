@@ -143,7 +143,9 @@ test("H4-R3G-C Linux production gateway proves one shared-attempt loopback-only 
     const receipts:ExecutionReceipt[]=[]; const record=await gateway.observeGvisorPhysicalNetwork(requirement,{onReceipt(receipt){receipts.push(receipt)}})
     assert.equal(record.evidenceClass,KDO_H4_R3G_C_EVIDENCE_CLASS);assert.equal(record.executionAttemptIdentity,attempts[0]);assert.equal(lineageRecords.length,2);assert.equal(lineageRecords[0]?.executionAttemptIdentity,record.executionAttemptIdentity);assert.equal(lineageRecords[1]?.executionAttemptIdentity,record.executionAttemptIdentity);assert.equal(committed?.recordIdentity,record.recordIdentity);assert.equal(rpcCalls,2);assert.equal(receipts.length,1);assert.equal(receipts[0]?.capability,KDO_H4_R3G_C_CAPABILITY);assert.equal(receipts[0]?.result.status,"success")
   } finally {
-    if(server.listening)await closeServer(server);if(sandbox&&!sandbox.killed){sandbox.kill("SIGKILL");await new Promise<void>((resolve)=>sandbox?.once("exit",()=>resolve()))}rmSync(runtimeRoot,{recursive:true,force:true});rmSync(root,{recursive:true,force:true})
+    if(server.listening)await closeServer(server)
+    if(sandbox!==undefined&&sandbox.exitCode===null&&sandbox.signalCode===null){const exited=new Promise<void>((resolve)=>sandbox?.once("exit",()=>resolve()));sandbox.kill("SIGKILL");await exited}
+    rmSync(runtimeRoot,{recursive:true,force:true});rmSync(root,{recursive:true,force:true})
   }
 })
 
