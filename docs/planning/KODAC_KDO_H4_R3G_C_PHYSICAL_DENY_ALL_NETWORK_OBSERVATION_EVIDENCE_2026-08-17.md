@@ -10,13 +10,13 @@ PR: `#116`
 
 ---
 
-## 1. Evidence decision
+## 1. Reconciliation decision
 
 ```text
 GATE:
 H4-R3G-C PRE-LEDGER IMPLEMENTATION GATE
 
-PRE-LEDGER DECISION:
+RECONCILED PRE-LEDGER DECISION:
 PASS
 
 CANONICAL BASE:
@@ -25,19 +25,40 @@ a150f322694e49be2b7adcb307d5df1e71e558e2
 CANONICAL BASE TREE:
 cdd729374cacb5a6518b5584cc647dfe7d64a2e9
 
-ACCEPTED PRE-LEDGER HEAD:
-98a7a51b410fc7ed2062641004ed8760e47e69fa
+RECONCILED PRE-LEDGER IMPLEMENTATION HEAD:
+a774ba0895bc88e8f6d940a3f8d5969bf521c4b2
 
-ACCEPTED PRE-LEDGER TREE:
-229124dab729bcc9ca0a05f9af86862d33efb845
+RECONCILED PRE-LEDGER IMPLEMENTATION TREE:
+1342b0e766e6795314c06610b5e718824d1b0265
 
 BOUNDED TARGET:
 KDO-H4-R3G-C Linux gVisor physical deny-all network observation only
 ```
 
-This ledger records the accepted **pre-ledger** implementation evidence for R3G-C only.
+This document is the **reconciliation ledger** for R3G-C.
 
-It does **not** close R3G-C by itself. This ledger transition must remain ledger-only. Fresh complete post-ledger exact-head certification is mandatory before any implementation completion claim, Ready transition, merge decision, or canonical implementation claim.
+The earlier ledger transition is explicitly superseded:
+
+```text
+SUPERSEDED LEDGER COMMIT:
+e75d07067d8a120628378b91c261fd6933b3ecff
+
+SUPERSEDED LEDGER TREE:
+4b23909abdabf66de0d8225ca676a027c2fbf988
+
+SUPERSEDED LEDGER PARENT:
+98a7a51b410fc7ed2062641004ed8760e47e69fa
+
+SUPERSEDED LEDGER BLOB:
+369673ebefbc7fde3dfd74d62f7698ce40365a19
+
+STATUS:
+SUPERSEDED / STALE / NON-CERTIFYING
+```
+
+The first ledger became non-certifying because later exact-head external review identified valid implementation/test issues and the implementation/test bytes changed afterward. No evidence from that stale ledger is used to certify the reconciled implementation head.
+
+This reconciliation ledger does **not** close R3G-C by itself. Fresh post-ledger exact-head certification, zero unresolved actionable review findings, guarded merge, and exact merge-commit post-merge quality remain mandatory before the canonical completion claim may be emitted.
 
 Repository canonical authorization remains authoritative over this ledger if a conflict is discovered.
 
@@ -45,7 +66,7 @@ Repository canonical authorization remains authoritative over this ledger if a c
 
 ## 2. Governing canonical artifact and upstream pin
 
-The accepted implementation was reviewed against:
+Canonical authorization:
 
 ```text
 docs/planning/KODAC_KDO_H4_R3G_C_PHYSICAL_DENY_ALL_NETWORK_OBSERVATION_AUTHORIZATION_2026-08-17.md
@@ -57,6 +78,12 @@ Canonical authorization commit:
 a150f322694e49be2b7adcb307d5df1e71e558e2
 ```
 
+Canonical authorization blob:
+
+```text
+999adaa4d8effbe9afda00aef1b0fc3cb4f46881
+```
+
 Pinned upstream gVisor source:
 
 ```text
@@ -64,107 +91,143 @@ repository: google/gvisor
 commit: 50e1502a95d36ad2faf2c7ef33b8bf21fe975293
 ```
 
-R3E, R3F, R3G-A, and R3G-B remain canonical predecessors.
-
-The accepted theorem is the authorization's bounded v1 theorem. It is not upgraded by this ledger.
+R3E, R3F, R3G-A, and R3G-B remain canonical predecessors. The theorem remains the bounded R3G-C theorem authorized by the canonical document and is not widened by this ledger.
 
 ---
 
-## 3. Exact accepted pre-ledger scope
+## 3. Exact reconciled implementation scope
 
-The accepted pre-ledger PR diff contains exactly these 8 changed paths:
+The reconciled pre-ledger implementation/test state consists of exactly these nine implementation/test paths:
 
 ```text
+packages/kodac-runtime/src/trust/sandbox-observer-gvisor-network.ts
+packages/kodac-runtime/src/trust/sandbox-observer-gvisor-network-runtime.ts
 packages/kodac-runtime/src/execution/gateway-gvisor-network.ts
 packages/kodac-runtime/src/index.ts
-packages/kodac-runtime/src/trust/sandbox-observer-gvisor-network-runtime.ts
-packages/kodac-runtime/src/trust/sandbox-observer-gvisor-network.ts
-packages/kodac-runtime/test/kdo-h4-r3g-c-certification.test.ts
 packages/kodac-runtime/test/kdo-h4-r3g-c-gvisor-network.test.ts
-packages/kodac-runtime/test/kdo-h4-r3g-c-replay.test.ts
 packages/kodac-runtime/test/kdo-h4-r3g-c-runtime.test.ts
+packages/kodac-runtime/test/kdo-h4-r3g-c-certification.test.ts
+packages/kodac-runtime/test/kdo-h4-r3g-c-replay.test.ts
+packages/kodac-runtime/test/kdo-h4-r3g-c-review-regressions.test.ts
 ```
 
-The reserved evidence-ledger path was verified absent at the accepted pre-ledger head before this transition:
+The tenth PR path is this evidence ledger.
 
-```text
-docs/planning/KODAC_KDO_H4_R3G_C_PHYSICAL_DENY_ALL_NETWORK_OBSERVATION_EVIDENCE_2026-08-17.md
-```
-
-No dependency, lockfile, schema, workflow, generated-code, donor-import, generic policy, K3 policy, daemon, background monitor, arbitrary RPC utility, or unrelated product-surface change is admitted by this ledger.
+No dependency, lockfile, schema, workflow, generated-code, donor-import, generic policy, K3 policy, daemon, background monitor, arbitrary RPC utility, or unrelated product-surface change is admitted by this reconciliation ledger.
 
 ---
 
-## 4. Accepted implementation identities
-
-Primary accepted blobs at pre-ledger head:
+## 4. Exact reconciled implementation identities
 
 ```text
+packages/kodac-runtime/src/trust/sandbox-observer-gvisor-network.ts
+54724d0b3877838bc866e592ad47bb9ced823160
+
+packages/kodac-runtime/src/trust/sandbox-observer-gvisor-network-runtime.ts
+f1ee4be7fd522cdd7a87b7c55911c784dae8b58d
+
 packages/kodac-runtime/src/execution/gateway-gvisor-network.ts
 142028d7bdbdbd2dd99b009befeb5aed3577f6a6
 
 packages/kodac-runtime/src/index.ts
 ded2fc746f2393f608b42d734642e2852d7dd51d
 
-packages/kodac-runtime/src/trust/sandbox-observer-gvisor-network-runtime.ts
-f1ee4be7fd522cdd7a87b7c55911c784dae8b58d
-
-packages/kodac-runtime/src/trust/sandbox-observer-gvisor-network.ts
-60abfeadfd885a7aebee860bd2c2242ec47aa55d
-
-packages/kodac-runtime/test/kdo-h4-r3g-c-certification.test.ts
-9e008808764f988fb7c3f540fa67aff4c2874d4d
-
 packages/kodac-runtime/test/kdo-h4-r3g-c-gvisor-network.test.ts
-76e99ddd54fb75d316ee47d3ca3a1f34ba1ea517
-
-packages/kodac-runtime/test/kdo-h4-r3g-c-replay.test.ts
-d7b6c91256124199249b902429ae8c621ba9ab7b
+9b21700142cab46261cace2be7af8e840fbf8692
 
 packages/kodac-runtime/test/kdo-h4-r3g-c-runtime.test.ts
-b8b0c1f00b9b6035daccac96afa02f1ca7530325
+477925ec07f4a0505873dfb12b4d9985ebcb1cf3
+
+packages/kodac-runtime/test/kdo-h4-r3g-c-certification.test.ts
+bef44b8ae04091b8e8c6c049b9c3f6d78bfc9f6e
+
+packages/kodac-runtime/test/kdo-h4-r3g-c-replay.test.ts
+506ebf7e3f05fceff826c9fbfd9b014d0b1d5d82
+
+packages/kodac-runtime/test/kdo-h4-r3g-c-review-regressions.test.ts
+9e8a22180d20670e07fb6624cd1e3a0a40749876
 ```
+
+These identities are bound to the reconciled pre-ledger implementation head and tree in §1.
 
 ---
 
-## 5. Bounded theorem established by the accepted implementation
+## 5. Review-driven reconciliation history
 
-Within the authorized R3G-C scope, the accepted implementation establishes a fail-closed **E3 physical-network candidate** for one exact trusted Linux gVisor execution subject only when all required facts hold together:
+The accepted source/test repair lineage after the superseded ledger is:
+
+```text
+2f77b5800bb311e913b4157e9ab96607050697a1
+fix(kdo): harden R3G-C uRPC buffering and timers
+
+65065efe0f0e1d211ebb8f3274e7696feb584c4a
+review regression coverage for the source fixes
+
+e8cf483b7beec261603c5dc79fe2a2e7180bc836
+test(kdo): harden R3G-C socket fixtures
+
+5efc65b6e059cbe5548363b628f9b41f6c4718ad
+test(kdo): strengthen R3G-C no-fallback proof
+
+9772ac50979083382056f7f7075f9585a812cb9c
+test(kdo): bound R3G-C replay cleanup
+
+a774ba0895bc88e8f6d940a3f8d5969bf521c4b2
+test(kdo): bound R3G-C runtime socket path
+```
+
+Accepted remediation facts:
+
+1. uRPC response buffering is bounded linear-copy work; repeated growing `Buffer.concat` work is removed.
+2. The response timeout starts only after Unix-socket connection and remains separate from the connect timeout.
+3. Runtime no-fallback proof is tied to the selected runtime root and exact endpoint failure.
+4. `/tmp` world-writable-ancestor assumptions are explicit and host-sensitive test behavior is not silently assumed.
+5. Unix-socket fixtures use short trusted roots and assert the Linux `sun_path` byte bound.
+6. Replay cleanup has bounded waits and signal-delivery assertions.
+7. Runtime integration fixtures carry the same socket-path hardening.
+
+No source/test actionable review finding remains unresolved at this ledger transition.
+
+---
+
+## 6. Bounded theorem established by the reconciled implementation
+
+Within the authorized R3G-C scope, the implementation establishes a fail-closed `e3-physical-network-candidate` for one exact trusted Linux gVisor execution subject only when all required facts hold together:
 
 1. Linux only.
-2. The dedicated R3G-C capability remains policy-gated.
+2. Dedicated R3G-C policy gate remains required.
 3. `deny` blocks.
-4. `ask` blocks; R3G-C introduces no new approval authority.
-5. The canonical R3E gVisor runtime and canonical R3F Docker resolver are required.
-6. Every observation invocation mints a fresh execution-attempt identity internally.
-7. Fresh R3F evidence must bind the exact requirement/workload/container subject.
-8. Fresh R3F posture must remain `networkMode == none` with zero network attachments.
-9. R3E before/after records must preserve the same exact execution attempt, requirement, workload, binding, container, observer, runsc artifact, helper artifact, plan, state, process, and runtime-instance identity.
-10. `runtimeRoot` is trusted configuration from the canonical R3E boundary, not caller input to the observation operation.
+4. `ask` blocks; R3G-C creates no new approval authority.
+5. Canonical R3E gVisor runtime and canonical R3F Docker resolver are required.
+6. Every observation invocation has a fresh execution-attempt identity.
+7. Fresh R3F evidence binds the exact requirement/workload/container subject.
+8. R3F posture remains `networkMode == none` with zero network attachments.
+9. R3E before/after lineage preserves the exact bound execution and runtime-instance identities.
+10. `runtimeRoot` is trusted canonical R3E configuration, not caller-selected operation authority.
 11. The control socket is derived only as `<runtimeRoot>/runsc-<full-container-id>.sock`.
 12. No fallback search outside the selected runtimeRoot is admitted.
-13. runtimeRoot path authority is checked component-by-component and group/world-writable or untrusted ownership fails closed.
-14. The final endpoint must be a real non-symlink Unix socket with trusted ownership and non-group/world-writable mode.
-15. Endpoint identity is snapshotted before and after each fixed RPC and must remain stable across the full physical bracket.
+13. runtimeRoot authority is checked component-by-component and unsafe ownership/write mode fails closed.
+14. The final endpoint is a real non-symlink Unix socket with trusted ownership and safe mode.
+15. Endpoint identity is snapshotted before and after each fixed RPC and must remain stable.
 16. The only new gVisor RPC is fixed `containerManager.GetNetworkConfig` with fixed empty argument body.
-17. The protocol is bounded for connect time, response time, response bytes, JSON depth/nodes/object keys/array items/string bytes, total observation time, and durable commit time.
+17. Connect time, response time, response bytes, JSON structure, total observation time, and durable commit time are bounded.
 18. Duplicate-key, malformed, trailing-content, oversized, deeply nested, and remote-error responses fail closed.
-19. Timeout or cancellation destroys the owned stream; terminal settlement occurs on close and late bytes cannot become evidence.
-20. The accepted topology contains exactly canonical loopback authority and zero FDBasedLinks/XDPLinks/default gateway/non-loopback authority.
+19. Timeout/cancellation destroys the owned stream and late bytes cannot become evidence.
+20. Accepted topology contains canonical loopback authority and zero external/non-loopback authority.
 21. PCAP, packet logging, NAT blob, pause-external-networking, and allow-connected-on-save authority are not accepted.
 22. Two physical topology reads must derive the same topology identity.
 23. The trusted-host serialization theorem version must be explicitly admitted by immutable runtime configuration.
-24. The observer does not pretend to observe or create the external S1-S6 trusted-host serialization authority.
+24. The observer does not claim to observe or create the external trusted-host serialization authority.
 25. R3E lineage evidence is committed and acknowledgment-validated before physical record creation.
 26. R3G-C physical-network evidence is committed and exact acknowledgment-validated before successful return.
-27. Lost acknowledgment is terminal for the current invocation; there is no blind same-invocation retry.
-28. A later recovery invocation performs a fresh R3F/R3E/RPC observation with a fresh execution-attempt identity and normally a distinct record identity.
-29. Same recordIdentity plus same canonical bytes is idempotent at the trusted-store proof boundary.
+27. Lost acknowledgment is terminal for the current invocation; no blind same-invocation retry is admitted.
+28. Later recovery performs a fresh R3F/R3E/RPC observation with a fresh execution-attempt identity.
+29. Same recordIdentity plus same canonical bytes is idempotent at the trusted-store boundary.
 30. Same recordIdentity plus different canonical bytes is an integrity violation and fails closed.
 31. Production R3G-C cannot mint canonical `SandboxBackendObservation` or `SandboxExecutionEvidence`.
 32. Generic workspace/K3 policy surfaces receive no R3G-C completion authority.
 
-The evidence class remains exactly:
+Evidence class remains exactly:
 
 ```text
 e3-physical-network-candidate
@@ -172,9 +235,9 @@ e3-physical-network-candidate
 
 ---
 
-## 6. Required hostile-proof gate (§28)
+## 7. Required hostile-proof gate (§28)
 
-The accepted head explicitly covers all 26 required hostile-proof classes from canonical §28:
+All 26 required hostile-proof classes are explicit on the reconciled implementation head:
 
 ```text
 1  canonical loopback-only topology passes
@@ -201,129 +264,134 @@ The accepted head explicitly covers all 26 required hostile-proof classes from c
 22 same-record conflicting canonical bytes fail closed
 23 lost acknowledgment requires a fresh later invocation
 24 no R3B observation/evidence constructor is invoked
-25 delayed-pre-start SetNetworkArgs race is modeled as unsafe unless §9 serialization is admitted
+25 delayed-pre-start SetNetworkArgs race is unsafe unless §9 serialization is admitted
 26 malicious trusted-host mutation is explicitly outside the theorem
 ```
-
-Result:
 
 ```text
 REQUIRED HOSTILE PROOFS:
 26 / 26 EXPLICIT
 ```
 
-No required proof is passed by implication alone.
-
 ---
 
-## 7. Exact pre-ledger CI evidence
+## 8. Exact pre-ledger CI evidence
 
-Required exact-head workflow truth for accepted pre-ledger head `98a7a51b410fc7ed2062641004ed8760e47e69fa`:
+All required technical workflows completed successfully on exact reconciled head `a774ba0895bc88e8f6d940a3f8d5969bf521c4b2`:
 
 ```text
 governance
-run: 32041254274
-run number: 1444
+run: 32044522477
+run number: 1458
 conclusion: success
 
 k2-runtime
-run: 32041254247
-run number: 607
+run: 32044522482
+run number: 614
 conclusion: success
 
 k3-r4-adapter
-run: 32041254232
-run number: 311
+run: 32044522458
+run number: 318
 conclusion: success
 
 k3-r5-context-engine
-run: 32041254235
-run number: 284
+run: 32044522465
+run number: 291
 conclusion: success
 ```
 
-The governance run's first provenance attempt encountered an external GitHub/codeload HTTP 429 while downloading `astral-sh/setup-uv@v6` before repository provenance execution. Only failed jobs were re-run through the repository workflow mechanism. Attempt 2 completed successfully on the same exact SHA, including frozen dependency synchronization and `tools/validate_provenance.py`.
-
-The K2 runtime workflow completed successfully for:
+Exact K2 matrix/gate truth:
 
 ```text
 runtime-change-classifier: PASS
 Ubuntu Typecheck: PASS
 Ubuntu full Test: PASS
 Ubuntu benchmark hook: PASS
-macOS Typecheck: PASS
-macOS full Test: PASS
-macOS benchmark hook: PASS
 Windows Typecheck: PASS
 Windows full Test: PASS
 Windows benchmark hook: PASS
+macOS Typecheck: PASS
+macOS full Test: PASS
+macOS benchmark hook: PASS
 k2-runtime-gate: PASS
 ```
 
-Accepted Ubuntu runtime summary:
+Exact macOS job:
 
 ```text
-tests: 648
-pass: 645
+job: 95429553024
+started: 2026-08-17T18:51:16Z
+completed: 2026-08-17T18:51:45Z
+conclusion: success
+```
+
+Exact Ubuntu runtime summary:
+
+```text
+tests: 650
+pass: 647
 fail: 0
+cancelled: 0
 skipped: 3
 ```
 
-The named Linux production integration passed:
+Named R3G-C regression/integration coverage that passed includes:
 
 ```text
-H4-R3G-C Linux production gateway proves one shared-attempt loopback-only physical-network candidate
+exact socket authority has no fallback outside selected runtimeRoot
+RPC timeout closes owned stream and late bytes cannot become evidence
+exact endpoint absence fails even when a fallback socket exists
+endpoint replacement during fixed RPC fails
+cancellation closes owned transport and late bytes cannot become success
+lost acknowledgment requires fresh later R3F/R3E/RPC observation
+uRPC response buffering is linear-copy bounded
+response timeout starts only after Unix socket connects
+runtime rejects a Docker provider that is not the exact R3E resolver
+gateway ASK blocks before R3F or observer activity
+Linux production gateway proves one shared-attempt loopback-only physical-network candidate
+runtime/gateway expose no mutation, active-probe, or generic RPC surface
 ```
 
-No failing required technical workflow remained at the accepted pre-ledger head.
+No required technical workflow remained pending or failing at this pre-ledger transition.
 
 ---
 
-## 8. External review and review-thread truth
+## 9. External exact-head review and thread truth
 
-A fresh CodeRabbit review was explicitly requested while PR `#116` remained Draft.
-
-Qualifying exact-head review evidence:
+Qualifying CodeRabbit exact-head status:
 
 ```text
 head:
-98a7a51b410fc7ed2062641004ed8760e47e69fa
+a774ba0895bc88e8f6d940a3f8d5969bf521c4b2
 
-CodeRabbit status event:
-SUCCESS
+status id:
+52366173991
+
+state:
+success
 
 description:
 Review completed
 
 timestamp:
-2026-08-17T15:07:39Z
+2026-08-17T16:10:39Z
 ```
 
-Immediately before ledger transition, the GitHub review-thread API reported:
+Review-thread truth immediately before this reconciliation ledger transition:
 
 ```text
-unresolved actionable inline review threads: 0
+unresolved actionable source/test threads: 0
+unresolved ledger reconciliation thread: 1
 ```
 
-After the qualifying completed review, duplicate CodeRabbit review requests were queued on the **same immutable head**. The latest duplicate status before this ledger transition was:
+The sole unresolved thread targets this evidence ledger and correctly identifies the earlier ledger as stale/unsupported after later source/test repairs. This reconciliation directly addresses that finding by superseding the old ledger and binding the pre-ledger decision to the current exact implementation head, current blobs, current CI, and current successful external review.
 
-```text
-state: pending
-description: Review queued
-timestamp: 2026-08-17T15:21:00Z
-```
-
-This queued duplicate is recorded truthfully as:
-
-```text
-PENDING / NOT COUNTED AS PASS
-```
-
-It is not used to upgrade the qualifying completed exact-head review, and it is not represented as a finding. No implementation byte changed after the qualifying completed review and before this ledger transition. Any later actionable finding against the accepted implementation blocks post-ledger certification and must be adjudicated before further transition.
+The ledger thread may be resolved only after this dedicated reconciliation commit is verified to contain this correction and no unrelated path changes.
 
 ---
 
-## 9. Manual architecture / trust / security review (§32)
+## 10. Manual architecture / trust / security review (§32)
 
 Result:
 
@@ -331,10 +399,10 @@ Result:
 PASS
 ```
 
-Every unsafe proposition in canonical §32 was answered **NO**:
+Every unsafe proposition remains answered **NO**:
 
 ```text
-NO — caller can choose containerId, PID, runtimeRoot or socket path
+NO — caller can choose containerId, PID, runtimeRoot, or socket path
 NO — caller can choose the uRPC method/body
 NO — production R3G-C can reach SetNetworkArgs
 NO — production R3G-C can reach Network.CreateLinksAndRoutes
@@ -342,24 +410,24 @@ NO — R3G-C can connect to arbitrary Unix sockets
 NO — R3G-C can fall back to /tmp or scan the host
 NO — Docker NetworkMode alone can satisfy the theorem
 NO — guest/app self-report can satisfy the theorem
-NO — failed outbound probes can satisfy it
+NO — failed outbound probes can satisfy the theorem
 NO — non-loopback authority can be normalized away
 NO — endpoint replacement can be accepted
 NO — runtime-instance replacement can be accepted
 NO — late timeout/cancel bytes can become evidence
 NO — R3G-C can mint canonical R3B evidence directly
 NO — GetNetworkConfig can be described as direct live NIC enumeration
-NO — the §8 retained-topology race can be ignored
-NO — §9 serialization can be inferred merely from loopback-only retained args
-NO — the claim can survive a trusted-host violation of §9
-NO — the claim can be interpreted as no loopback, sockets or local IPC
+NO — the retained-topology race can be ignored
+NO — trusted-host serialization can be inferred merely from loopback-only retained args
+NO — the claim can survive a trusted-host serialization violation
+NO — the claim can be interpreted as no loopback, sockets, or local IPC
 ```
 
-The review additionally verified that safety timeouts/size/depth bounds are one-operation security bounds and are not product usage quotas, queues, daily limits, review limits, or artificial availability restrictions.
+Timeout, byte, depth, and cleanup bounds are per-operation security/reliability bounds. They are not Kodac-imposed review quotas, daily limits, artificial busy states, forced queues, or vendor-controlled availability restrictions.
 
 ---
 
-## 10. Explicit nonclaims
+## 11. Explicit nonclaims
 
 This evidence does **not** claim:
 
@@ -370,7 +438,7 @@ This evidence does **not** claim:
 - no in-sandbox network syscalls;
 - direct live NIC-table enumeration;
 - resistance to a malicious or compromised trusted host;
-- automatic detection of a trusted-host §9 serialization violation;
+- automatic detection of a trusted-host serialization violation;
 - Docker `NetworkMode=none` alone is physical proof;
 - active outbound probing is evidence;
 - arbitrary gVisor/container runtimes are supported;
@@ -382,10 +450,10 @@ This evidence does **not** claim:
 - later R3G slices are proven;
 - external-process ASK is enabled;
 - H4 is complete;
-- PR `#116` is Ready or mergeable solely because this ledger exists;
-- the final canonical R3G-C completion claim is available before ledger-head certification, canonical merge, and post-merge quality certification.
+- this ledger alone makes the PR merge-safe;
+- the final canonical R3G-C completion claim is available before post-ledger certification, canonical merge, and post-merge exact-commit quality certification.
 
-The eventual candidate completion claim remains only the exact canonical §33 claim:
+The only eventual allowed completion claim remains:
 
 ```text
 KODAC_LINUX_GVISOR_PHYSICAL_DENY_ALL_NETWORK_OBSERVATION_PROVEN
@@ -395,17 +463,17 @@ This ledger does **not** emit that claim.
 
 ---
 
-## 11. Ledger transition rule
+## 12. Reconciliation ledger transition rule
 
-Canonical §31 permits the ledger only after exact pre-ledger implementation PASS and requires a dedicated ledger-only commit.
+Canonical §31 permits the ledger only after exact pre-ledger implementation PASS and requires a dedicated ledger-only transition.
 
-Therefore the transition from the accepted pre-ledger head must satisfy:
+This reconciliation transition must therefore satisfy:
 
 ```text
 parent:
-98a7a51b410fc7ed2062641004ed8760e47e69fa
+a774ba0895bc88e8f6d940a3f8d5969bf521c4b2
 
-added path only:
+changed path only:
 docs/planning/KODAC_KDO_H4_R3G_C_PHYSICAL_DENY_ALL_NETWORK_OBSERVATION_EVIDENCE_2026-08-17.md
 
 production delta:
@@ -414,20 +482,37 @@ production delta:
 test delta:
 0
 
-schema/workflow/dependency delta:
+schema delta:
+0
+
+workflow delta:
+0
+
+dependency delta:
 0
 ```
 
-After this transition, fresh complete post-ledger exact-head certification is mandatory.
+After this transition, fresh post-ledger exact-head certification is mandatory. A docs-only classifier skip may be recorded only according to the repository workflow's actual semantics; absence of a required fresh run must never be represented as PASS.
 
-If required workflows do not automatically trigger for the docs-only ledger transition, absence of a fresh run must not be represented as PASS; the repository's canonical workflow mechanism must be used where fresh execution is required.
+No merge, final completion claim, post-merge claim, or later H4 slice is authorized by this ledger alone.
 
-A pending, unavailable, rate-limited, stale, or duplicate external review event must never be represented as a successful review it did not actually perform.
+---
 
-Until fresh post-ledger certification is complete, the only valid state is:
+## 13. Required post-ledger transition
 
 ```text
-POST-LEDGER CERTIFICATION PENDING
+reconciliation ledger-only commit verified
+→ resolve the now-addressed ledger review thread
+→ fresh post-ledger exact-head governance certification
+→ fresh post-ledger exact-head K2 gate according to canonical workflow semantics
+→ fresh post-ledger exact-head K3-R4 certification
+→ fresh post-ledger exact-head K3-R5 certification where applicable
+→ fresh external exact-head review where required
+→ zero unresolved actionable review findings
+→ guarded merge with expected exact ledger head SHA
+→ verify merge parents/tree/diff
+→ required post-merge quality certification on exact merge commit
+→ only then emit the canonical §33 completion claim
 ```
 
-No merge, Ready transition, final R3G-C proven claim, post-merge claim, or later H4 slice is authorized by this ledger alone.
+Until every step above is complete, R3G-C remains **not canonically proven**.
