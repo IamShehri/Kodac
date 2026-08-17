@@ -156,6 +156,12 @@ function fixtureRecord(): GvisorPhysicalNetworkRecord {
 function trustedUid(): string {
   return typeof process.getuid === "function" ? String(process.getuid()) : "0"
 }
+function trustedShortRoot(): string { return mkdtempSync(join(homedir(), ".k")) }
+function fixtureSocketPath(root: string): string {
+  const path = deriveGvisorNetworkControlSocketPath(root, CONTAINER_ID)
+  assert.ok(Buffer.byteLength(path, "utf8") <= 107, `R3G-C fixture socket path too long: ${path}`)
+  return path
+}
 async function closeServer(server: Server): Promise<void> {
   if (!server.listening) return
   await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -214,9 +220,10 @@ test("H4-R3G-C trusted store exact replay is idempotent and conflicting canonica
 })
 
 test("H4-R3G-C exact socket authority has no fallback search outside the selected runtimeRoot", { skip: process.platform !== "linux" }, async () => {
-  const selectedRoot = mkdtempSync(join(homedir(), ".r3f-"))
-  const fallbackRoot = mkdtempSync(join(tmpdir(), "r3g-c-fallback-"))
-  const fallbackPath = deriveGvisorNetworkControlSocketPath(fallbackRoot, CONTAINER_ID)
+  const selectedRoot = trustedShortRoot()
+  const fallbackRoot = mkdtempSync(join(tmpdir(), "r"))
+  const selectedPath = fixtureSocketPath(selectedRoot)
+  const fallbackPath = fixtureSocketPath(fallbackRoot)
   const fallbackServer = createServer()
   try {
     await new Promise<void>((resolve, reject) => fallbackServer.listen(fallbackPath, (error?: Error) => error ? reject(error) : resolve()))
@@ -224,7 +231,12 @@ test("H4-R3G-C exact socket authority has no fallback search outside the selecte
       runtimeRoot: selectedRoot,
       containerId: CONTAINER_ID,
       trustedHostUid: trustedUid(),
-    }))
+    }), (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      assert.ok(message.includes(selectedPath), `selected endpoint failure must identify ${selectedPath}: ${message}`)
+      assert.ok(!message.includes(fallbackRoot), "R3G-C must not consult fallback runtimeRoot")
+      return true
+    })
     const source = readFileSync(new URL("../src/trust/sandbox-observer-gvisor-network.ts", import.meta.url), "utf8")
     assert.doesNotMatch(source, /["']\/(?:tmp|run|var\/run)\//)
   } finally {
@@ -235,8 +247,8 @@ test("H4-R3G-C exact socket authority has no fallback search outside the selecte
 })
 
 test("H4-R3G-C RPC timeout closes the owned stream and late response bytes cannot become evidence", { skip: process.platform !== "linux" }, async () => {
-  const root = mkdtempSync(join(homedir(), ".r3t-"))
-  const socketPath = deriveGvisorNetworkControlSocketPath(root, CONTAINER_ID)
+  const root = trustedShortRoot()
+  const socketPath = fixtureSocketPath(root)
   const server = createServer()
   const sockets = new Set<import("node:net").Socket>()
   let closeCount = 0
