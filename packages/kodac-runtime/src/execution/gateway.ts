@@ -375,8 +375,9 @@ export class ExecutionGateway {
   private readonly confinement?: LinuxLandlockRuntimeConfig
   private readonly gvisorObserver?: GvisorObserverRuntimeConfig
   private readonly gvisorCgroupObserver?: GvisorCgroupV2RuntimeConfig
-  constructor(fs: WorkspaceFileSystem, policy: PolicyEngine, approval?: ApprovalRuntime, confinement?: LinuxLandlockRuntimeConfig, gvisorObserver?: GvisorObserverRuntimeConfig, gvisorCgroupObserver?: GvisorCgroupV2RuntimeConfig) {
-    this.fs = fs; this.policy = policy; this.approval = approval; this.confinement = confinement === undefined ? undefined : validateLinuxLandlockRuntimeConfig(confinement); this.gvisorObserver = gvisorObserver === undefined ? undefined : validateGvisorObserverRuntimeConfig(gvisorObserver); this.gvisorCgroupObserver = gvisorCgroupObserver === undefined ? undefined : validateGvisorCgroupV2RuntimeConfig(gvisorCgroupObserver)
+  private readonly gvisorSourceObserver?: import("../trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRuntimeConfig
+  constructor(fs: WorkspaceFileSystem, policy: PolicyEngine, approval?: ApprovalRuntime, confinement?: LinuxLandlockRuntimeConfig, gvisorObserver?: GvisorObserverRuntimeConfig, gvisorCgroupObserver?: GvisorCgroupV2RuntimeConfig, gvisorSourceObserver?: import("../trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRuntimeConfig) {
+    this.fs = fs; this.policy = policy; this.approval = approval; this.confinement = confinement === undefined ? undefined : validateLinuxLandlockRuntimeConfig(confinement); this.gvisorObserver = gvisorObserver === undefined ? undefined : validateGvisorObserverRuntimeConfig(gvisorObserver); this.gvisorCgroupObserver = gvisorCgroupObserver === undefined ? undefined : validateGvisorCgroupV2RuntimeConfig(gvisorCgroupObserver); this.gvisorSourceObserver = gvisorSourceObserver
   }
   private async block(intent: ExecutionIntent, policy: PolicyResult, startedAt: string, observer: ExecutionObserver | undefined, reason: string, message: string): Promise<never> {
     const receipt = blockedReceipt(intent, policy, startedAt, reason); await persistReceipt(observer, receipt); throw new ExecutionBlockedError(message, receipt)
@@ -516,12 +517,318 @@ export class ExecutionGateway {
       await helper?.handle.close().catch(() => {}); await runsc?.handle.close().catch(() => {})
     }
   }
+  async observeGvisorSourceLineage(requirementValue: SandboxExecutionRequirement, observer?: ExecutionObserver, options: { signal?: AbortSignal } = {}): Promise<import("../trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRecord> {
+    const sourceContract = await import("../trust/sandbox-observer-gvisor-source-lineage.ts")
+    const dockerContract = await import("../trust/sandbox-observer-docker-control-plane.ts")
+    const fsModule = await import("node:fs")
+    const fsPromises = await import("node:fs/promises")
+    const pathModule = await import("node:path")
+    const startedAt = new Date().toISOString()
+    const deadlineController = new AbortController()
+    const startedMonotonicNs = process.hrtime.bigint()
+    const deadlineNs = startedMonotonicNs + BigInt(sourceContract.KDO_H4_R3G_B_LIMITS.totalObservationTimeoutMs) * 1_000_000n
+    let deadlineTimer: NodeJS.Timeout | undefined
+    let callerAbortHandler: (() => void) | undefined
+    const abortDeadline = (error: Error): void => { if (!deadlineController.signal.aborted) deadlineController.abort(error) }
+    const armDeadline = (): void => {
+      if (deadlineController.signal.aborted) return
+      const remainingNs = deadlineNs - process.hrtime.bigint()
+      if (remainingNs <= 0n) { abortDeadline(new Error("R3G-B total monotonic observation deadline expired")); return }
+      const delayMs = Math.max(1, Number((remainingNs + 999_999n) / 1_000_000n))
+      deadlineTimer = setTimeout(armDeadline, delayMs)
+    }
+    if (options.signal !== undefined) {
+      callerAbortHandler = () => abortDeadline(new Error("R3G-B observation aborted by caller"))
+      options.signal.addEventListener("abort", callerAbortHandler, { once: true })
+      if (options.signal.aborted) callerAbortHandler()
+    }
+    armDeadline()
+    const deadlineError = (): Error => {
+      const reason = deadlineController.signal.reason
+      return reason instanceof Error ? reason : new Error("R3G-B observation aborted")
+    }
+    const checkDeadline = (label: string): void => {
+      if (options.signal?.aborted) abortDeadline(new Error("R3G-B observation aborted by caller"))
+      if (process.hrtime.bigint() >= deadlineNs) abortDeadline(new Error("R3G-B total monotonic observation deadline expired"))
+      if (deadlineController.signal.aborted) throw new Error(`${label}: ${deadlineError().message}`, { cause: deadlineError() })
+    }
+    const remainingMs = (perOperationLimit: number, label: string): number => {
+      checkDeadline(label)
+      const remainingNs = deadlineNs - process.hrtime.bigint()
+      if (remainingNs <= 0n) { abortDeadline(new Error("R3G-B total monotonic observation deadline expired")); throw deadlineError() }
+      const globalRemainingMs = Math.max(1, Number((remainingNs + 999_999n) / 1_000_000n))
+      return Math.min(perOperationLimit, globalRemainingMs)
+    }
+    const boundedCallback = async <T>(label: string, perOperationLimit: number, operation: () => Promise<T> | T): Promise<T> => {
+      const timeoutMs = remainingMs(perOperationLimit, label)
+      let timer: NodeJS.Timeout | undefined; let abortHandler: (() => void) | undefined
+      const timeout = new Promise<never>((_, rejectPromise) => { timer = setTimeout(() => rejectPromise(new Error(`${label} timed out`)), timeoutMs) })
+      const abort = new Promise<never>((_, rejectPromise) => {
+        abortHandler = () => rejectPromise(deadlineError()); deadlineController.signal.addEventListener("abort", abortHandler, { once: true }); if (deadlineController.signal.aborted) abortHandler()
+      })
+      try { const result = await Promise.race([Promise.resolve().then(operation), timeout, abort]); checkDeadline(label); return result }
+      finally { if (timer !== undefined) clearTimeout(timer); if (abortHandler !== undefined) deadlineController.signal.removeEventListener("abort", abortHandler) }
+    }
+    type BigStat = {
+      readonly dev: bigint; readonly ino: bigint; readonly uid: bigint; readonly gid: bigint; readonly mode: bigint; readonly size: bigint
+      isFile(): boolean; isDirectory(): boolean; isSocket(): boolean; isSymbolicLink(): boolean
+    }
+    const bigLstat = async (path: string, label: string): Promise<BigStat> => {
+      checkDeadline(`${label} pre-lstat`)
+      const stat = await fsPromises.lstat(path, { bigint: true }) as unknown as BigStat
+      checkDeadline(`${label} post-lstat`)
+      return stat
+    }
+    const bigFstat = async (handle: FileHandle, label: string): Promise<BigStat> => {
+      checkDeadline(`${label} pre-fstat`)
+      const stat = await handle.stat({ bigint: true }) as unknown as BigStat
+      checkDeadline(`${label} post-fstat`)
+      return stat
+    }
+    const sameCtrStat = (left: BigStat, right: BigStat): boolean => left.dev === right.dev && left.ino === right.ino && left.uid === right.uid && left.gid === right.gid && left.mode === right.mode && left.size === right.size
+    const sameRootfsStat = (left: BigStat, right: BigStat): boolean => left.dev === right.dev && left.ino === right.ino
+    const observePathAuthority = async (terminalPath: string) => {
+      const components = []
+      for (const path of sourceContract.deriveGvisorSourcePathAuthorityPaths(terminalPath)) {
+        const stat = await bigLstat(path, `R3G-B path authority ${path}`)
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`R3G-B protected path component must be a non-symlink directory: ${path}`)
+        components.push(sourceContract.createGvisorSourcePathComponentIdentity({ path, device: stat.dev.toString(), inode: stat.ino.toString(), uid: stat.uid.toString(), gid: stat.gid.toString(), mode: stat.mode.toString() }))
+      }
+      return sourceContract.createGvisorSourcePathAuthorityIdentity(components)
+    }
+    const hashRetainedFile = async (handle: FileHandle, sizeBytes: number, label: string): Promise<string> => {
+      const hash = createHash("sha256"); const buffer = Buffer.allocUnsafe(64 * 1024); let offset = 0
+      while (offset < sizeBytes) {
+        checkDeadline(`${label} hash`)
+        const wanted = Math.min(buffer.byteLength, sizeBytes - offset)
+        const { bytesRead } = await handle.read(buffer, 0, wanted, offset)
+        if (bytesRead <= 0) throw new Error(`${label} changed while its retained descriptor was hashed`)
+        hash.update(buffer.subarray(0, bytesRead)); offset += bytesRead
+      }
+      checkDeadline(`${label} hash completion`)
+      return hash.digest("hex")
+    }
+    const observeTrustedCtr = async (runtimeConfig: import("../trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRuntimeConfig) => {
+      const parentAuthority = await observePathAuthority(pathModule.posix.dirname(runtimeConfig.ctrPath))
+      const pathStat = await bigLstat(runtimeConfig.ctrPath, "R3G-B ctr path")
+      if (!pathStat.isFile() || pathStat.isSymbolicLink()) throw new Error("R3G-B ctr path must resolve directly to a regular non-symlink file")
+      const handle = await open(runtimeConfig.ctrPath, fsModule.constants.O_RDONLY | fsModule.constants.O_NOFOLLOW)
+      try {
+        const fdStat = await bigFstat(handle, "R3G-B ctr retained descriptor")
+        if (!fdStat.isFile() || !sameCtrStat(pathStat, fdStat)) throw new Error("R3G-B ctr path does not identify the retained regular-file descriptor")
+        if (fdStat.size <= 0n || fdStat.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("R3G-B ctr size is outside the safe retained-descriptor hashing range")
+        const sizeBytes = Number(fdStat.size)
+        const observedSha256 = await hashRetainedFile(handle, sizeBytes, "R3G-B ctr")
+        if (observedSha256 !== runtimeConfig.expectedCtrSha256) throw new Error("R3G-B ctr SHA-256 does not match trusted runtime identity")
+        const stableFdStat = await bigFstat(handle, "R3G-B ctr retained descriptor stability")
+        const stablePathStat = await bigLstat(runtimeConfig.ctrPath, "R3G-B ctr stable path")
+        const stableParentAuthority = await observePathAuthority(pathModule.posix.dirname(runtimeConfig.ctrPath))
+        if (!sameCtrStat(fdStat, stableFdStat) || !sameCtrStat(fdStat, stablePathStat) || stableParentAuthority.authorityIdentity !== parentAuthority.authorityIdentity) throw new Error("R3G-B ctr authority changed during retained-descriptor verification")
+        const artifact = sourceContract.createGvisorSourceCtrArtifactIdentity({ path: runtimeConfig.ctrPath, sha256: observedSha256, device: stableFdStat.dev.toString(), inode: stableFdStat.ino.toString(), uid: stableFdStat.uid.toString(), gid: stableFdStat.gid.toString(), mode: stableFdStat.mode.toString(), size: stableFdStat.size.toString(), parentAuthority: stableParentAuthority })
+        sourceContract.requireGvisorSourceCtrExecutablePolicy(artifact)
+        return Object.freeze({ handle, initialStat: stableFdStat, parentAuthority: stableParentAuthority, artifact, sizeBytes })
+      } catch (error) { await handle.close().catch(() => {}); throw error }
+    }
+    const revalidateTrustedCtr = async (trusted: Awaited<ReturnType<typeof observeTrustedCtr>>, runtimeConfig: import("../trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRuntimeConfig): Promise<void> => {
+      const parentAuthority = await observePathAuthority(pathModule.posix.dirname(runtimeConfig.ctrPath))
+      const pathStat = await bigLstat(runtimeConfig.ctrPath, "R3G-B ctr revalidation path")
+      const fdStat = await bigFstat(trusted.handle, "R3G-B ctr revalidation descriptor")
+      if (!pathStat.isFile() || pathStat.isSymbolicLink() || !fdStat.isFile() || parentAuthority.authorityIdentity !== trusted.parentAuthority.authorityIdentity || !sameCtrStat(trusted.initialStat, pathStat) || !sameCtrStat(trusted.initialStat, fdStat)) throw new Error("R3G-B ctr path/file authority changed")
+    }
+    const rehashTrustedCtr = async (trusted: Awaited<ReturnType<typeof observeTrustedCtr>>): Promise<void> => {
+      const digest = await hashRetainedFile(trusted.handle, trusted.sizeBytes, "R3G-B ctr final")
+      const stat = await bigFstat(trusted.handle, "R3G-B ctr final descriptor")
+      if (digest !== trusted.artifact.sha256 || !sameCtrStat(trusted.initialStat, stat)) throw new Error("R3G-B ctr retained bytes or identity changed")
+    }
+    const observeContainerdEndpoint = async (runtimeConfig: import("../trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRuntimeConfig) => {
+      const parentAuthority = await observePathAuthority(pathModule.posix.dirname(runtimeConfig.containerdAddress))
+      const stat = await bigLstat(runtimeConfig.containerdAddress, "R3G-B containerd endpoint")
+      if (!stat.isSocket() || stat.isSymbolicLink()) throw new Error("R3G-B containerd endpoint must be an exact non-symlink Unix socket")
+      const endpoint = sourceContract.createGvisorSourceContainerdEndpointIdentity({ address: runtimeConfig.containerdAddress, device: stat.dev.toString(), inode: stat.ino.toString(), uid: stat.uid.toString(), gid: stat.gid.toString(), mode: stat.mode.toString(), parentAuthorityIdentity: parentAuthority.authorityIdentity })
+      sourceContract.requireGvisorSourceContainerdEndpointPolicy(endpoint, runtimeConfig)
+      return Object.freeze({ parentAuthority, endpoint })
+    }
+    const revalidateContainerdEndpoint = async (trusted: Awaited<ReturnType<typeof observeContainerdEndpoint>>, runtimeConfig: import("../trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRuntimeConfig): Promise<void> => {
+      const current = await observeContainerdEndpoint(runtimeConfig)
+      if (current.parentAuthority.authorityIdentity !== trusted.parentAuthority.authorityIdentity || current.endpoint.endpointIdentity !== trusted.endpoint.endpointIdentity) throw new Error("R3G-B containerd endpoint authority changed")
+    }
+    const observeTrustedRootfs = async (mountPath: string, parentPath: string) => {
+      const parentAuthority = await observePathAuthority(parentPath)
+      if (pathModule.posix.basename(mountPath) === "" || pathModule.posix.dirname(mountPath) !== parentPath) throw new Error("R3G-B rootfs mount path is not an exact child of its protected parent")
+      const pathStat = await bigLstat(mountPath, "R3G-B rootfs final target")
+      if (!pathStat.isDirectory() || pathStat.isSymbolicLink()) throw new Error("R3G-B rootfs final target must be an exact non-symlink directory")
+      const handle = await open(mountPath, fsModule.constants.O_RDONLY | fsModule.constants.O_DIRECTORY | fsModule.constants.O_NOFOLLOW)
+      try {
+        const fdStat = await bigFstat(handle, "R3G-B retained rootfs descriptor")
+        if (!fdStat.isDirectory() || !sameRootfsStat(pathStat, fdStat)) throw new Error("R3G-B rootfs path does not identify the retained directory descriptor")
+        return Object.freeze({ handle, initialStat: fdStat, parentAuthority, mountPath, parentPath })
+      } catch (error) { await handle.close().catch(() => {}); throw error }
+    }
+    const revalidateTrustedRootfs = async (trusted: Awaited<ReturnType<typeof observeTrustedRootfs>>): Promise<BigStat> => {
+      const parentAuthority = await observePathAuthority(trusted.parentPath)
+      const pathStat = await bigLstat(trusted.mountPath, "R3G-B rootfs final target revalidation")
+      const fdStat = await bigFstat(trusted.handle, "R3G-B rootfs retained descriptor revalidation")
+      if (!pathStat.isDirectory() || pathStat.isSymbolicLink() || !fdStat.isDirectory() || parentAuthority.authorityIdentity !== trusted.parentAuthority.authorityIdentity || !sameRootfsStat(trusted.initialStat, pathStat) || !sameRootfsStat(trusted.initialStat, fdStat)) throw new Error("R3G-B rootfs retained object or protected parent authority changed")
+      return fdStat
+    }
+    const readMountObservation = async (mountPath: string) => {
+      checkDeadline("R3G-B mountinfo pre-read")
+      const text = await readBoundedVirtualText("/proc/self/mountinfo", sourceContract.KDO_H4_R3G_B_LIMITS.maxMountInfoBytes, "R3G-B mountinfo", deadlineController.signal)
+      checkDeadline("R3G-B mountinfo post-read")
+      return sourceContract.parseGvisorSourceMountInfo(text, mountPath)
+    }
+    const normalizeDockerSource = (source: Awaited<ReturnType<typeof dockerContract.observeDockerSourceControlPlaneForBindingResolver>>, runtimeConfig: import("../trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRuntimeConfig, requirement: SandboxExecutionRequirement) => {
+      const endpointIdentity = source.socketEndpoint.endpointIdentity
+      if (source.systemInfo.socketEndpointIdentity !== endpointIdentity || source.imageRootfs.socketEndpointIdentity !== endpointIdentity) throw new Error("R3G-B Docker source surfaces do not share one exact socket endpoint identity")
+      if (source.systemInfo.containerdAddress !== runtimeConfig.containerdAddress) throw new Error("R3G-B Docker SystemInfo containerd address does not equal trusted external containerd address")
+      const requiredDigest = requirement.workload.source.digest
+      if (source.imageRootfs.sourceDigest !== requiredDigest || source.imageRootfs.descriptorDigest !== requiredDigest) throw new Error("R3G-B Docker source manifest digest does not equal exact requirement source digest")
+      const storage = sourceContract.createGvisorSourceDockerStorageIdentity({ dockerEndpointIdentity: endpointIdentity, dockerRootDir: source.systemInfo.dockerRootDir, containerdAddress: source.systemInfo.containerdAddress })
+      const image = sourceContract.createGvisorSourceImageRootfsIdentity({ sourceDigest: requiredDigest, diffIds: source.imageRootfs.diffIds, dockerEndpointIdentity: endpointIdentity })
+      return Object.freeze({ endpointIdentity, storage, image })
+    }
+    const collectCtrStream = (stream: Readable, maximum: number, label: string) => {
+      let settled = false; let total = 0; const chunks: Buffer[] = []; let rejectRef: ((error: Error) => void) | undefined
+      const cleanup = (): void => { stream.off("data", onData); stream.off("error", onError); stream.off("end", onEnd); stream.off("close", onClose) }
+      const reject = (error: Error): void => { if (settled) return; settled = true; cleanup(); rejectRef?.(error) }
+      const onData = (chunk: Buffer | string): void => {
+        if (settled) return
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        if (total + bytes.byteLength > maximum) { reject(new Error(`${label} exceeds ${maximum} bytes`)); return }
+        total += bytes.byteLength; chunks.push(Buffer.from(bytes))
+      }
+      const onError = (error: Error): void => reject(error instanceof Error ? error : new Error(String(error)))
+      let resolveRef: ((value: Buffer) => void) | undefined
+      const onEnd = (): void => { if (settled) return; settled = true; cleanup(); resolveRef?.(Buffer.concat(chunks, total)) }
+      const onClose = (): void => { if (!settled) reject(new Error(`${label} closed before end`)) }
+      const promise = new Promise<Buffer>((resolvePromise, rejectPromise) => { resolveRef = resolvePromise; rejectRef = rejectPromise; stream.on("data", onData); stream.once("error", onError); stream.once("end", onEnd); stream.once("close", onClose) })
+      return Object.freeze({ promise, discard(error: Error): void { reject(error); if (!stream.destroyed) stream.destroy() } })
+    }
+    const failureOnly = <T>(promise: Promise<T>): Promise<never> => promise.then(() => new Promise<never>(() => {}), (error) => Promise.reject(error))
+    const waitForCtrClose = (child: ChildProcess): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> => new Promise((resolvePromise) => child.once("close", (exitCode, signal) => resolvePromise({ exitCode, signal })))
+    const waitForCloseWithin = async (closePromise: Promise<unknown>, milliseconds: number): Promise<boolean> => new Promise<boolean>((resolvePromise) => {
+      const remainingNs = deadlineNs - process.hrtime.bigint()
+      const remainingGlobalMs = remainingNs <= 0n ? 0 : Number(remainingNs / 1_000_000n)
+      const effectiveMilliseconds = Math.min(milliseconds, remainingGlobalMs)
+      let settled = false
+      const timer = setTimeout(() => { if (settled) return; settled = true; resolvePromise(false) }, effectiveMilliseconds)
+      closePromise.then(() => { if (settled) return; settled = true; clearTimeout(timer); resolvePromise(true) }, () => { if (settled) return; settled = true; clearTimeout(timer); resolvePromise(true) })
+    })
+    const terminateCtr = async (child: ChildProcess, closePromise: Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>): Promise<void> => {
+      if (child.exitCode === null && child.signalCode === null) { try { child.kill("SIGTERM") } catch {} }
+      const closedAfterTerm = await waitForCloseWithin(closePromise, sourceContract.KDO_H4_R3G_B_LIMITS.ctrTerminateGraceMs)
+      if (!closedAfterTerm && child.exitCode === null && child.signalCode === null) { try { child.kill("SIGKILL") } catch {} }
+      await closePromise
+    }
+    try {
+      const requirement = validateSandboxExecutionRequirement(requirementValue)
+      if (requirement.requiredSemanticRuntimeClass !== "gvisor") throw new Error("R3G-B observer requires requiredSemanticRuntimeClass=gvisor")
+      const intent = immutableExecutionIntent({ capability: sourceContract.KDO_H4_R3G_B_CAPABILITY, paths: [], inputDigest: sha256(JSON.stringify({ version: "kodac-h4-r3g-b-intent-v1", requirementIdentity: requirement.requirementIdentity, workloadIdentity: requirement.workload.workloadIdentity, semanticRuntimeClass: "gvisor" })) }); await observer?.onIntent?.(intent)
+      const policy = immutablePolicyResult(await this.policy.evaluate(intent)); await observer?.onPolicy?.(intent, policy)
+      if (policy.decision === "deny") return this.block(intent, policy, startedAt, observer, policy.reason, `Execution denied: ${policy.reason}`)
+      if (policy.decision === "ask") return this.block(intent, policy, startedAt, observer, "R3G-B physical source observer approval is not authorized", "Approval unavailable: R3G-B observer does not authorize ask")
+      if (process.platform !== "linux") return this.block(intent, policy, startedAt, observer, "R3G-B immutable source observer requires Linux", "R3G-B observation unavailable: Linux required")
+      const runtime = this.gvisorObserver; if (!runtime) return this.block(intent, policy, startedAt, observer, "trusted R3E gVisor observer runtime is not configured", "R3G-B observation unavailable: trusted R3E runtime not configured")
+      const rawSourceRuntime = this.gvisorSourceObserver; if (!rawSourceRuntime) return this.block(intent, policy, startedAt, observer, "trusted R3G-B source observer runtime is not configured", "R3G-B observation unavailable: trusted source runtime not configured")
+      const sourceRuntime = sourceContract.validateGvisorSourceLineageRuntimeConfig(rawSourceRuntime)
+      try { checkDeadline("R3G-B before external observation") } catch (error) { const reason = error instanceof Error ? error.message : String(error); return this.block(intent, policy, startedAt, observer, reason, `R3G-B observation unavailable: ${reason}`) }
+      let runsc: TrustedGvisorArtifactHandle | undefined; let helper: TrustedGvisorArtifactHandle | undefined; let ctr: Awaited<ReturnType<typeof observeTrustedCtr>> | undefined; let rootfs: Awaited<ReturnType<typeof observeTrustedRootfs>> | undefined
+      try {
+        const executionAttemptIdentity = createGvisorExecutionAttemptIdentity({ requirementIdentity: requirement.requirementIdentity, workloadIdentity: requirement.workload.workloadIdentity, nonce: randomUUID() })
+        const bindingRequest = createGvisorContainerBindingRequest({ executionAttemptIdentity, requirement })
+        const rawBinding = await boundedCallback("R3G-B container binding resolver", sourceContract.KDO_H4_R3G_B_LIMITS.dockerRequestTimeoutMs, () => runtime.resolveContainerBinding(bindingRequest, { signal: deadlineController.signal })); const binding = validateGvisorContainerBinding(rawBinding, bindingRequest)
+        runsc = await observeTrustedGvisorArtifact(runtime.runscPath, runtime.expectedRunscSha256, "runsc", KDO_H4_R3E_LIMITS.maxRunscBytes); checkDeadline("R3G-B verified runsc")
+        helper = await observeTrustedGvisorArtifact(runtime.observerHelperPath, runtime.expectedObserverHelperSha256, "observer-helper", KDO_H4_R3E_LIMITS.maxHelperBytes); checkDeadline("R3G-B verified helper")
+        const plan = createGvisorObserverPlan({ runscPath: runtime.runscPath, expectedRunscSha256: runtime.expectedRunscSha256, runtimeRoot: runtime.runtimeRoot, containerId: binding.containerId }); const stateCommand = materializeGvisorStateCommand(plan); const statsCommand = materializeGvisorStatsCommand(plan)
+        const state1Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_RUNSC_FD, runscParentFd: runsc.handle.fd, args: stateCommand.args, maxStdoutBytes: KDO_H4_R3E_LIMITS.maxStateStdoutBytes, timeoutMs: remainingMs(KDO_H4_R3E_LIMITS.stateTimeoutMs, "R3G-B runsc state #1"), label: "R3G-B runsc state #1", signal: deadlineController.signal }); const state1 = parseGvisorStateOutput(state1Raw.stdout, plan)
+        const process1Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_HELPER_FD, runscParentFd: runsc.handle.fd, helperParentFd: helper.handle.fd, args: ["--pid", String(state1.pid)], maxStdoutBytes: KDO_H4_R3E_LIMITS.maxHelperStdoutBytes, timeoutMs: remainingMs(KDO_H4_R3E_LIMITS.helperTimeoutMs, "R3G-B process observation #1"), label: "R3G-B process observation #1", signal: deadlineController.signal }); const process1 = parseGvisorProcessObservation(process1Raw.stdout); if (process1.pid !== state1.pid) throw new Error("R3G-B process #1 PID does not match state #1")
+        const statsRaw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_RUNSC_FD, runscParentFd: runsc.handle.fd, args: statsCommand.args, maxStdoutBytes: KDO_H4_R3E_LIMITS.maxStatsStdoutBytes, timeoutMs: remainingMs(KDO_H4_R3E_LIMITS.statsTimeoutMs, "R3G-B runsc stats"), label: "R3G-B runsc stats", signal: deadlineController.signal }); const stats = parseGvisorStatsOutput(statsRaw.stdout, plan)
+        ctr = await observeTrustedCtr(sourceRuntime)
+        const containerd = await observeContainerdEndpoint(sourceRuntime)
+        const sourceRaw1 = await dockerContract.observeDockerSourceControlPlaneForBindingResolver(runtime.resolveContainerBinding, { signal: deadlineController.signal }); checkDeadline("R3G-B Docker source observation #1")
+        const source1 = normalizeDockerSource(sourceRaw1, sourceRuntime, requirement)
+        const paths = sourceContract.deriveGvisorSourceRootfsPaths(source1.storage.dockerRootDir, binding.containerId)
+        rootfs = await observeTrustedRootfs(paths.rootfsMountPath, paths.rootfsParentPath)
+        const runCtrCommand = async (command: { readonly argv: readonly string[]; readonly maxStdoutBytes: number; readonly label: string }): Promise<string> => {
+          await revalidateTrustedCtr(ctr!, sourceRuntime); await revalidateContainerdEndpoint(containerd, sourceRuntime)
+          const timeoutMs = remainingMs(sourceContract.KDO_H4_R3G_B_LIMITS.ctrTimeoutMs, command.label)
+          const child = spawn("/proc/self/fd/3", [...command.argv], { cwd: "/", env: { LANG: "C", LC_ALL: "C" }, windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe", ctr!.handle.fd] })
+          const stdout = child.stdout; const stderr = child.stderr
+          const closePromise = waitForCtrClose(child)
+          const childError = new Promise<never>((_, rejectPromise) => child.once("error", (error) => rejectPromise(error instanceof Error ? error : new Error(String(error)))))
+          if (!stdout || !stderr) { await terminateCtr(child, closePromise); throw new Error(`${command.label} did not expose bounded stdout/stderr`) }
+          const stdoutCollector = collectCtrStream(stdout, command.maxStdoutBytes, `${command.label} stdout`); const stderrCollector = collectCtrStream(stderr, KDO_H4_R3E_LIMITS.maxStderrBytes, `${command.label} stderr`)
+          let timer: NodeJS.Timeout | undefined; let abortHandler: (() => void) | undefined
+          const timeout = new Promise<never>((_, rejectPromise) => { timer = setTimeout(() => rejectPromise(new Error(`${command.label} timed out`)), timeoutMs) })
+          const abort = new Promise<never>((_, rejectPromise) => { abortHandler = () => rejectPromise(deadlineError()); deadlineController.signal.addEventListener("abort", abortHandler, { once: true }); if (deadlineController.signal.aborted) abortHandler() })
+          try {
+            const closed = await Promise.race([closePromise, childError, timeout, abort, failureOnly(stdoutCollector.promise), failureOnly(stderrCollector.promise)])
+            if (timer !== undefined) clearTimeout(timer); if (abortHandler !== undefined) deadlineController.signal.removeEventListener("abort", abortHandler)
+            const [stdoutBytes, stderrBytes] = await Promise.all([stdoutCollector.promise, stderrCollector.promise])
+            await revalidateTrustedCtr(ctr!, sourceRuntime); await revalidateContainerdEndpoint(containerd, sourceRuntime)
+            checkDeadline(`${command.label} post-child authority`)
+            if (closed.exitCode !== 0) throw new Error(`${command.label} failed: code=${String(closed.exitCode)} signal=${String(closed.signal)} stderr=${stderrBytes.toString("utf8")}`)
+            return new TextDecoder("utf-8", { fatal: true }).decode(stdoutBytes)
+          } catch (error) {
+            if (timer !== undefined) clearTimeout(timer); if (abortHandler !== undefined) deadlineController.signal.removeEventListener("abort", abortHandler)
+            const failure = error instanceof Error ? error : new Error(String(error)); stdoutCollector.discard(failure); stderrCollector.discard(failure)
+            await terminateCtr(child, closePromise)
+            await Promise.allSettled([stdoutCollector.promise, stderrCollector.promise])
+            throw failure
+          }
+        }
+        const observeSpec = async () => sourceContract.parseGvisorSourceCtrContainerInfo(await runCtrCommand(sourceContract.materializeGvisorSourceCtrContainerInfoCommand(sourceRuntime, binding.containerId)), binding.containerId, paths.rootfsMountPath)
+        const observeAncestry = async () => {
+          const active = sourceContract.parseGvisorSourceCtrSnapshotInfo(await runCtrCommand(sourceContract.materializeGvisorSourceCtrSnapshotInfoCommand(sourceRuntime, binding.containerId)), binding.containerId)
+          const expectedInitName = `${binding.containerId}-init`
+          let init: import("../trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceSnapshotNodeIdentity | null = null
+          if (active.parent === expectedInitName) init = sourceContract.parseGvisorSourceCtrSnapshotInfo(await runCtrCommand(sourceContract.materializeGvisorSourceCtrSnapshotInfoCommand(sourceRuntime, expectedInitName)), expectedInitName)
+          else if (active.parent !== source1.image.expectedImageChainId) throw new Error("R3G-B active snapshot parent is outside the two authorized Moby ancestry shapes")
+          const image = sourceContract.parseGvisorSourceCtrSnapshotInfo(await runCtrCommand(sourceContract.materializeGvisorSourceCtrSnapshotInfoCommand(sourceRuntime, source1.image.expectedImageChainId)), source1.image.expectedImageChainId)
+          return sourceContract.createGvisorSourceSnapshotAncestryIdentity({ containerId: binding.containerId, expectedImageChainId: source1.image.expectedImageChainId, active, init, image })
+        }
+        const spec1 = await observeSpec(); const ancestry1 = await observeAncestry()
+        const rootfsPreStat = await revalidateTrustedRootfs(rootfs); const mountObservation1 = await readMountObservation(paths.rootfsMountPath)
+        const mount1 = sourceContract.createGvisorSourceRootfsMountIdentity({ rootfsMountPath: paths.rootfsMountPath, rootfsParentAuthorityIdentity: rootfs.parentAuthority.authorityIdentity, retainedRootfsDevice: rootfsPreStat.dev.toString(), retainedRootfsInode: rootfsPreStat.ino.toString(), mountId: mountObservation1.mountId, parentMountId: mountObservation1.parentMountId, majorMinor: mountObservation1.majorMinor, mountRoot: mountObservation1.mountRoot, mountOptions: mountObservation1.mountOptions, mountSource: mountObservation1.mountSource, superOptions: mountObservation1.superOptions })
+        const state2Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_RUNSC_FD, runscParentFd: runsc.handle.fd, args: stateCommand.args, maxStdoutBytes: KDO_H4_R3E_LIMITS.maxStateStdoutBytes, timeoutMs: remainingMs(KDO_H4_R3E_LIMITS.stateTimeoutMs, "R3G-B runsc state #2"), label: "R3G-B runsc state #2", signal: deadlineController.signal }); const state2 = parseGvisorStateOutput(state2Raw.stdout, plan)
+        const process2Raw = await runGvisorFdCommand({ executableFd: KDO_H4_R3E_HELPER_FD, runscParentFd: runsc.handle.fd, helperParentFd: helper.handle.fd, args: ["--pid", String(state2.pid)], maxStdoutBytes: KDO_H4_R3E_LIMITS.maxHelperStdoutBytes, timeoutMs: remainingMs(KDO_H4_R3E_LIMITS.helperTimeoutMs, "R3G-B process observation #2"), label: "R3G-B process observation #2", signal: deadlineController.signal }); const process2 = parseGvisorProcessObservation(process2Raw.stdout)
+        if (process2.pid !== state2.pid || state1.stateIdentity !== state2.stateIdentity || process1.processIdentity !== process2.processIdentity) throw new Error("R3G-B exact R3E subject bracket changed")
+        const rawBinding2 = await boundedCallback("R3G-B container binding revalidation", sourceContract.KDO_H4_R3G_B_LIMITS.dockerRequestTimeoutMs, () => runtime.resolveContainerBinding(bindingRequest, { signal: deadlineController.signal })); const binding2 = validateGvisorContainerBinding(rawBinding2, bindingRequest)
+        if (binding2.bindingIdentity !== binding.bindingIdentity || binding2.containerId !== binding.containerId) throw new Error("R3G-B exact R3F container binding changed")
+        const sourceRaw2 = await dockerContract.observeDockerSourceControlPlaneForBindingResolver(runtime.resolveContainerBinding, { signal: deadlineController.signal }); checkDeadline("R3G-B Docker source observation #2")
+        const source2 = normalizeDockerSource(sourceRaw2, sourceRuntime, requirement)
+        if (source2.endpointIdentity !== source1.endpointIdentity || source2.storage.storageIdentity !== source1.storage.storageIdentity || source2.image.imageRootfsIdentity !== source1.image.imageRootfsIdentity) throw new Error("R3G-B Docker source/storage/image identity changed")
+        const spec2 = await observeSpec(); const ancestry2 = await observeAncestry()
+        if (spec2.specIdentity !== spec1.specIdentity || ancestry2.ancestryIdentity !== ancestry1.ancestryIdentity) throw new Error("R3G-B container spec or snapshot ancestry changed")
+        const rootfsPostStat = await revalidateTrustedRootfs(rootfs); const mountObservation2 = await readMountObservation(paths.rootfsMountPath)
+        const mount2 = sourceContract.createGvisorSourceRootfsMountIdentity({ rootfsMountPath: paths.rootfsMountPath, rootfsParentAuthorityIdentity: rootfs.parentAuthority.authorityIdentity, retainedRootfsDevice: rootfsPostStat.dev.toString(), retainedRootfsInode: rootfsPostStat.ino.toString(), mountId: mountObservation2.mountId, parentMountId: mountObservation2.parentMountId, majorMinor: mountObservation2.majorMinor, mountRoot: mountObservation2.mountRoot, mountOptions: mountObservation2.mountOptions, mountSource: mountObservation2.mountSource, superOptions: mountObservation2.superOptions })
+        if (mount2.mountIdentity !== mount1.mountIdentity) throw new Error("R3G-B physical rootfs mount identity changed")
+        await revalidateTrustedRootfs(rootfs); await revalidateTrustedCtr(ctr, sourceRuntime); await revalidateContainerdEndpoint(containerd, sourceRuntime); await rehashTrustedCtr(ctr)
+        await reverifyTrustedGvisorArtifact(runsc); await reverifyTrustedGvisorArtifact(helper); checkDeadline("R3G-B final stability gate")
+        const candidate = createGvisorRuntimeObservationCandidate({ plan, state: state1, stats, process: process1 }); const lineage = createGvisorRuntimeLineageRecord({ executionAttemptIdentity, requirement, binding, runsc: runsc.artifact, helper: helper.artifact, plan, state: state1, stats, process: process1, candidate })
+        const record = sourceContract.createGvisorSourceLineageRecord({ requirementIdentity: requirement.requirementIdentity, workloadIdentity: requirement.workload.workloadIdentity, executionAttemptIdentity, containerBindingIdentity: binding.bindingIdentity, runtimeLineageIdentity: lineage.recordIdentity, containerId: binding.containerId, sourceDigest: requirement.workload.source.digest, dockerStorageIdentity: source1.storage.storageIdentity, imageRootfsIdentity: source1.image.imageRootfsIdentity, expectedImageChainId: source1.image.expectedImageChainId, ctrArtifactIdentity: ctr.artifact.artifactIdentity, containerdEndpointIdentity: containerd.endpoint.endpointIdentity, rootfsParentAuthorityIdentity: rootfs.parentAuthority.authorityIdentity, containerSpecIdentity: spec1.specIdentity, snapshotAncestryIdentity: ancestry1.ancestryIdentity, rootfsMountIdentity: mount1.mountIdentity })
+        checkDeadline("R3G-B before durable source evidence commit")
+        const rawCommit = await boundedCallback("R3G-B durable source evidence commit", sourceContract.KDO_H4_R3G_B_LIMITS.commitTimeoutMs, () => sourceRuntime.commitSourceLineageEvidence(record)); sourceContract.validateGvisorSourceLineageCommit(rawCommit, record)
+        checkDeadline("R3G-B before success receipt")
+        const serializedRecord = sourceContract.serializeGvisorSourceLineageRecord(record); const receipt = createReceipt({ capability: intent.capability, inputDigest: intent.inputDigest, paths: intent.paths, policy, startedAt, completedAt: new Date().toISOString(), result: { status: "success", outputDigest: sha256(serializedRecord), outputBytes: Buffer.byteLength(serializedRecord, "utf8"), exitCode: 0 } }); await persistReceipt(observer, receipt)
+        return record
+      } catch (error) {
+        if (error instanceof ExecutionUnprovenError) throw error
+        const message = error instanceof Error ? error.message : String(error); const receipt = createReceipt({ capability: intent.capability, inputDigest: intent.inputDigest, paths: intent.paths, policy, startedAt, completedAt: new Date().toISOString(), result: { status: "failure", error: message } }); await persistReceipt(observer, receipt); throw new ExecutionFailedError(`${sourceContract.KDO_H4_R3G_B_CAPABILITY} failed: ${message}`, receipt, { cause: error })
+      } finally {
+        await rootfs?.handle.close().catch(() => {}); await ctr?.handle.close().catch(() => {}); await helper?.handle.close().catch(() => {}); await runsc?.handle.close().catch(() => {})
+      }
+    } finally {
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer)
+      if (callerAbortHandler !== undefined) options.signal?.removeEventListener("abort", callerAbortHandler)
+    }
+  }
   async runCommand(capability: string, executable: string, args: string[], observer?: ExecutionObserver, options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number; env?: NodeJS.ProcessEnv; paths?: string[]; allowedExitCodes?: number[] } = {}): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
-    if (capability.startsWith("git.") || capability.startsWith("repo.") || capability === KDO_H4_R3G_A_CAPABILITY) throw new Error(`Generic runCommand cannot use reserved capability: ${capability}`)
+    if (capability.startsWith("git.") || capability.startsWith("repo.") || capability === KDO_H4_R3G_A_CAPABILITY || capability === "runtime.observe.gvisor.source-lineage") throw new Error(`Generic runCommand cannot use reserved capability: ${capability}`)
     return this.runReadOnlyCommand(capability, executable, args, uniquePaths(options.paths ?? []), observer, options, capability)
   }
   async runConfinedReadOnlyCommand(capability: string, executable: string, args: string[], observer?: ExecutionObserver, options: { signal?: AbortSignal; maxOutputBytes?: number; timeoutMs?: number; env?: NodeJS.ProcessEnv; paths?: string[]; allowedExitCodes?: number[] } = {}): Promise<{ stdout: string; stderr: string; receipt: ExecutionReceipt }> {
-    if (capability.startsWith("git.") || capability.startsWith("repo.") || capability === KDO_H4_R3G_A_CAPABILITY) throw new Error(`Confined runCommand cannot use reserved capability: ${capability}`)
+    if (capability.startsWith("git.") || capability.startsWith("repo.") || capability === KDO_H4_R3G_A_CAPABILITY || capability === "runtime.observe.gvisor.source-lineage") throw new Error(`Confined runCommand cannot use reserved capability: ${capability}`)
     if (!executable.startsWith("/")) throw new Error("Confined execution requires an absolute Linux target executable path")
     const startedAt = new Date().toISOString(); const executionArgs = [...args]; const maxOutputBytes = options.maxOutputBytes ?? 256 * 1024; const timeoutMs = options.timeoutMs ?? 5_000; const allowedExitCodes = normalizedAllowedExitCodes(options.allowedExitCodes); const environment = canonicalEnvironment(options.env ?? process.env); const paths = uniquePaths((options.paths ?? []).map((path) => canonicalWorkspaceRelativePath(this.fs.root, path)))
     if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) throw new Error("maxOutputBytes must be a positive integer")

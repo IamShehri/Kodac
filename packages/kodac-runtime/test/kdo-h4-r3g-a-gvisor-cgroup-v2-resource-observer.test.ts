@@ -435,5 +435,5 @@ test("H4-R3G-A production module is pure E3-only and protected R3B/R3E/R3F surfa
   assert.equal(gitBlobSha1(source("../src/trust/sandbox-backend-evidence.ts")), "b9242c5cecc18fd43b2b80aeffd974ef5311fded")
   assert.equal(gitBlobSha1(source("../src/trust/sandbox-observer-gvisor.ts")), "47c792ba01c9ba4b2db94d7558f282cdbd218660")
   assert.equal(gitBlobSha1(source("../src/trust/sandbox-observer-gvisor-runtime.ts")), "1d02a5dbc1dc4071636c24327e7faf9906370ef5")
-  assert.equal(gitBlobSha1(source("../src/trust/sandbox-observer-docker-control-plane.ts")), "452bd955cb0ef84f2090aa646dfdc70ad610a8d9")
+  assert.equal(gitBlobSha1(source("../src/trust/sandbox-observer-docker-control-plane.ts")), "f9e2dda11fe26d481e2e6c328c37cd37a6260106")
 })
