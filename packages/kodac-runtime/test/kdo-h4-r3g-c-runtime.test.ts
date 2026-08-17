@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url"
 import test from "node:test"
 
 import { NodeWorkspaceFileSystem } from "../src/edit/filesystem.ts"
+import type { ExecutionReceipt } from "../src/evidence/receipt.ts"
 import { ExecutionBlockedError } from "../src/execution/gateway.ts"
 import { GvisorNetworkExecutionGateway } from "../src/execution/gateway-gvisor-network.ts"
 import { createConfinementRequest } from "../src/trust/confinement.ts"
@@ -80,7 +81,7 @@ async function waitForFile(path: string): Promise<void> { for (let i=0;i<100;i+=
 function topologyResponse(): string {
   return JSON.stringify({ success: true, err: "", result: { LoopbackLinks: [{ Name: "lo", Addresses: [{ Address: "127.0.0.1", PrefixLen: 8 }, { Address: "::1", PrefixLen: 128 }], Routes: [{ Destination: { IP: "127.0.0.0", Mask: "/wAAAA==" }, Gateway: "", MTU: 0 }, { Destination: { IP: "::1", Mask: "/////////////////////w==" }, Gateway: "", MTU: 0 }], GVisorGRO: false }], FDBasedLinks: null, XDPLinks: null, Defaultv4Gateway: { Route: { Destination: { IP: "", Mask: null }, Gateway: "", MTU: 0 }, Name: "" }, Defaultv6Gateway: { Route: { Destination: { IP: "", Mask: null }, Gateway: "", MTU: 0 }, Name: "" }, PCAP: false, LogPackets: false, NATBlob: false, PauseExternalNetworking: false, AllowConnectedOnSave: false, IsRestore: false } })
 }
-function fakeProvider(requirement: SandboxExecutionRequirement, resolveContainerBinding: GvisorObserverRuntimeConfig["resolveContainerBinding"], onResolution?: (request: GvisorContainerBindingRequest) => void): DockerControlPlaneBindingProvider {
+function fakeProvider(requirement: SandboxExecutionRequirement, resolveContainerBinding: DockerControlPlaneBindingProvider["resolveContainerBinding"], onResolution?: (request: GvisorContainerBindingRequest) => void): DockerControlPlaneBindingProvider {
   const socketEndpoint = createDockerSocketEndpointIdentity({ device: "1", inode: "2", uid: "0", gid: "0", mode: String(0o140600) })
   return Object.freeze({
     providerId: KDO_H4_R3F_PROVIDER_ID,
@@ -102,8 +103,12 @@ function networkRuntime(onCommit: (record: GvisorPhysicalNetworkRecord) => unkno
 }
 async function closeServer(server: Server): Promise<void> { await new Promise<void>((resolve) => server.close(() => resolve())) }
 
+function fixtureResolver(): DockerControlPlaneBindingProvider["resolveContainerBinding"] {
+  return async (request) => createGvisorContainerBinding({ providerId: KDO_H4_R3F_PROVIDER_ID, executionAttemptIdentity: request.executionAttemptIdentity, requirementIdentity: request.requirementIdentity, workloadIdentity: request.workloadIdentity, containerId: CONTAINER_ID })
+}
+
 test("H4-R3G-C runtime rejects a Docker provider that is not the exact R3E resolver", { skip: process.platform !== "linux" }, async () => {
-  const requirement = fixtureRequirement(); const resolverA = async () => ({}); const resolverB = async () => ({})
+  const requirement = fixtureRequirement(); const resolverA = fixtureResolver(); const resolverB = fixtureResolver()
   const gvisor = validateGvisorObserverRuntimeConfig({ version: KDO_H4_R3E_RUNTIME_CONFIG_VERSION, runscPath: "/missing/runsc", expectedRunscSha256: "a".repeat(64), observerHelperPath: "/missing/helper", expectedObserverHelperSha256: "b".repeat(64), runtimeRoot: "/run/runsc", resolveContainerBinding: resolverA, commitLineageEvidence: () => ({}) })
   await assert.rejects(observeGvisorPhysicalNetworkRuntime({ requirement, dependencies: { gvisor, docker: fakeProvider(requirement, resolverB), network: networkRuntime(() => ({})) } }), /exact resolver/)
 })
@@ -112,7 +117,7 @@ test("H4-R3G-C gateway ASK blocks before R3F or observer activity", async () => 
   const root=mkdtempSync(join(tmpdir(),"kodac-r3gc-ask-")), workspace=join(root,"workspace"); mkdirSync(workspace)
   try {
     const requirement=fixtureRequirement(); let calls=0
-    const resolver: GvisorObserverRuntimeConfig["resolveContainerBinding"] = async () => { calls+=1; return {} }
+    const resolver: DockerControlPlaneBindingProvider["resolveContainerBinding"] = async (request) => { calls+=1; return createGvisorContainerBinding({ providerId: KDO_H4_R3F_PROVIDER_ID, executionAttemptIdentity: request.executionAttemptIdentity, requirementIdentity: request.requirementIdentity, workloadIdentity: request.workloadIdentity, containerId: CONTAINER_ID }) }
     const gvisor=validateGvisorObserverRuntimeConfig({version:KDO_H4_R3E_RUNTIME_CONFIG_VERSION,runscPath:"/missing/runsc",expectedRunscSha256:"a".repeat(64),observerHelperPath:"/missing/helper",expectedObserverHelperSha256:"b".repeat(64),runtimeRoot:"/run/runsc",resolveContainerBinding:resolver,commitLineageEvidence:()=>({})})
     const gateway=new GvisorNetworkExecutionGateway({filesystem:new NodeWorkspaceFileSystem(workspace),policy:fixedPolicy("ask"),gvisorObserver:gvisor,dockerControlPlane:fakeProvider(requirement,resolver,()=>{calls+=1}),networkObserver:networkRuntime(()=>({}))})
     await assert.rejects(gateway.observeGvisorPhysicalNetwork(requirement),ExecutionBlockedError); assert.equal(calls,0)
@@ -128,7 +133,7 @@ test("H4-R3G-C Linux production gateway proves one shared-attempt loopback-only 
     let rpcCalls=0; server.on("connection",(socket)=>socket.on("data",(chunk)=>{assert.equal(chunk.toString("utf8"),'{"method":"containerManager.GetNetworkConfig","arg":{}}');rpcCalls+=1;socket.write(topologyResponse())}))
     await new Promise<void>((resolve,reject)=>server.listen(socketPath,(error?:Error)=>error?reject(error):resolve()))
     const requirement=fixtureRequirement(); const lineageRecords:GvisorRuntimeLineageRecord[]=[]; const attempts:string[]=[]
-    let resolver!: GvisorObserverRuntimeConfig["resolveContainerBinding"]
+    let resolver!: DockerControlPlaneBindingProvider["resolveContainerBinding"]
     const providerPlaceholder={current:undefined as DockerControlPlaneBindingProvider|undefined}
     resolver=async(request)=>{const provider=providerPlaceholder.current;if(!provider)throw new Error("provider unavailable");return (await provider.resolveDockerControlPlaneBinding(request)).binding}
     const provider=fakeProvider(requirement,resolver,(request)=>attempts.push(request.executionAttemptIdentity));providerPlaceholder.current=provider
