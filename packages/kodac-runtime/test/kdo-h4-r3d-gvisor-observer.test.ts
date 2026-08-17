@@ -238,7 +238,7 @@ test("candidate remains a bounded E3 candidate and cannot smuggle R3B physical f
   assert.deepEqual(Object.keys(candidate).sort(), [
     "candidateIdentity", "evidenceClass", "planIdentity", "processIdentity", "runtimeClass", "stateIdentity", "statsIdentity", "version",
   ])
-  for (const forbidden of ["observedSourceDigest", "observedSemanticRuntimeClass", "observedNetworkPolicy", "observedResourcePolicy", "observedCredentialBindingIdentity", "downgradeOccurred", "observationIdentity"]) {
+  for (const forbidden of ["observedSourceDigest", "observedNetworkPolicy", "observedResourcePolicy", "observedCredentialBindingIdentity", "downgradeOccurred", "observationIdentity"]) {
     assert.equal(forbidden in candidate, false)
   }
 
