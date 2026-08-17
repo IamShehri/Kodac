@@ -653,10 +653,10 @@ test("H4-R3G-B Linux production gateway proves one exact physical source lineage
     return false
   }
   const compiler = spawnSync("cc", ["--version"], { encoding: "utf8", shell: false })
-  if (compiler.status !== 0) return failOrSkip(`C compiler unavailable: ${String(compiler.error ?? compiler.stderr)}`)
+  if (compiler.status !== 0) return void failOrSkip(`C compiler unavailable: ${String(compiler.error ?? compiler.stderr)}`)
   const sudoProbe = spawnSync("sudo", ["-n", "true"], { encoding: "utf8", shell: false })
-  if (sudoProbe.status !== 0) return failOrSkip(`passwordless sudo unavailable: ${String(sudoProbe.error ?? sudoProbe.stderr)}`)
-  if (typeof process.getuid !== "function" || typeof process.getgid !== "function") return failOrSkip("numeric uid/gid APIs are unavailable")
+  if (sudoProbe.status !== 0) return void failOrSkip(`passwordless sudo unavailable: ${String(sudoProbe.error ?? sudoProbe.stderr)}`)
+  if (typeof process.getuid !== "function" || typeof process.getgid !== "function") return void failOrSkip("numeric uid/gid APIs are unavailable")
 
   const scratch = mkdtempSync(join(tmpdir(), "kodac-r3g-b-live-"))
   const token = createHash("sha256").update(`${process.pid}:${Date.now()}:${scratch}`, "utf8").digest("hex").slice(0, 16)
@@ -821,7 +821,7 @@ test("H4-R3G-B Linux production gateway proves one exact physical source lineage
       expectedObserverHelperSha256: sha256File(helperPath),
       runtimeRoot,
       resolveContainerBinding: provider.resolveContainerBinding,
-      commitLineageEvidence(record) { return r3e.createGvisorRuntimeLineageCommit(record) },
+      commitLineageEvidence(record: import("../src/trust/sandbox-observer-gvisor-runtime.ts").GvisorRuntimeLineageRecord) { return r3e.createGvisorRuntimeLineageCommit(record) },
     })
     const endpointStat = fs.lstatSync(containerdAddress, { bigint: true })
     assert.equal(endpointStat.isSocket(), true)
@@ -834,7 +834,7 @@ test("H4-R3G-B Linux production gateway proves one exact physical source lineage
       expectedContainerdSocketUid: endpointStat.uid.toString(),
       expectedContainerdSocketGid: endpointStat.gid.toString(),
       expectedContainerdSocketMode: endpointStat.mode.toString(),
-      commitSourceLineageEvidence(record) {
+      commitSourceLineageEvidence(record: import("../src/trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRecord) {
         committed.push(sourceContract.serializeGvisorSourceLineageRecord(record))
         return sourceContract.createGvisorSourceLineageCommit(record)
       },
@@ -1064,13 +1064,13 @@ async function runR3GBCtrLifecycleFailure(t: any, mode: R3GBCtrLifecycleMode, ca
       version: r3e.KDO_H4_R3E_RUNTIME_CONFIG_VERSION, runscPath: fakeRunsc, expectedRunscSha256: sha256File(fakeRunsc),
       observerHelperPath: helperPath, expectedObserverHelperSha256: sha256File(helperPath), runtimeRoot,
       resolveContainerBinding: provider.resolveContainerBinding,
-      commitLineageEvidence(record) { return r3e.createGvisorRuntimeLineageCommit(record) },
+      commitLineageEvidence(record: import("../src/trust/sandbox-observer-gvisor-runtime.ts").GvisorRuntimeLineageRecord) { return r3e.createGvisorRuntimeLineageCommit(record) },
     })
     const endpointStat = fs.lstatSync(containerdAddress, { bigint: true })
     const sourceRuntime = sourceContract.validateGvisorSourceLineageRuntimeConfig({
       version: sourceContract.KDO_H4_R3G_B_RUNTIME_CONFIG_VERSION, ctrPath, expectedCtrSha256: sha256File(ctrPath), containerdAddress,
       expectedContainerdSocketUid: endpointStat.uid.toString(), expectedContainerdSocketGid: endpointStat.gid.toString(), expectedContainerdSocketMode: endpointStat.mode.toString(),
-      commitSourceLineageEvidence(record) { commitCount += 1; return sourceContract.createGvisorSourceLineageCommit(record) },
+      commitSourceLineageEvidence(record: import("../src/trust/sandbox-observer-gvisor-source-lineage.ts").GvisorSourceLineageRecord) { commitCount += 1; return sourceContract.createGvisorSourceLineageCommit(record) },
     })
     const gateway = new ExecutionGateway(new NodeWorkspaceFileSystem(workspace), fixedPolicy("allow"), undefined, undefined, r3eRuntime, undefined, sourceRuntime)
     const controller = new AbortController()
