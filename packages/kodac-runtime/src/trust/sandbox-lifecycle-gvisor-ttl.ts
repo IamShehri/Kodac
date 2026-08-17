@@ -470,33 +470,29 @@ export function createGvisorTtlWatchdogLeaseRecord(input: {
   return Object.freeze({ ...base, registryRecordIdentity: hash("WATCHDOG_LEASE_RECORD", base) })
 }
 
-export function validateGvisorTtlWatchdogLeaseRecord(value: unknown, preparedValue?: GvisorTtlPreparedIntent): GvisorTtlWatchdogLeaseRecord {
+export function validateGvisorTtlWatchdogLeaseRecord(value: unknown, preparedValue: GvisorTtlPreparedIntent): GvisorTtlWatchdogLeaseRecord {
   const record = asPlainRecord(value, "R3G-D watchdog lease")
   exactKeys(record, ["version", "armOperationIdentity", "canonicalArmPayloadDigest", "leaseIdentity", "executionAttemptIdentity", "requirementIdentity", "workloadIdentity", "containerBindingIdentity", "containerId", "runtimeInstanceIdentity", "ttlMs", "linuxBootId", "clockDomainIdentity", "leaseStartBoottimeNs", "deadlineBoottimeNs", "watchdogImplementationIdentity", "physicalArmState", "registryRecordIdentity"], "R3G-D watchdog lease")
   if (record.version !== KDO_H4_R3G_D_WATCHDOG_LEASE_VERSION || record.physicalArmState !== "ARMED") throw new TypeError("R3G-D watchdog lease version/state mismatch")
-  const prepared = preparedValue === undefined
-    ? Object.freeze({
-        version: KDO_H4_R3G_D_PREPARED_VERSION,
-        state: "PREPARED" as const,
-        armOperationIdentity: identity(record.armOperationIdentity, "armOperationIdentity"),
-        executionAttemptIdentity: identity(record.executionAttemptIdentity, "executionAttemptIdentity"),
-        requirementIdentity: identity(record.requirementIdentity, "requirementIdentity"),
-        workloadIdentity: identity(record.workloadIdentity, "workloadIdentity"),
-        containerBindingIdentity: identity(record.containerBindingIdentity, "containerBindingIdentity"),
-        containerId: fullContainerId(record.containerId),
-        runtimeInstanceIdentity: identity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity"),
-        ttlMs: positiveTtl(record.ttlMs),
-        watchdogImplementationIdentity: identity(record.watchdogImplementationIdentity, "watchdogImplementationIdentity"),
-        canonicalArmPayloadDigest: identity(record.canonicalArmPayloadDigest, "canonicalArmPayloadDigest"),
-        intentIdentity: "0".repeat(64),
-      })
-    : validateGvisorTtlPreparedIntent(preparedValue)
+  const prepared = validateGvisorTtlPreparedIntent(preparedValue)
   const rebuilt = createGvisorTtlWatchdogLeaseRecord({ prepared, linuxBootId: record.linuxBootId as string, leaseStartBoottimeNs: record.leaseStartBoottimeNs as string })
-  if (preparedValue === undefined) {
-    const armPayload = Object.freeze({ executionAttemptIdentity: prepared.executionAttemptIdentity, requirementIdentity: prepared.requirementIdentity, workloadIdentity: prepared.workloadIdentity, containerBindingIdentity: prepared.containerBindingIdentity, containerId: prepared.containerId, runtimeInstanceIdentity: prepared.runtimeInstanceIdentity, ttlMs: prepared.ttlMs, watchdogImplementationIdentity: prepared.watchdogImplementationIdentity })
-    if (hash("ARM_OPERATION", armPayload) !== prepared.armOperationIdentity || hash("ARM_PAYLOAD", armPayload) !== prepared.canonicalArmPayloadDigest) throw new TypeError("R3G-D watchdog lease arm payload identity mismatch")
-  }
-  if (identity(record.leaseIdentity, "leaseIdentity") !== rebuilt.leaseIdentity || identity(record.clockDomainIdentity, "clockDomainIdentity") !== rebuilt.clockDomainIdentity || canonicalUint(record.deadlineBoottimeNs, "deadlineBoottimeNs") !== rebuilt.deadlineBoottimeNs || identity(record.registryRecordIdentity, "registryRecordIdentity") !== rebuilt.registryRecordIdentity) throw new TypeError("R3G-D watchdog lease identity/clock/deadline/registry mismatch")
+  if (
+    identity(record.armOperationIdentity, "armOperationIdentity") !== rebuilt.armOperationIdentity ||
+    identity(record.canonicalArmPayloadDigest, "canonicalArmPayloadDigest") !== rebuilt.canonicalArmPayloadDigest ||
+    identity(record.executionAttemptIdentity, "executionAttemptIdentity") !== rebuilt.executionAttemptIdentity ||
+    identity(record.requirementIdentity, "requirementIdentity") !== rebuilt.requirementIdentity ||
+    identity(record.workloadIdentity, "workloadIdentity") !== rebuilt.workloadIdentity ||
+    identity(record.containerBindingIdentity, "containerBindingIdentity") !== rebuilt.containerBindingIdentity ||
+    fullContainerId(record.containerId) !== rebuilt.containerId ||
+    identity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity") !== rebuilt.runtimeInstanceIdentity ||
+    positiveTtl(record.ttlMs) !== rebuilt.ttlMs ||
+    identity(record.watchdogImplementationIdentity, "watchdogImplementationIdentity") !== rebuilt.watchdogImplementationIdentity ||
+    identity(record.leaseIdentity, "leaseIdentity") !== rebuilt.leaseIdentity ||
+    identity(record.clockDomainIdentity, "clockDomainIdentity") !== rebuilt.clockDomainIdentity ||
+    canonicalUint(record.leaseStartBoottimeNs, "leaseStartBoottimeNs") !== rebuilt.leaseStartBoottimeNs ||
+    canonicalUint(record.deadlineBoottimeNs, "deadlineBoottimeNs") !== rebuilt.deadlineBoottimeNs ||
+    identity(record.registryRecordIdentity, "registryRecordIdentity") !== rebuilt.registryRecordIdentity
+  ) throw new TypeError("R3G-D watchdog lease does not match PREPARED intent or canonical durable identity")
   return rebuilt
 }
 
