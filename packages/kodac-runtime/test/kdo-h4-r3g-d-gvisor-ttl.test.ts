@@ -14,27 +14,32 @@ import {
   KDO_H4_R3G_D_CAPABILITY,
   KDO_H4_R3G_D_CLOCK_NAME,
   KDO_H4_R3G_D_COMMIT_VERSION,
+  KDO_H4_R3G_D_CONTROL_PEER_VERSION,
   KDO_H4_R3G_D_GVISOR_SOURCE_COMMIT,
   KDO_H4_R3G_D_PREPARED_VERSION,
   KDO_H4_R3G_D_RUNTIME_CONFIG_VERSION,
   KDO_H4_R3G_D_SUBJECT_VERSION,
   KDO_H4_R3G_D_TERMINAL_EVIDENCE_CLASS,
   KDO_H4_R3G_D_TERMINAL_RECORD_VERSION,
+  KDO_H4_R3G_D_WATCHDOG_LEASE_VERSION,
   KDO_H4_R3G_D_WATCHDOG_PROTOCOL_VERSION,
   createGvisorTtlArmRecord,
-  createGvisorTtlClockDomainIdentity,
+  createGvisorTtlControlPeerBinding,
   createGvisorTtlEvidenceCommit,
   createGvisorTtlPreparedIntent,
   createGvisorTtlSubjectBinding,
   createGvisorTtlWatchdogImplementationIdentity,
+  createGvisorTtlWatchdogLeaseRecord,
   payloadDigest,
   validateGvisorTtlArmAcknowledgement,
   validateGvisorTtlArmRecord,
+  validateGvisorTtlControlPeerBinding,
   validateGvisorTtlEvidenceCommit,
   validateGvisorTtlPreparedIntent,
   validateGvisorTtlRuntimeConfig,
   validateGvisorTtlSubjectBinding,
   validateGvisorTtlTerminalRecord,
+  validateGvisorTtlWatchdogLeaseRecord,
   type GvisorTtlArmAcknowledgement,
   type GvisorTtlTerminalRecord,
 } from "../src/trust/sandbox-lifecycle-gvisor-ttl.ts"
@@ -65,6 +70,7 @@ const RUNSC_SHA = "c".repeat(64)
 const HELPER_SHA = "d".repeat(64)
 const WATCHDOG_SHA = "e".repeat(64)
 const BOOT_ID = "123e4567-e89b-42d3-a456-426614174000"
+const LEASE_START_NS = "100000000000"
 const WORKSPACE_IDENTITY = "a".repeat(64)
 const EXECUTION_INTENT_IDENTITY = "b".repeat(64)
 
@@ -114,27 +120,60 @@ function fixtureSubject(requirement = fixtureRequirement()) {
   return createGvisorTtlSubjectBinding({ binding, lineage, state, process: processObservation, runscArtifact: runsc, controlEndpoint, expectedPeerUid: "1000", expectedPeerGid: "1000" })
 }
 
-function fixtureAck(prepared: ReturnType<typeof createGvisorTtlPreparedIntent>, subject: ReturnType<typeof fixtureSubject>): GvisorTtlArmAcknowledgement {
-  const leaseStartBoottimeNs = "100000000000"
-  const deadlineBoottimeNs = (BigInt(leaseStartBoottimeNs) + BigInt(prepared.ttlMs) * 1_000_000n).toString()
+function fixturePrepared(requirement: SandboxExecutionRequirement, subject: ReturnType<typeof fixtureSubject>) {
+  return createGvisorTtlPreparedIntent({ requirement, subject, watchdogImplementationIdentity: createGvisorTtlWatchdogImplementationIdentity({ watchdogSha256: WATCHDOG_SHA, watchdogSizeBytes: 123_456 }) })
+}
+
+function fixtureLease(prepared: ReturnType<typeof createGvisorTtlPreparedIntent>) {
+  return createGvisorTtlWatchdogLeaseRecord({ prepared, linuxBootId: BOOT_ID, leaseStartBoottimeNs: LEASE_START_NS })
+}
+
+function fixtureControlPeer(subject: ReturnType<typeof fixtureSubject>) {
+  return createGvisorTtlControlPeerBinding({
+    subject,
+    socketDevice: subject.controlEndpoint.device,
+    socketInode: subject.controlEndpoint.inode,
+    peerPid: subject.process.pid,
+    peerUid: subject.expectedPeerUid,
+    peerGid: subject.expectedPeerGid,
+    processStartTicks: subject.process.startTicks,
+    executableDevice: subject.process.exeDev,
+    executableInode: subject.process.exeIno,
+    executableSize: subject.process.exeSize,
+    verifiedRunscSha256: subject.runscArtifact.sha256,
+  })
+}
+
+function fixtureAck(prepared: ReturnType<typeof createGvisorTtlPreparedIntent>, subject: ReturnType<typeof fixtureSubject>, lease: ReturnType<typeof fixtureLease>): GvisorTtlArmAcknowledgement {
+  const controlPeer = fixtureControlPeer(subject)
   const base = {
     version: KDO_H4_R3G_D_ARM_ACK_VERSION,
-    leaseIdentity: "3".repeat(64),
+    leaseIdentity: lease.leaseIdentity,
     armOperationIdentity: prepared.armOperationIdentity,
     runtimeInstanceIdentity: prepared.runtimeInstanceIdentity,
-    controlPeerBindingIdentity: "4".repeat(64),
+    controlPeer,
+    controlPeerBindingIdentity: controlPeer.controlPeerBindingIdentity,
     runscArtifactIdentity: subject.runscArtifact.artifactIdentity,
     verifiedRunscSha256: subject.runscArtifact.sha256,
-    watchdogRegistryRecordIdentity: "5".repeat(64),
-    clockDomainIdentity: createGvisorTtlClockDomainIdentity(BOOT_ID),
-    linuxBootId: BOOT_ID,
-    leaseStartBoottimeNs,
-    deadlineBoottimeNs,
+    watchdogRegistryRecordIdentity: lease.registryRecordIdentity,
+    clockDomainIdentity: lease.clockDomainIdentity,
+    linuxBootId: lease.linuxBootId,
+    leaseStartBoottimeNs: lease.leaseStartBoottimeNs,
+    deadlineBoottimeNs: lease.deadlineBoottimeNs,
     ownerInstanceIdentity: "6".repeat(64),
     terminalFenceToken: "1",
     claimRecordIdentity: "7".repeat(64),
   } as const
   return Object.freeze({ ...base, armAcknowledgementIdentity: r3gdHash("ARM_ACK", base) })
+}
+
+function fixtureArm() {
+  const requirement = fixtureRequirement()
+  const subject = fixtureSubject(requirement)
+  const prepared = fixturePrepared(requirement, subject)
+  const lease = fixtureLease(prepared)
+  const acknowledgement = fixtureAck(prepared, subject, lease)
+  return { requirement, subject, prepared, lease, acknowledgement, arm: createGvisorTtlArmRecord({ prepared, lease, acknowledgement, subject }) }
 }
 
 function fixtureTerminal(arm: ReturnType<typeof createGvisorTtlArmRecord>, outcome: "natural-exit" | "ttl-expired"): GvisorTtlTerminalRecord {
@@ -151,18 +190,18 @@ function fixtureTerminal(arm: ReturnType<typeof createGvisorTtlArmRecord>, outco
     terminalFenceToken: arm.terminalFenceToken,
     claimRecordIdentity: arm.claimRecordIdentity,
     controlPeerBindingIdentity: arm.controlPeerBindingIdentity,
-    socketDevice: "42",
-    socketInode: "43",
-    peerPid: 4242,
-    peerUid: "1000",
-    peerGid: "1000",
+    socketDevice: arm.controlPeer.socketDevice,
+    socketInode: arm.controlPeer.socketInode,
+    peerPid: arm.controlPeer.peerPid,
+    peerUid: arm.controlPeer.peerUid,
+    peerGid: arm.controlPeer.peerGid,
     retainedPidfdProcessIdentity: "8".repeat(64),
     runscArtifactIdentity: arm.runscArtifactIdentity,
     verifiedRunscSha256: arm.verifiedRunscSha256,
     retainedRunscExecutableIdentity: "9".repeat(64),
     clockDomainIdentity: arm.clockDomainIdentity,
     linuxBootId: arm.linuxBootId,
-    exitEventObservedBoottimeNs: natural ? (BigInt(arm.deadlineBoottimeNs) - 1n).toString() : null,
+    exitEventObservedBoottimeNs: natural ? arm.leaseStartBoottimeNs : null,
     liveAtExpiryProbeIdentity: natural ? null : "a".repeat(64),
     liveAtExpiryObservedBoottimeNs: natural ? null : arm.deadlineBoottimeNs,
     liveAtExpiryProcessSetIdentity: natural ? null : "b".repeat(64),
@@ -178,6 +217,8 @@ test("H4-R3G-D constants keep TTL enforcement narrow and gVisor-pinned", () => {
   assert.equal(KDO_H4_R3G_D_RUNTIME_CONFIG_VERSION, "kodac-h4-r3g-d-runtime-config-v1")
   assert.equal(KDO_H4_R3G_D_SUBJECT_VERSION, "kodac-h4-r3g-d-subject-binding-v1")
   assert.equal(KDO_H4_R3G_D_PREPARED_VERSION, "kodac-h4-r3g-d-arm-intent-v1")
+  assert.equal(KDO_H4_R3G_D_CONTROL_PEER_VERSION, "kodac-h4-r3g-d-control-peer-v1")
+  assert.equal(KDO_H4_R3G_D_WATCHDOG_LEASE_VERSION, "kodac-h4-r3g-d-watchdog-lease-v1")
   assert.equal(KDO_H4_R3G_D_ARM_RECORD_VERSION, "kodac-h4-r3g-d-arm-record-v1")
   assert.equal(KDO_H4_R3G_D_TERMINAL_RECORD_VERSION, "kodac-h4-r3g-d-terminal-record-v1")
   assert.equal(KDO_H4_R3G_D_COMMIT_VERSION, "kodac-h4-r3g-d-evidence-commit-v1")
@@ -191,7 +232,6 @@ test("H4-R3G-D constants keep TTL enforcement narrow and gVisor-pinned", () => {
 test("H4-R3G-D exact subject binds canonical R3E runtime lineage runsc artifact and control endpoint", () => {
   const requirement = fixtureRequirement(); const subject = fixtureSubject(requirement)
   assert.deepEqual(validateGvisorTtlSubjectBinding(subject, requirement), subject)
-  assert.equal(subject.lineage.runtimeInstanceIdentity, subject.lineage.runtimeInstanceIdentity)
   assert.equal(subject.state.pid, subject.process.pid)
   assert.equal(subject.runscArtifact.role, "runsc")
   assert.throws(() => validateGvisorTtlSubjectBinding({ ...subject, expectedPeerUid: "1001" }, requirement), /subjectBindingIdentity/)
@@ -200,40 +240,69 @@ test("H4-R3G-D exact subject binds canonical R3E runtime lineage runsc artifact 
 
 test("H4-R3G-D PREPARED intent and arm operation identity are deterministic and ttl-bound", () => {
   const requirement = fixtureRequirement(); const subject = fixtureSubject(requirement)
-  const watchdogImplementationIdentity = createGvisorTtlWatchdogImplementationIdentity({ watchdogSha256: WATCHDOG_SHA, watchdogSizeBytes: 123_456 })
-  const first = createGvisorTtlPreparedIntent({ requirement, subject, watchdogImplementationIdentity })
-  const second = createGvisorTtlPreparedIntent({ requirement, subject, watchdogImplementationIdentity })
+  const first = fixturePrepared(requirement, subject)
+  const second = fixturePrepared(requirement, subject)
   assert.deepEqual(first, second)
   assert.deepEqual(validateGvisorTtlPreparedIntent(first), first)
-  const changedTtlRequirement = fixtureRequirement(59_999)
-  const changedTtl = createGvisorTtlPreparedIntent({ requirement: changedTtlRequirement, subject: fixtureSubject(changedTtlRequirement), watchdogImplementationIdentity })
-  assert.notEqual(changedTtl.armOperationIdentity, first.armOperationIdentity)
-  assert.notEqual(changedTtl.canonicalArmPayloadDigest, first.canonicalArmPayloadDigest)
+  const changedRequirement = fixtureRequirement(59_999)
+  const changed = fixturePrepared(changedRequirement, fixtureSubject(changedRequirement))
+  assert.notEqual(changed.armOperationIdentity, first.armOperationIdentity)
+  assert.notEqual(changed.canonicalArmPayloadDigest, first.canonicalArmPayloadDigest)
   assert.throws(() => validateGvisorTtlPreparedIntent({ ...first, ttlMs: first.ttlMs + 1 }), /identity|mismatch/)
 })
 
-test("H4-R3G-D arm acknowledgement preserves exact immutable CLOCK_BOOTTIME deadline", () => {
-  const requirement = fixtureRequirement(); const subject = fixtureSubject(requirement)
-  const prepared = createGvisorTtlPreparedIntent({ requirement, subject, watchdogImplementationIdentity: createGvisorTtlWatchdogImplementationIdentity({ watchdogSha256: WATCHDOG_SHA, watchdogSizeBytes: 123_456 }) })
-  const acknowledgement = fixtureAck(prepared, subject)
-  assert.deepEqual(validateGvisorTtlArmAcknowledgement(acknowledgement, prepared, subject), acknowledgement)
-  assert.throws(() => validateGvisorTtlArmAcknowledgement({ ...acknowledgement, deadlineBoottimeNs: (BigInt(acknowledgement.deadlineBoottimeNs) + 1n).toString() }, prepared, subject), /mismatch|deadline/)
-  assert.throws(() => validateGvisorTtlArmAcknowledgement({ ...acknowledgement, verifiedRunscSha256: "f".repeat(64) }, prepared, subject), /mismatch|artifact/)
-  const arm = createGvisorTtlArmRecord({ prepared, acknowledgement, subject })
-  assert.deepEqual(validateGvisorTtlArmRecord(arm), arm)
+test("H4-R3G-D control-peer identity is derived from exact endpoint credentials process instance and runsc artifact", () => {
+  const subject = fixtureSubject()
+  const peer = fixtureControlPeer(subject)
+  assert.deepEqual(validateGvisorTtlControlPeerBinding(peer, subject), peer)
+  assert.throws(() => validateGvisorTtlControlPeerBinding({ ...peer, controlPeerBindingIdentity: "4".repeat(64) }, subject), /controlPeerBindingIdentity/)
+  assert.throws(() => createGvisorTtlControlPeerBinding({ subject, socketDevice: subject.controlEndpoint.device, socketInode: subject.controlEndpoint.inode, peerPid: subject.process.pid + 1, peerUid: subject.expectedPeerUid, peerGid: subject.expectedPeerGid, processStartTicks: subject.process.startTicks, executableDevice: subject.process.exeDev, executableInode: subject.process.exeIno, executableSize: subject.process.exeSize, verifiedRunscSha256: subject.runscArtifact.sha256 }), /credentials/)
+  assert.throws(() => createGvisorTtlControlPeerBinding({ subject, socketDevice: subject.controlEndpoint.device, socketInode: subject.controlEndpoint.inode, peerPid: subject.process.pid, peerUid: subject.expectedPeerUid, peerGid: subject.expectedPeerGid, processStartTicks: (BigInt(subject.process.startTicks) + 1n).toString(), executableDevice: subject.process.exeDev, executableInode: subject.process.exeIno, executableSize: subject.process.exeSize, verifiedRunscSha256: subject.runscArtifact.sha256 }), /process instance/)
 })
 
-test("H4-R3G-D terminal record preserves pre-deadline natural exit vs positive live-at-expiry semantics", () => {
-  const requirement = fixtureRequirement(); const subject = fixtureSubject(requirement)
-  const prepared = createGvisorTtlPreparedIntent({ requirement, subject, watchdogImplementationIdentity: createGvisorTtlWatchdogImplementationIdentity({ watchdogSha256: WATCHDOG_SHA, watchdogSizeBytes: 123_456 }) })
-  const arm = createGvisorTtlArmRecord({ prepared, acknowledgement: fixtureAck(prepared, subject), subject })
+test("H4-R3G-D durable watchdog lease is deterministic PREPARED-bound boot-bound and deadline-immutable", () => {
+  const requirement = fixtureRequirement(); const subject = fixtureSubject(requirement); const prepared = fixturePrepared(requirement, subject)
+  const lease = fixtureLease(prepared)
+  assert.deepEqual(validateGvisorTtlWatchdogLeaseRecord(lease, prepared), lease)
+  assert.equal(BigInt(lease.deadlineBoottimeNs) - BigInt(lease.leaseStartBoottimeNs), BigInt(prepared.ttlMs) * 1_000_000n)
+  assert.throws(() => validateGvisorTtlWatchdogLeaseRecord({ ...lease, canonicalArmPayloadDigest: "4".repeat(64) }, prepared), /identity|mismatch/)
+  assert.throws(() => validateGvisorTtlWatchdogLeaseRecord({ ...lease, linuxBootId: "223e4567-e89b-42d3-a456-426614174000" }, prepared), /identity|clock|registry/)
+  assert.throws(() => validateGvisorTtlWatchdogLeaseRecord({ ...lease, leaseStartBoottimeNs: (BigInt(lease.leaseStartBoottimeNs) + 1n).toString() }, prepared), /identity|deadline|registry/)
+  assert.throws(() => validateGvisorTtlWatchdogLeaseRecord({ ...lease, registryRecordIdentity: "5".repeat(64) }, prepared), /registry/)
+})
+
+test("H4-R3G-D arm acknowledgement requires the exact durable lease and authenticated control peer", () => {
+  const { prepared, subject, lease, acknowledgement } = fixtureArm()
+  assert.deepEqual(validateGvisorTtlArmAcknowledgement(acknowledgement, prepared, subject, lease), acknowledgement)
+  assert.throws(() => validateGvisorTtlArmAcknowledgement({ ...acknowledgement, watchdogRegistryRecordIdentity: "5".repeat(64) }, prepared, subject, lease), /durable watchdog lease|identity/)
+  assert.throws(() => validateGvisorTtlArmAcknowledgement({ ...acknowledgement, controlPeerBindingIdentity: "4".repeat(64) }, prepared, subject, lease), /control-peer|identity/)
+  assert.throws(() => validateGvisorTtlArmAcknowledgement({ ...acknowledgement, controlPeer: { ...acknowledgement.controlPeer, peerUid: "1001" } }, prepared, subject, lease), /credentials|controlPeerBindingIdentity/)
+  assert.throws(() => validateGvisorTtlArmAcknowledgement({ ...acknowledgement, deadlineBoottimeNs: (BigInt(acknowledgement.deadlineBoottimeNs) + 1n).toString() }, prepared, subject, lease), /durable watchdog lease|identity/)
+})
+
+test("H4-R3G-D arm record preserves the validated durable lease and peer proof", () => {
+  const { prepared, lease, acknowledgement, subject, arm } = fixtureArm()
+  assert.deepEqual(createGvisorTtlArmRecord({ prepared, lease, acknowledgement, subject }), arm)
+  assert.deepEqual(validateGvisorTtlArmRecord(arm), arm)
+  assert.equal(arm.watchdogRegistryRecordIdentity, lease.registryRecordIdentity)
+  assert.equal(arm.controlPeerBindingIdentity, acknowledgement.controlPeer.controlPeerBindingIdentity)
+})
+
+test("H4-R3G-D terminal record enforces lease interval and positive live-at-expiry semantics", () => {
+  const { arm } = fixtureArm()
   const natural = fixtureTerminal(arm, "natural-exit")
   const expired = fixtureTerminal(arm, "ttl-expired")
   assert.deepEqual(validateGvisorTtlTerminalRecord(natural, arm), natural)
   assert.deepEqual(validateGvisorTtlTerminalRecord(expired, arm), expired)
-  assert.throws(() => validateGvisorTtlTerminalRecord({ ...natural, exitEventObservedBoottimeNs: arm.deadlineBoottimeNs, recordIdentity: natural.recordIdentity }, arm), /before deadline|identity/)
-  assert.throws(() => validateGvisorTtlTerminalRecord({ ...expired, liveAtExpiryObservedBoottimeNs: (BigInt(arm.deadlineBoottimeNs) - 1n).toString(), recordIdentity: expired.recordIdentity }, arm), /at\/after deadline|identity/)
-  assert.throws(() => validateGvisorTtlTerminalRecord({ ...expired, signalAcknowledgementIdentity: null, recordIdentity: expired.recordIdentity }, arm), /missing required/)
+  const beforeStart = { ...natural, exitEventObservedBoottimeNs: (BigInt(arm.leaseStartBoottimeNs) - 1n).toString() }
+  assert.throws(() => validateGvisorTtlTerminalRecord({ ...beforeStart, recordIdentity: r3gdHash("TERMINAL_RECORD", beforeStart) }, arm), /during the lease/)
+  const atDeadline = { ...natural, exitEventObservedBoottimeNs: arm.deadlineBoottimeNs }
+  assert.throws(() => validateGvisorTtlTerminalRecord({ ...atDeadline, recordIdentity: r3gdHash("TERMINAL_RECORD", atDeadline) }, arm), /during the lease/)
+  const earlyExpiry = { ...expired, liveAtExpiryObservedBoottimeNs: (BigInt(arm.deadlineBoottimeNs) - 1n).toString() }
+  assert.throws(() => validateGvisorTtlTerminalRecord({ ...earlyExpiry, recordIdentity: r3gdHash("TERMINAL_RECORD", earlyExpiry) }, arm), /at\/after deadline/)
+  const wrongPeer = { ...expired, peerUid: "1001" }
+  assert.throws(() => validateGvisorTtlTerminalRecord({ ...wrongPeer, recordIdentity: r3gdHash("TERMINAL_RECORD", wrongPeer) }, arm), /control peer/)
+  assert.throws(() => validateGvisorTtlTerminalRecord({ ...expired, signalAcknowledgementIdentity: null }, arm), /missing required|identity/)
 })
 
 test("H4-R3G-D exact evidence commit acknowledgement is idempotent and payload-bound", () => {
