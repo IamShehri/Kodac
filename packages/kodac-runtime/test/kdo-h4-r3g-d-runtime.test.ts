@@ -76,10 +76,13 @@ test("H4-R3G-D watchdog retains authenticated channels, proves live-at-expiry, s
   const binary = join(root, "gvisor-ttl-watchdog")
   const socketPath = join(root, "control.sock")
   const methods: string[] = []
+  const serverSockets = new Set<Socket>()
   let signalArg: unknown
   let acceptedConnections = 0
   let waitSocket: Socket | undefined
   const server = createServer((socket) => {
+    serverSockets.add(socket)
+    socket.once("close", () => serverSockets.delete(socket))
     acceptedConnections += 1
     let buffered = ""
     socket.setEncoding("utf8")
@@ -123,6 +126,8 @@ test("H4-R3G-D watchdog retains authenticated channels, proves live-at-expiry, s
     const runscSha256 = await sha256File("/proc/self/exe")
     assert.equal(typeof process.getuid, "function")
     assert.equal(typeof process.getgid, "function")
+    const uid = process.getuid()
+    const gid = process.getgid()
 
     const args = [
       "--arm",
@@ -139,7 +144,7 @@ test("H4-R3G-D watchdog retains authenticated channels, proves live-at-expiry, s
       "--watchdog-implementation", ID.watchdog,
       "--control-socket", socketPath,
       "--socket-device-inode", `${socketStat.dev}:${socketStat.ino}`,
-      "--peer-pid-uid-gid", `${process.pid}:${process.getuid()}:${process.getgid()}`,
+      "--peer-pid-uid-gid", `${process.pid}:${uid}:${gid}`,
       "--process-tuple", `${startTicks}:${exeStat.dev}:${exeStat.ino}:${exeStat.size}`,
       "--runsc-artifact", ID.runscArtifact,
       "--runsc-sha256", runscSha256,
@@ -175,7 +180,7 @@ test("H4-R3G-D watchdog retains authenticated channels, proves live-at-expiry, s
     assert.equal(acceptedConnections, retryConnections, "durable replay must fail before any pathname reconnect")
     assert.equal(await readFile(leasePath, "utf8"), leaseBefore, "replay must not reset or extend the original deadline")
   } finally {
-    for (const socket of server.connectionsCheckingInterval ? [] : []) void socket
+    for (const socket of serverSockets) socket.destroy()
     if (server.listening) await closeServer(server).catch(() => {})
     await rm(root, { recursive: true, force: true })
   }
