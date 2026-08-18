@@ -97,9 +97,7 @@ export function reconcileGvisorTtlRecoveryState(input: {
 
     if (physical.terminal === null) {
       if (k2.terminal !== null) throw new TypeError(`R3G-D K2 terminal state ${operation} has no authoritative physical terminal state`)
-      if (k2.arm === null) decisions.push(Object.freeze({ kind: "RECONCILE_ARM" as const, k2, physical, recoveredArm }))
-      else decisions.push(Object.freeze({ kind: "ARM_CURRENT" as const, k2, physical, recoveredArm }))
-      continue
+      throw new TypeError(`R3G-D recovery ${operation} has durable ARM state without terminal state; the restarted K2 process does not retain the authenticated watchdog control channels, so positive ARM recovery or ARM_CURRENT classification is forbidden`)
     }
 
     const recoveredTerminal = recoverGvisorTtlLogicalTerminalRecord({ arm: recoveredArm, physicalLease: physical.lease, armReplay: physical.armReplay, physicalTerminal: physical.terminal })
