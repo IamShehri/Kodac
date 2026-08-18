@@ -91,11 +91,12 @@ runsc_sha = values["--runsc-sha256"]
 boot = open("/proc/sys/kernel/random/boot_id", "r", encoding="ascii").read().strip()
 lease_start = "100000000000"
 deadline = str(int(lease_start) + int(ttl) * 1000000)
+owner_updated = str(int(lease_start) + 1)
 clock = wd("CLOCK_DOMAIN", [boot, "CLOCK_BOOTTIME"])
 lease = wd("LEASE", [arm, payload, runtime, boot, lease_start, deadline, watchdog])
 owner = wd("OWNER_INSTANCE", [arm, runtime, boot])
 fence = "1"
-claim = wd("OWNER_CLAIM", [arm, owner, fence, boot])
+claim = wd("OWNER_CLAIM", ["kodac-h4-r3g-d-owner-claim-v1", lease, arm, owner, fence, "ACTIVE", owner_updated, boot])
 control = wd("CONTROL_PEER", [runtime, container, socket_dev, socket_ino, peer_pid, peer_uid, peer_gid, start_ticks, exe_dev, exe_ino, exe_size, runsc_sha])
 registry = wd("LEASE_REGISTRY", [
     "kodac-h4-r3g-d-watchdog-lease-v1", arm, payload, lease, execution, requirement,
@@ -108,13 +109,14 @@ print(
     + f" lease={lease} arm-operation={arm} runtime-instance={runtime} control-peer={control}"
     + f" runsc-artifact={runsc_artifact} verified-runsc-sha256={runsc_sha} registry-record={registry}"
     + f" clock-domain={clock} boot-id={boot} lease-start-boottime-ns={lease_start} deadline-boottime-ns={deadline}"
-    + f" owner-instance={owner} terminal-fence-token={fence} claim-record={claim} physical-ack={physical_ack}",
+    + f" owner-instance={owner} terminal-fence-token={fence} owner-updated-boottime-ns={owner_updated} claim-record={claim} physical-ack={physical_ack}",
     flush=True,
 )
 retained_pidfd = wd("PIDFD_PROCESS", [peer_pid, start_ticks, exe_dev, exe_ino, exe_size, runtime])
 retained_runsc = wd("RUNSC_EXECUTABLE", [runsc_sha, exe_dev, exe_ino, exe_size, runsc_artifact])
-exit_ns = str(int(lease_start) + 1)
-termination = wd("TERMINATION_ACK", [lease, arm, "natural-exit"])
+exit_ns = str(int(lease_start) + 2)
+raw_termination = wd("FIXTURE_RAW_TERMINATION", [lease, arm])
+termination = wd("TERMINATION_ACK", [lease, owner, fence, claim, raw_termination])
 terminal_registry = wd("TERMINAL_REGISTRY", [
     arm, lease, runtime, "natural-exit", owner, fence, claim, control, retained_pidfd,
     runsc_artifact, runsc_sha, retained_runsc, clock, boot, exit_ns, "-", "-", "-", "-", termination,
