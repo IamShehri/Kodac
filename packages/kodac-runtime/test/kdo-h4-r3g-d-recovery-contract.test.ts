@@ -143,7 +143,7 @@ test("H4-R3G-D K2 recovery snapshot rejects malformed arm injection before it ca
 
   assert.throws(
     () => createGvisorTtlK2RecoverySnapshot({ requirement, prepared, arm: { recordIdentity: ID("9") } as never, terminal: null }),
-    /fields are not canonical/,
+    /arm record must contain exactly/,
   )
 })
 
