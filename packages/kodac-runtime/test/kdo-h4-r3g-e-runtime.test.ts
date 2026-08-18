@@ -13,10 +13,8 @@ import {
   GvisorOutputExecutionGateway,
   KDO_H4_R3G_E_ATTACH_MEDIA_TYPE,
   KDO_H4_R3G_E_RUNTIME_VERSION,
-  createGvisorDockerOutputTransport,
   createGvisorOutputFailureCommit,
   createGvisorOutputReservation,
-  type GvisorDockerOutputTransport,
   type GvisorOutputFailureRecord,
   type GvisorOutputPreparedOperation,
   type GvisorOutputRuntimeConfig,
@@ -29,6 +27,7 @@ import {
   KDO_H4_R3F_DOCKER_API_VERSION,
   KDO_H4_R3F_LABELS,
   KDO_H4_R3F_PROVIDER_ID,
+  createDockerControlPlaneBindingProvider,
   type DockerControlPlaneBindingProvider,
   type DockerControlPlaneResolution,
   type DockerSocketEndpointIdentity,
@@ -365,8 +364,9 @@ type RuntimeFixture = {
   readonly runtimeInstanceIdentity: string
   readonly events: string[]
   readonly docker: FakeDocker
+  readonly dockerControlPlane: DockerControlPlaneBindingProvider
   readonly ttlRuntime: GvisorTtlRuntimeConfig
-  createGateway(outputRuntime: GvisorOutputRuntimeConfig): GvisorOutputExecutionGateway
+  createGateway(outputRuntime: GvisorOutputRuntimeConfig, overrides?: { readonly dockerControlPlane?: DockerControlPlaneBindingProvider; readonly dockerSocketPath?: string }): GvisorOutputExecutionGateway
   cleanup(): Promise<void>
 }
 
@@ -384,6 +384,7 @@ async function createRuntimeFixture(options: FakeDockerOptions = {}): Promise<Ru
   })
   const requirement = fixtureRequirement(60_000, 8)
   const docker = await startFakeDocker(root, requirement, events, options)
+  const dockerControlPlane = createDockerControlPlaneBindingProvider({ socketPath: docker.socketPath, requirement })
   const controlStat = await stat(controlSocketPath, { bigint: true })
   const exeStat = await stat("/proc/self/exe", { bigint: true })
   const startTicks = parseStartTicks(await readFile("/proc/self/stat", "utf8"))
@@ -457,10 +458,11 @@ async function createRuntimeFixture(options: FakeDockerOptions = {}): Promise<Ru
       return createGvisorTtlEvidenceCommit({ kind: "terminal", armOperationIdentity: record.armOperationIdentity, leaseIdentity: record.leaseIdentity, recordIdentity: record.recordIdentity, payloadDigest: payloadDigest(record) })
     },
   }
-  const createGateway = (outputRuntime: GvisorOutputRuntimeConfig) => new GvisorOutputExecutionGateway({
+  const createGateway = (outputRuntime: GvisorOutputRuntimeConfig, overrides: { readonly dockerControlPlane?: DockerControlPlaneBindingProvider; readonly dockerSocketPath?: string } = {}) => new GvisorOutputExecutionGateway({
     filesystem: new NodeWorkspaceFileSystem(root),
     policy: fixedPolicy("allow", "R3G-E fixture allow"),
-    outputTransport: createGvisorDockerOutputTransport({ socketPath: docker.socketPath, requirement }),
+    dockerControlPlane: overrides.dockerControlPlane ?? dockerControlPlane,
+    dockerSocketPath: overrides.dockerSocketPath ?? docker.socketPath,
     outputRuntime,
     ttlRuntime,
     recoveryRuntime: { version: KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION, listRecoverySnapshots() { return [] } },
@@ -472,6 +474,7 @@ async function createRuntimeFixture(options: FakeDockerOptions = {}): Promise<Ru
     runtimeInstanceIdentity: lineage.runtimeInstanceIdentity,
     events,
     docker,
+    dockerControlPlane,
     ttlRuntime,
     createGateway,
     async cleanup() {
@@ -506,7 +509,7 @@ function createOutputRuntime(events: string[], reservations: Map<string, GvisorO
   }
 }
 
-test("H4-R3G-E K2 gateway orders durable ARM -> reservation -> trusted Docker capture and commits positive evidence only after terminal", { skip: process.platform !== "linux", timeout: 15_000 }, async () => {
+test("H4-R3G-E K2 gateway orders durable ARM -> reservation -> canonical R3F Docker capture and commits positive evidence only after terminal", { skip: process.platform !== "linux", timeout: 15_000 }, async () => {
   const fixture = await createRuntimeFixture()
   const reservations = new Map<string, GvisorOutputPreparedOperation>()
   const outputRuntime = createOutputRuntime(fixture.events, reservations)
@@ -532,7 +535,7 @@ test("H4-R3G-E K2 gateway orders durable ARM -> reservation -> trusted Docker ca
     assert.equal(fixture.docker.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, 1)
 
     await assert.rejects(fixture.createGateway(outputRuntime).enforceGvisorOutputBound(fixture.requirement), /already exists|cannot be replenished/)
-    assert.equal(fixture.docker.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, 1, "fresh trusted transport must not bypass durable reservation replay")
+    assert.equal(fixture.docker.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, 1, "fresh gateway transport must not bypass durable reservation replay")
     assert.equal(reservations.size, 1)
     await delay(600)
   } finally { await fixture.cleanup() }
@@ -593,54 +596,38 @@ test("H4-R3G-E abort during durable reservation waits for authoritative mutation
   } finally { await fixture.cleanup() }
 })
 
-test("H4-R3G-E rejects a structurally forged output transport before subject resolution", { skip: process.platform !== "linux" }, async () => {
-  const requirement = fixtureRequirement()
-  let resolved = false
+test("H4-R3G-E rejects an alternate Unix socket path before subject resolution, reservation, attach, or positive evidence", { skip: process.platform !== "linux", timeout: 5_000 }, async () => {
+  const fixture = await createRuntimeFixture()
+  const attackerRoot = await mkdtemp(join(tmpdir(), "kodac-r3ge-attacker-socket-"))
+  const attackerEvents: string[] = []
+  let attackerDocker: FakeDocker | undefined
   let reserved = false
-  let captured = false
-  const forgedTransport: GvisorDockerOutputTransport = Object.freeze({
-    provider: fakeProvider(requirement.requirementIdentity, requirement.workload.workloadIdentity),
-    async captureOutput() { captured = true; throw new Error("must not capture") },
-  })
-  const outputRuntime: GvisorOutputRuntimeConfig = {
-    version: KDO_H4_R3G_E_RUNTIME_VERSION,
-    reserveOutputOperation() { reserved = true; throw new Error("must not reserve") },
-    commitOutputEvidence() { throw new Error("must not commit") },
-    commitFailureEvidence() { throw new Error("must not commit") },
+  try {
+    attackerDocker = await startFakeDocker(attackerRoot, fixture.requirement, attackerEvents)
+    const outputRuntime: GvisorOutputRuntimeConfig = {
+      version: KDO_H4_R3G_E_RUNTIME_VERSION,
+      reserveOutputOperation() { reserved = true; throw new Error("must not reserve") },
+      commitOutputEvidence() { throw new Error("must not commit positive evidence") },
+      commitFailureEvidence() { throw new Error("must not commit failure before subject") },
+    }
+    await assert.rejects(
+      fixture.createGateway(outputRuntime, { dockerSocketPath: attackerDocker.socketPath }).enforceGvisorOutputBound(fixture.requirement),
+      /socket endpoint identity changed/,
+    )
+    assert.equal(reserved, false)
+    assert.equal(fixture.events.includes("ttl-prepared"), false, "socket authority mismatch must fail before R3G-D subject/lifecycle work")
+    assert.equal(attackerDocker.requests.length, 0, "alternate socket must receive no Docker request or attach")
+  } finally {
+    await attackerDocker?.close()
+    await rm(attackerRoot, { recursive: true, force: true })
+    await fixture.cleanup()
   }
-  const ttlRuntime: GvisorTtlRuntimeConfig = {
-    version: KDO_H4_R3G_D_RUNTIME_CONFIG_VERSION,
-    watchdogPath: "/nonexistent/r3ge-watchdog",
-    expectedWatchdogSha256: "e".repeat(64),
-    registryRoot: "/nonexistent/r3ge-registry",
-    resolveSubject() { resolved = true; throw new Error("must not resolve") },
-    commitPreparedIntent() { throw new Error("must not commit") },
-    commitArmEvidence() { throw new Error("must not commit") },
-    commitTerminalEvidence() { throw new Error("must not commit") },
-  }
-  const gateway = new GvisorOutputExecutionGateway({
-    filesystem: new NodeWorkspaceFileSystem("."),
-    policy: fixedPolicy("allow", "fixture allow"),
-    outputTransport: forgedTransport,
-    outputRuntime,
-    ttlRuntime,
-    recoveryRuntime: { version: KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION, listRecoverySnapshots() { throw new Error("must not recover") } },
-  })
-  await assert.rejects(gateway.enforceGvisorOutputBound(requirement), /not a trusted K2-created transport/)
-  assert.equal(resolved, false)
-  assert.equal(reserved, false)
-  assert.equal(captured, false)
 })
 
-test("H4-R3G-E blocks ASK before transport provenance, R3G-D subject resolution, reservation, or output capture", async () => {
+test("H4-R3G-E blocks ASK before Docker provider/path validation, R3G-D subject resolution, reservation, or output capture", async () => {
   const requirement = fixtureRequirement()
   let resolved = false
   let reserved = false
-  let captured = false
-  const forgedTransport: GvisorDockerOutputTransport = Object.freeze({
-    provider: fakeProvider(requirement.requirementIdentity, requirement.workload.workloadIdentity),
-    async captureOutput() { captured = true; throw new Error("must not capture") },
-  })
   const outputRuntime: GvisorOutputRuntimeConfig = {
     version: KDO_H4_R3G_E_RUNTIME_VERSION,
     reserveOutputOperation() { reserved = true; throw new Error("must not reserve") },
@@ -660,7 +647,8 @@ test("H4-R3G-E blocks ASK before transport provenance, R3G-D subject resolution,
   const gateway = new GvisorOutputExecutionGateway({
     filesystem: new NodeWorkspaceFileSystem("."),
     policy: fixedPolicy("ask", "R3G-E fixture ask"),
-    outputTransport: forgedTransport,
+    dockerControlPlane: fakeProvider(requirement.requirementIdentity, requirement.workload.workloadIdentity),
+    dockerSocketPath: "/nonexistent/r3ge-docker.sock",
     outputRuntime,
     ttlRuntime,
     recoveryRuntime: { version: KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION, listRecoverySnapshots() { throw new Error("must not recover") } },
@@ -668,5 +656,4 @@ test("H4-R3G-E blocks ASK before transport provenance, R3G-D subject resolution,
   await assert.rejects(gateway.enforceGvisorOutputBound(requirement), /does not permit ASK/)
   assert.equal(resolved, false)
   assert.equal(reserved, false)
-  assert.equal(captured, false)
 })
