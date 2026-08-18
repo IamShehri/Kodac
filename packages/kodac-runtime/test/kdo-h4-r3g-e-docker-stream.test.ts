@@ -20,6 +20,7 @@ import {
   KDO_H4_R3F_BINDING_VERSION,
   KDO_H4_R3F_DOCKER_API_VERSION,
   KDO_H4_R3F_LABELS,
+  createDockerControlPlaneBindingProvider,
 } from "../src/trust/sandbox-observer-docker-control-plane.ts"
 import {
   createGvisorContainerBindingRequest,
@@ -209,8 +210,13 @@ async function startFakeDocker(root: string, requirement: SandboxExecutionRequir
   }
 }
 
-test("R3G-E Docker output transport fails closed on non-Linux", { skip: process.platform === "linux" }, () => {
-  assert.throws(() => createGvisorDockerOutputTransport({ socketPath: "/tmp/docker.sock", requirement: fixtureRequirement() }), /requires Linux/)
+function trustedTransport(requirement: SandboxExecutionRequirement, socketPath: string) {
+  const provider = createDockerControlPlaneBindingProvider({ socketPath, requirement })
+  return createGvisorDockerOutputTransport({ provider, socketPath, requirement })
+}
+
+test("R3G-E Docker provider/transport fails closed on non-Linux", { skip: process.platform === "linux" }, () => {
+  assert.throws(() => createDockerControlPlaneBindingProvider({ socketPath: "/tmp/docker.sock", requirement: fixtureRequirement() }), /requires Linux/)
 })
 
 test("R3G-E trusted transport proves exact list/inspect/attach multiplex path and aggregate bytes", { skip: process.platform !== "linux" }, async () => {
@@ -219,7 +225,7 @@ test("R3G-E trusted transport proves exact list/inspect/attach multiplex path an
   let fake: FakeDocker | undefined
   try {
     fake = await startFakeDocker(root, requirement)
-    const transport = createGvisorDockerOutputTransport({ socketPath: fake.socketPath, requirement })
+    const transport = trustedTransport(requirement, fake.socketPath)
     const request = bindingRequest(requirement)
     for (const forbidden of ["socketPath", "containerId", "attachPath", "logs", "stdin", "stdout", "stderr", "tty"]) assert.equal(forbidden in request, false)
     const capture = await transport.captureOutput(request)
@@ -263,7 +269,7 @@ test("R3G-E rejects TTY stdin and missing stdout/stderr before attach upgrade", 
     let fake: FakeDocker | undefined
     try {
       fake = await startFakeDocker(root, requirement, { inspectBody: JSON.stringify(inspectValue(requirement, item.flags)) })
-      const transport = createGvisorDockerOutputTransport({ socketPath: fake.socketPath, requirement })
+      const transport = trustedTransport(requirement, fake.socketPath)
       await assert.rejects(transport.captureOutput(bindingRequest(requirement)), item.pattern)
       assert.equal(fake.requests.some((entry) => entry.startsWith("UPGRADE ")), false)
     } finally {
@@ -285,7 +291,7 @@ test("R3G-E rejects non-multiplexed or malformed Docker upgrade identity", { ski
     let fake: FakeDocker | undefined
     try {
       fake = await startFakeDocker(root, requirement, item.options)
-      const transport = createGvisorDockerOutputTransport({ socketPath: fake.socketPath, requirement })
+      const transport = trustedTransport(requirement, fake.socketPath)
       await assert.rejects(transport.captureOutput(bindingRequest(requirement)), item.pattern)
     } finally {
       await fake?.close()
@@ -300,7 +306,7 @@ test("R3G-E overflow closes the accepted stream and same-attempt replay cannot r
   let fake: FakeDocker | undefined
   try {
     fake = await startFakeDocker(root, requirement, { output: Buffer.concat([frame(1, "abcd"), frame(2, "x")]) })
-    const transport = createGvisorDockerOutputTransport({ socketPath: fake.socketPath, requirement })
+    const transport = trustedTransport(requirement, fake.socketPath)
     const request = bindingRequest(requirement)
     await assert.rejects(transport.captureOutput(request), GvisorOutputLimitExceededError)
     await assert.rejects(transport.captureOutput(request), /already consumed|cannot reset/)
@@ -317,7 +323,7 @@ test("R3G-E abort destroys the owned upgraded stream and cannot become late succ
   let fake: FakeDocker | undefined
   try {
     fake = await startFakeDocker(root, requirement, { stall: true })
-    const transport = createGvisorDockerOutputTransport({ socketPath: fake.socketPath, requirement })
+    const transport = trustedTransport(requirement, fake.socketPath)
     const controller = new AbortController()
     const promise = transport.captureOutput(bindingRequest(requirement), { signal: controller.signal })
     setTimeout(() => controller.abort(), 20)
@@ -335,7 +341,8 @@ test("R3G-E rejects Docker Unix socket replacement before any trusted output req
   let replacement: FakeDocker | undefined
   try {
     original = await startFakeDocker(root, requirement)
-    const transport = createGvisorDockerOutputTransport({ socketPath: original.socketPath, requirement })
+    const provider = createDockerControlPlaneBindingProvider({ socketPath: original.socketPath, requirement })
+    const transport = createGvisorDockerOutputTransport({ provider, socketPath: original.socketPath, requirement })
     renameSync(original.socketPath, `${original.socketPath}.old`)
     replacement = await startFakeDocker(root, requirement)
     await assert.rejects(transport.captureOutput(bindingRequest(requirement)), /endpoint identity changed/)
