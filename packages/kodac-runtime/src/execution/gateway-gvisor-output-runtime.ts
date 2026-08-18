@@ -598,8 +598,9 @@ class GvisorOutputPositiveAbortError extends Error {
  * Positive evidence has a stronger cancellation contract than other durable
  * callbacks. The trusted callback receives the caller signal and must abort its
  * transaction without persisting E3 if cancellation wins before durable
- * completion. K2 races only the authoritative mutation settlement against the
- * caller abort event, then waits for a started mutation to settle before return.
+ * completion. K2 races only asynchronous authoritative mutation settlement
+ * against the caller abort event; synchronous settlement is authoritative at
+ * callback return and therefore precedes later microtasks.
  */
 async function settleAbortFencedPositiveMutation<T>(
   label: string,
@@ -615,14 +616,18 @@ async function settleAbortFencedPositiveMutation<T>(
   signal?.addEventListener("abort", onAbort, { once: true })
   try {
     if (signal?.aborted) throw new GvisorOutputPositiveAbortError(`${label} aborted before start`)
-    let mutation: Promise<T>
-    try { mutation = Promise.resolve(operation()) }
+    let started: Promise<T> | T
+    try { started = operation() }
     catch (error) {
       if (signal?.aborted) throw new GvisorOutputPositiveAbortError(`${label} aborted before durable completion`)
       if (error instanceof Error) throw error
       throw new Error(`${label} failed: ${String(error)}`)
     }
-    const mutationOutcome = mutation.then(
+    if (!(started instanceof Promise)) {
+      if (signal?.aborted) throw new Error(`${label} trusted positive callback returned success after caller abort`)
+      return started
+    }
+    const mutationOutcome = started.then(
       (value) => ({ kind: "fulfilled" as const, value }),
       (error: unknown) => ({ kind: "rejected" as const, error }),
     )
