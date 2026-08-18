@@ -368,18 +368,32 @@ export function createGvisorOutputBoundRecord(input: {
   const limit = requirement.workload.resourcePolicy.maxOutputBytes
   const aggregation = validateAggregation(record.aggregation, limit)
   const executionAttemptIdentity = identity(record.executionAttemptIdentity, "executionAttemptIdentity")
+  const containerBindingIdentity = identity(record.containerBindingIdentity, "containerBindingIdentity")
+  const containerId = fullContainerId(record.containerId)
+  const providerIdentity = identity(record.providerIdentity, "providerIdentity")
+  const socketEndpointIdentity = identity(record.socketEndpointIdentity, "socketEndpointIdentity")
+  const expectedOutputChannelIdentity = createGvisorOutputChannelIdentity({
+    executionAttemptIdentity,
+    requirementIdentity: requirement.requirementIdentity,
+    workloadIdentity: requirement.workload.workloadIdentity,
+    containerBindingIdentity,
+    containerId,
+    providerIdentity,
+    socketEndpointIdentity,
+  })
   const outputChannelIdentity = identity(record.outputChannelIdentity, "outputChannelIdentity")
+  if (outputChannelIdentity !== expectedOutputChannelIdentity) throw new TypeError("R3G-E output channel identity mismatch")
   const base = Object.freeze({
     version: KDO_H4_R3G_E_OUTPUT_VERSION,
     evidenceClass: KDO_H4_R3G_E_EVIDENCE_CLASS,
     executionAttemptIdentity,
     requirementIdentity: requirement.requirementIdentity,
     workloadIdentity: requirement.workload.workloadIdentity,
-    containerBindingIdentity: identity(record.containerBindingIdentity, "containerBindingIdentity"),
-    containerId: fullContainerId(record.containerId),
+    containerBindingIdentity,
+    containerId,
     runtimeInstanceIdentity: identity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity"),
-    providerIdentity: identity(record.providerIdentity, "providerIdentity"),
-    socketEndpointIdentity: identity(record.socketEndpointIdentity, "socketEndpointIdentity"),
+    providerIdentity,
+    socketEndpointIdentity,
     outputChannelIdentity,
     outputOperationIdentity: createGvisorOutputOperationIdentity({
       outputChannelIdentity,
@@ -426,7 +440,21 @@ export function validateGvisorOutputBoundRecord(value: unknown, requirementValue
     }
     if (requirement.workload.resourcePolicy.maxOutputBytes !== limit) throw new TypeError("R3G-E record maxOutputBytes does not match expected requirement")
   }
+  const containerBindingIdentity = identity(record.containerBindingIdentity, "containerBindingIdentity")
+  const containerId = fullContainerId(record.containerId)
+  const providerIdentity = identity(record.providerIdentity, "providerIdentity")
+  const socketEndpointIdentity = identity(record.socketEndpointIdentity, "socketEndpointIdentity")
+  const expectedOutputChannelIdentity = createGvisorOutputChannelIdentity({
+    executionAttemptIdentity,
+    requirementIdentity,
+    workloadIdentity,
+    containerBindingIdentity,
+    containerId,
+    providerIdentity,
+    socketEndpointIdentity,
+  })
   const outputChannelIdentity = identity(record.outputChannelIdentity, "outputChannelIdentity")
+  if (outputChannelIdentity !== expectedOutputChannelIdentity) throw new TypeError("R3G-E output channel identity mismatch")
   const expectedOperationIdentity = createGvisorOutputOperationIdentity({ outputChannelIdentity, executionAttemptIdentity, requirementIdentity, workloadIdentity, maxOutputBytes: limit })
   if (identity(record.outputOperationIdentity, "outputOperationIdentity") !== expectedOperationIdentity) throw new TypeError("R3G-E output operation identity mismatch")
   const base = Object.freeze({
@@ -435,11 +463,11 @@ export function validateGvisorOutputBoundRecord(value: unknown, requirementValue
     executionAttemptIdentity,
     requirementIdentity,
     workloadIdentity,
-    containerBindingIdentity: identity(record.containerBindingIdentity, "containerBindingIdentity"),
-    containerId: fullContainerId(record.containerId),
+    containerBindingIdentity,
+    containerId,
     runtimeInstanceIdentity: identity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity"),
-    providerIdentity: identity(record.providerIdentity, "providerIdentity"),
-    socketEndpointIdentity: identity(record.socketEndpointIdentity, "socketEndpointIdentity"),
+    providerIdentity,
+    socketEndpointIdentity,
     outputChannelIdentity,
     outputOperationIdentity: expectedOperationIdentity,
     maxOutputBytes: limit,
