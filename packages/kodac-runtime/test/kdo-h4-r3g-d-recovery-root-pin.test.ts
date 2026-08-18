@@ -5,9 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 
-import {
-  KDO_H4_R3G_D_PHYSICAL_ARM_REGISTRY_VERSION,
-} from "../src/execution/gateway-gvisor-ttl-arm-replay.ts"
+import { KDO_H4_R3G_D_PHYSICAL_ARM_REGISTRY_VERSION } from "../src/execution/gateway-gvisor-ttl-arm-replay.ts"
 import { inspectGvisorTtlPhysicalRecoveryRegistry } from "../src/execution/gateway-gvisor-ttl-recovery-registry.ts"
 import { createGvisorTtlWatchdogProtocolIdentity } from "../src/execution/gateway-gvisor-ttl.ts"
 
@@ -32,10 +30,11 @@ async function writeBaseRegistry(root: string, boot: string) {
   const terminalFenceToken = "1"
   const ttlMs = "60000"
   const leaseStartBoottimeNs = "1"
+  const ownerUpdatedBoottimeNs = "2"
   const deadlineBoottimeNs = "60000000001"
   const clockDomainIdentity = createGvisorTtlWatchdogProtocolIdentity("CLOCK_DOMAIN", [boot, "CLOCK_BOOTTIME"])
-  const claimRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", [armOperationIdentity, ownerInstanceIdentity, terminalFenceToken, boot])
   const leaseIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE", [armOperationIdentity, canonicalArmPayloadDigest, runtimeInstanceIdentity, boot, leaseStartBoottimeNs, deadlineBoottimeNs, watchdogImplementationIdentity])
+  const claimRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", ["kodac-h4-r3g-d-owner-claim-v1", leaseIdentity, armOperationIdentity, ownerInstanceIdentity, terminalFenceToken, "ACTIVE", ownerUpdatedBoottimeNs, boot])
   const registryRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE_REGISTRY", [
     LEASE_VERSION, armOperationIdentity, canonicalArmPayloadDigest, leaseIdentity, executionAttemptIdentity, requirementIdentity, workloadIdentity, containerBindingIdentity, containerId, runtimeInstanceIdentity, ttlMs, boot, clockDomainIdentity, leaseStartBoottimeNs, deadlineBoottimeNs, watchdogImplementationIdentity, ownerInstanceIdentity, terminalFenceToken, claimRecordIdentity,
   ])
@@ -43,9 +42,12 @@ async function writeBaseRegistry(root: string, boot: string) {
   await writeRecord(join(root, `${armOperationIdentity}.lock`), "")
   await writeRecord(join(root, `${armOperationIdentity}.claim`), [
     "version=kodac-h4-r3g-d-owner-claim-v1",
+    `leaseIdentity=${leaseIdentity}`,
     `armOperationIdentity=${armOperationIdentity}`,
     `ownerInstanceIdentity=${ownerInstanceIdentity}`,
     `terminalFenceToken=${terminalFenceToken}`,
+    "ownerState=ACTIVE",
+    `updatedBoottimeNs=${ownerUpdatedBoottimeNs}`,
     `linuxBootId=${boot}`,
     `claimRecordIdentity=${claimRecordIdentity}`,
     "",
@@ -175,8 +177,6 @@ test("H4-R3G-D recovery snapshot cannot splice ARM replay from a replaced regist
     assert.equal(replacementBase.registryRecordIdentity, originalBase.registryRecordIdentity)
     await writeForgedArm(replacement, replacementBase, bootId)
 
-    // Keep the original pinned traversal open long enough to make the pathname
-    // replacement deterministic after the descriptor has been acquired.
     for (let index = 0; index < 256; index += 1) {
       const identity = createHash("sha256").update(`padding-${index}`).digest("hex")
       await writeRecord(join(root, `${identity}.lock`), "")
