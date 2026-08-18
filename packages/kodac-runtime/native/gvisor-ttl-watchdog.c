@@ -493,6 +493,12 @@ static int boottime_deadline_after_ms(uint64_t milliseconds, uint64_t *out) {
   return 0;
 }
 
+static int boottime_before_io(uint64_t deadline_ns) {
+  uint64_t now = 0;
+  if (boottime_ns(&now) != 0) return -1;
+  return now >= deadline_ns ? KODAC_RESPONSE_TIMEOUT : 0;
+}
+
 static int open_registry(const arm_request *request, lease_registry *registry) {
   memset(registry, 0, sizeof(*registry)); registry->directory_fd = -1; registry->lock_fd = -1;
   registry->directory_fd = open(request->registry_root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
@@ -656,6 +662,8 @@ static int write_all_until_boottime(int fd, const char *buffer, size_t length, u
   while (offset < length) {
     int ready = poll_io_with_boottime_timer(fd, POLLOUT, timer_fd);
     if (ready != 0) { result = ready; break; }
+    int before_io = boottime_before_io(deadline_ns);
+    if (before_io != 0) { result = before_io; break; }
     ssize_t count;
     do { count = send(fd, buffer + offset, length - offset, MSG_NOSIGNAL | MSG_DONTWAIT); } while (count < 0 && errno == EINTR);
     if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
@@ -683,6 +691,8 @@ static int read_json_object(int fd, char *buffer, size_t capacity, size_t *lengt
   for (;;) {
     int ready = poll_io_with_boottime_timer(fd, POLLIN, timer_fd);
     if (ready != 0) { result = ready; break; }
+    int before_io = boottime_before_io(deadline_ns);
+    if (before_io != 0) { result = before_io; break; }
     char byte;
     ssize_t count;
     do { count = read(fd, &byte, 1); } while (count < 0 && errno == EINTR);
