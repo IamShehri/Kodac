@@ -13,6 +13,7 @@ import {
   KDO_H4_R3F_LIMITS,
   KDO_H4_R3F_PROVIDER_ID,
   createDockerSocketEndpointIdentity,
+  observeDockerSourceControlPlaneForBindingResolver,
   type DockerControlPlaneBindingProvider,
   type DockerSocketEndpointIdentity,
 } from "../trust/sandbox-observer-docker-control-plane.ts"
@@ -636,6 +637,8 @@ export class GvisorOutputExecutionGateway extends ExecutionGateway {
       if (requirement.requiredSemanticRuntimeClass !== "gvisor") throw new Error("R3G-E requires requiredSemanticRuntimeClass=gvisor")
       if (options.signal?.aborted) throw new Error("R3G-E output enforcement aborted before lifecycle start")
       const outputTransport = createGvisorDockerOutputTransport({ provider: this.dockerControlPlane, socketPath: this.dockerSocketPath, requirement })
+      const r3fSourceAuthority = await observeDockerSourceControlPlaneForBindingResolver(this.dockerControlPlane.resolveContainerBinding, { signal: options.signal })
+      if (r3fSourceAuthority.socketEndpoint.endpointIdentity !== outputTransport.provider.socketEndpoint.endpointIdentity) throw new Error("R3G-E canonical R3F resolver provenance endpoint mismatch")
 
       const subjectReady = deferred<GvisorTtlSubjectBinding>()
       const armReady = deferred<GvisorTtlArmRecord>()
