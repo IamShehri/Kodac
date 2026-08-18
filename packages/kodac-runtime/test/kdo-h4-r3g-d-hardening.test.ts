@@ -141,7 +141,24 @@ function syntheticArm(): GvisorTtlArmRecord {
   return Object.freeze({ ...base, recordIdentity: r3gdHash("ARM_RECORD", base) })
 }
 
-function terminalRegistryIdentity(base: Omit<GvisorTtlTerminalRecord, "registryTerminalRecordIdentity" | "recordIdentity">): string {
+function physicalControlPeerIdentity(arm: GvisorTtlArmRecord): string {
+  return watchdogHash("CONTROL_PEER", [
+    arm.runtimeInstanceIdentity,
+    arm.containerId,
+    arm.controlPeer.socketDevice,
+    arm.controlPeer.socketInode,
+    String(arm.controlPeer.peerPid),
+    arm.controlPeer.peerUid,
+    arm.controlPeer.peerGid,
+    arm.controlPeer.processStartTicks,
+    arm.controlPeer.executableDevice,
+    arm.controlPeer.executableInode,
+    arm.controlPeer.executableSize,
+    arm.verifiedRunscSha256,
+  ])
+}
+
+function terminalRegistryIdentity(base: Omit<GvisorTtlTerminalRecord, "registryTerminalRecordIdentity" | "recordIdentity">, arm: GvisorTtlArmRecord, controlPeerIdentity = physicalControlPeerIdentity(arm)): string {
   return watchdogHash("TERMINAL_REGISTRY", [
     base.armOperationIdentity,
     base.leaseIdentity,
@@ -150,7 +167,7 @@ function terminalRegistryIdentity(base: Omit<GvisorTtlTerminalRecord, "registryT
     base.ownerInstanceIdentity,
     base.terminalFenceToken,
     base.claimRecordIdentity,
-    base.controlPeerBindingIdentity,
+    controlPeerIdentity,
     base.retainedPidfdProcessIdentity,
     base.runscArtifactIdentity,
     base.verifiedRunscSha256,
@@ -198,14 +215,14 @@ function syntheticTerminal(arm: GvisorTtlArmRecord, outcome: "natural-exit" | "t
     signalAcknowledgementIdentity: natural ? null : "3".repeat(64),
     terminationAcknowledgementIdentity: "4".repeat(64),
   })
-  const registryTerminalRecordIdentity = terminalRegistryIdentity(base)
+  const registryTerminalRecordIdentity = terminalRegistryIdentity(base, arm)
   const withRegistry = Object.freeze({ ...base, registryTerminalRecordIdentity })
   return Object.freeze({ ...withRegistry, recordIdentity: r3gdHash("TERMINAL_RECORD", withRegistry) })
 }
 
-function rebuildTerminal(value: GvisorTtlTerminalRecord): GvisorTtlTerminalRecord {
+function rebuildTerminal(value: GvisorTtlTerminalRecord, arm: GvisorTtlArmRecord): GvisorTtlTerminalRecord {
   const { registryTerminalRecordIdentity: _registry, recordIdentity: _record, ...base } = value
-  const registryTerminalRecordIdentity = terminalRegistryIdentity(base)
+  const registryTerminalRecordIdentity = terminalRegistryIdentity(base, arm)
   const withRegistry = Object.freeze({ ...base, registryTerminalRecordIdentity })
   return Object.freeze({ ...withRegistry, recordIdentity: r3gdHash("TERMINAL_RECORD", withRegistry) })
 }
@@ -233,15 +250,22 @@ test("H4-R3G-D terminal validator requires authoritative arm and rederives physi
   assert.deepEqual(validateGvisorTtlTerminalRecord(expired, arm), expired)
   assert.throws(() => validateGvisorTtlTerminalRecord(natural), /authoritative arm record/)
 
-  const forgedPidfd = rebuildTerminal({ ...natural, retainedPidfdProcessIdentity: "5".repeat(64) })
+  const forgedPidfd = rebuildTerminal({ ...natural, retainedPidfdProcessIdentity: "5".repeat(64) }, arm)
   assert.throws(() => validateGvisorTtlTerminalRecord(forgedPidfd, arm), /retained pidfd process identity/)
 
-  const forgedRunsc = rebuildTerminal({ ...natural, retainedRunscExecutableIdentity: "6".repeat(64) })
+  const forgedRunsc = rebuildTerminal({ ...natural, retainedRunscExecutableIdentity: "6".repeat(64) }, arm)
   assert.throws(() => validateGvisorTtlTerminalRecord(forgedRunsc, arm), /retained runsc executable identity/)
 
   const forgedRegistryBase = { ...withoutRecordIdentity(natural), registryTerminalRecordIdentity: "7".repeat(64) }
   const forgedRegistry = { ...forgedRegistryBase, recordIdentity: r3gdHash("TERMINAL_RECORD", forgedRegistryBase) }
   assert.throws(() => validateGvisorTtlTerminalRecord(forgedRegistry, arm), /terminal registry identity/)
+
+  assert.notEqual(physicalControlPeerIdentity(arm), arm.controlPeerBindingIdentity, "native physical control-peer identity must remain distinct from the logical arm peer identity")
+  const { registryTerminalRecordIdentity: _registry, recordIdentity: _record, ...terminalBase } = natural
+  const wrongLogicalRegistry = terminalRegistryIdentity(terminalBase, arm, arm.controlPeerBindingIdentity)
+  const wrongLogicalBase = { ...terminalBase, registryTerminalRecordIdentity: wrongLogicalRegistry }
+  const wrongLogical = { ...wrongLogicalBase, recordIdentity: r3gdHash("TERMINAL_RECORD", wrongLogicalBase) }
+  assert.throws(() => validateGvisorTtlTerminalRecord(wrongLogical, arm), /terminal registry identity/)
 })
 
 function parseStartTicks(statText: string): bigint {

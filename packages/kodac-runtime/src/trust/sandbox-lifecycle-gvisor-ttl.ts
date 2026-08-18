@@ -618,6 +618,7 @@ export function validateGvisorTtlTerminalRecord(value: unknown, armValue?: Gviso
   if (base.retainedPidfdProcessIdentity !== expectedRetainedPidfdProcessIdentity) throw new TypeError("R3G-D terminal retained pidfd process identity mismatch")
   const expectedRetainedRunscExecutableIdentity = watchdogProtocolIdentity("RUNSC_EXECUTABLE", [arm.verifiedRunscSha256, arm.controlPeer.executableDevice, arm.controlPeer.executableInode, arm.controlPeer.executableSize, arm.runscArtifactIdentity])
   if (base.retainedRunscExecutableIdentity !== expectedRetainedRunscExecutableIdentity) throw new TypeError("R3G-D terminal retained runsc executable identity mismatch")
+  const expectedPhysicalControlPeerBindingIdentity = watchdogProtocolIdentity("CONTROL_PEER", [arm.runtimeInstanceIdentity, arm.containerId, arm.controlPeer.socketDevice, arm.controlPeer.socketInode, String(arm.controlPeer.peerPid), arm.controlPeer.peerUid, arm.controlPeer.peerGid, arm.controlPeer.processStartTicks, arm.controlPeer.executableDevice, arm.controlPeer.executableInode, arm.controlPeer.executableSize, arm.verifiedRunscSha256])
   const expectedRegistryTerminalRecordIdentity = watchdogProtocolIdentity("TERMINAL_REGISTRY", [
     arm.armOperationIdentity,
     arm.leaseIdentity,
@@ -626,7 +627,7 @@ export function validateGvisorTtlTerminalRecord(value: unknown, armValue?: Gviso
     base.ownerInstanceIdentity,
     base.terminalFenceToken,
     base.claimRecordIdentity,
-    arm.controlPeerBindingIdentity,
+    expectedPhysicalControlPeerBindingIdentity,
     expectedRetainedPidfdProcessIdentity,
     arm.runscArtifactIdentity,
     arm.verifiedRunscSha256,

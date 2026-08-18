@@ -188,6 +188,7 @@ function fixtureTerminal(arm: ReturnType<typeof createGvisorTtlArmRecord>, outco
   const natural = outcome === "natural-exit"
   const retainedPidfdProcessIdentity = watchdogHash("PIDFD_PROCESS", [String(arm.controlPeer.peerPid), arm.controlPeer.processStartTicks, arm.controlPeer.executableDevice, arm.controlPeer.executableInode, arm.controlPeer.executableSize, arm.runtimeInstanceIdentity])
   const retainedRunscExecutableIdentity = watchdogHash("RUNSC_EXECUTABLE", [arm.verifiedRunscSha256, arm.controlPeer.executableDevice, arm.controlPeer.executableInode, arm.controlPeer.executableSize, arm.runscArtifactIdentity])
+  const physicalControlPeerBindingIdentity = watchdogHash("CONTROL_PEER", [arm.runtimeInstanceIdentity, arm.containerId, arm.controlPeer.socketDevice, arm.controlPeer.socketInode, String(arm.controlPeer.peerPid), arm.controlPeer.peerUid, arm.controlPeer.peerGid, arm.controlPeer.processStartTicks, arm.controlPeer.executableDevice, arm.controlPeer.executableInode, arm.controlPeer.executableSize, arm.verifiedRunscSha256])
   const base = {
     version: KDO_H4_R3G_D_TERMINAL_RECORD_VERSION,
     evidenceClass: KDO_H4_R3G_D_TERMINAL_EVIDENCE_CLASS,
@@ -226,7 +227,7 @@ function fixtureTerminal(arm: ReturnType<typeof createGvisorTtlArmRecord>, outco
     base.ownerInstanceIdentity,
     base.terminalFenceToken,
     base.claimRecordIdentity,
-    base.controlPeerBindingIdentity,
+    physicalControlPeerBindingIdentity,
     base.retainedPidfdProcessIdentity,
     base.runscArtifactIdentity,
     base.verifiedRunscSha256,
