@@ -234,7 +234,10 @@ function fakeOutputTransport(input: {
   const provider = fakeProvider(input.requirement.requirementIdentity, input.requirement.workload.workloadIdentity)
   return Object.freeze({
     provider,
-    async captureOutput(request: GvisorContainerBindingRequest, options = {}) {
+    async captureOutput(
+      request: GvisorContainerBindingRequest,
+      options: { readonly signal?: AbortSignal; readonly expectedBinding?: GvisorContainerBinding } = {},
+    ) {
       input.events.push("output-capture")
       input.captureCounter.value += 1
       assert.equal(request.executionAttemptIdentity, input.binding.executionAttemptIdentity)
