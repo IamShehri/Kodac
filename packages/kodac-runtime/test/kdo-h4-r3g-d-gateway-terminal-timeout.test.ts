@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url"
 
 import { NodeWorkspaceFileSystem } from "../src/edit/filesystem.ts"
 import { GvisorTtlExecutionGateway } from "../src/execution/gateway-gvisor-ttl-runtime.ts"
+import { KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION } from "../src/execution/gateway-gvisor-ttl-recovery-runtime.ts"
 import { createConfinementRequest } from "../src/trust/confinement.ts"
 import { createSandboxExecutionRequirement } from "../src/trust/sandbox-backend-evidence.ts"
 import {
@@ -213,7 +214,12 @@ test("H4-R3G-D K2 terminal observation is bounded without cancelling the armed w
         return createGvisorTtlEvidenceCommit({ kind: "terminal", armOperationIdentity: record.armOperationIdentity, leaseIdentity: record.leaseIdentity, recordIdentity: record.recordIdentity, payloadDigest: payloadDigest(record) })
       },
     }
-    const gateway = new GvisorTtlExecutionGateway({ filesystem: new NodeWorkspaceFileSystem(root), policy: fixedPolicy("allow", "R3G-D terminal-timeout fixture allow"), ttlRuntime: runtime })
+    const gateway = new GvisorTtlExecutionGateway({
+      filesystem: new NodeWorkspaceFileSystem(root),
+      policy: fixedPolicy("allow", "R3G-D terminal-timeout fixture allow"),
+      ttlRuntime: runtime,
+      recoveryRuntime: { version: KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION, listRecoverySnapshots: () => [] },
+    })
     const controller = new AbortController()
     const enforcement = gateway.enforceGvisorTtl(requirement, undefined, { signal: controller.signal })
     let settled = false; void enforcement.finally(() => { settled = true }).catch(() => {})
