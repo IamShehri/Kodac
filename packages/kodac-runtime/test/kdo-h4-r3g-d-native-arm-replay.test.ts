@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
 import { createHash } from "node:crypto"
-import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises"
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { createServer, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -15,23 +15,14 @@ import {
   parseGvisorTtlPhysicalLeaseRecord,
   parseGvisorTtlPhysicalOwnerClaimRecord,
 } from "../src/execution/gateway-gvisor-ttl-registry.ts"
+import { createGvisorTtlWatchdogProtocolIdentity } from "../src/execution/gateway-gvisor-ttl.ts"
 
 const execFileAsync = promisify(execFile)
 const TEST_DIR = dirname(fileURLToPath(import.meta.url))
 const RUNTIME_DIR = resolve(TEST_DIR, "..")
 const WATCHDOG_SOURCE = join(RUNTIME_DIR, "native", "gvisor-ttl-watchdog.c")
 const CONTAINER_ID = "1".repeat(64)
-const ID = Object.freeze({
-  arm: "2".repeat(64),
-  payload: "3".repeat(64),
-  execution: "4".repeat(64),
-  requirement: "5".repeat(64),
-  workload: "6".repeat(64),
-  binding: "7".repeat(64),
-  runtime: "8".repeat(64),
-  watchdog: "9".repeat(64),
-  runscArtifact: "a".repeat(64),
-})
+const ID = Object.freeze({ arm: "2".repeat(64), payload: "3".repeat(64), execution: "4".repeat(64), requirement: "5".repeat(64), workload: "6".repeat(64), binding: "7".repeat(64), runtime: "8".repeat(64), watchdog: "9".repeat(64), runscArtifact: "a".repeat(64) })
 
 function parseStartTicks(statText: string): bigint {
   const close = statText.lastIndexOf(")")
@@ -43,6 +34,16 @@ function parseStartTicks(statText: string): bigint {
 
 async function sha256File(path: string): Promise<string> {
   return createHash("sha256").update(await readFile(path)).digest("hex")
+}
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value).digest("hex")
+}
+
+function recordField(text: string, key: string): string {
+  const match = new RegExp(`^${key}=([^\\n]+)$`, "m").exec(text)
+  assert.ok(match, `missing ${key} in record`)
+  return match[1]
 }
 
 function runChild(executable: string, args: string[]): Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> {
@@ -133,10 +134,31 @@ test("H4-R3G-D native watchdog durably records the exact physical arm replay bef
     const claim = parseGvisorTtlPhysicalOwnerClaimRecord(await readFile(join(root, `${ID.arm}.claim`), "utf8"))
     const lease = parseGvisorTtlPhysicalLeaseRecord(await readFile(join(root, `${ID.arm}.lease`), "utf8"), claim)
     const replay = parseGvisorTtlPhysicalArmReplayRecord(await readFile(join(root, `${ID.arm}.arm`), "utf8"), lease)
+    assert.equal(claim.leaseIdentity, lease.leaseIdentity)
+    assert.equal(claim.ownerState, "ACTIVE")
+    assert.ok(BigInt(claim.updatedBoottimeNs) >= BigInt(lease.leaseStartBoottimeNs))
+    assert.ok(BigInt(claim.updatedBoottimeNs) < BigInt(lease.deadlineBoottimeNs))
     assert.equal(replay.physicalArmAcknowledgementIdentity, physicalAckMatch[1])
     assert.equal(replay.controlPeerBindingIdentity.length, 64)
     assert.equal(replay.retainedPidfdProcessIdentity.length, 64)
     assert.equal(replay.retainedRunscExecutableIdentity.length, 64)
+
+    const terminalText = await readFile(join(root, `${ID.arm}.terminal`), "utf8")
+    const liveNs = recordField(terminalText, "liveAtExpiryObservedBoottimeNs")
+    const processSet = recordField(terminalText, "liveAtExpiryProcessSetIdentity")
+    const liveProbe = recordField(terminalText, "liveAtExpiryProbeIdentity")
+    const signalAck = recordField(terminalText, "signalAcknowledgementIdentity")
+    const terminationAck = recordField(terminalText, "terminationAcknowledgementIdentity")
+    const expectedLiveProbe = createGvisorTtlWatchdogProtocolIdentity("LIVE_AT_EXPIRY", [lease.leaseIdentity, claim.ownerInstanceIdentity, claim.terminalFenceToken, claim.claimRecordIdentity, ID.runtime, liveNs, processSet, replay.controlPeerBindingIdentity, replay.retainedPidfdProcessIdentity])
+    const rawSignal = sha256Text(JSON.stringify({ success: true, err: "", result: null }))
+    const expectedSignal = createGvisorTtlWatchdogProtocolIdentity("SIGNAL_ACK", [lease.leaseIdentity, claim.ownerInstanceIdentity, claim.terminalFenceToken, claim.claimRecordIdentity, rawSignal])
+    const rawTermination = sha256Text(JSON.stringify({ success: true, err: "", result: 0 }))
+    const expectedTermination = createGvisorTtlWatchdogProtocolIdentity("TERMINATION_ACK", [lease.leaseIdentity, claim.ownerInstanceIdentity, claim.terminalFenceToken, claim.claimRecordIdentity, rawTermination])
+    assert.equal(liveProbe, expectedLiveProbe)
+    assert.equal(signalAck, expectedSignal)
+    assert.equal(terminationAck, expectedTermination)
+    assert.notEqual(signalAck, createGvisorTtlWatchdogProtocolIdentity("SIGNAL_ACK", [lease.leaseIdentity, claim.ownerInstanceIdentity, "2", claim.claimRecordIdentity, rawSignal]), "changing only the fence token must change Signal proof identity")
+    assert.notEqual(terminationAck, createGvisorTtlWatchdogProtocolIdentity("TERMINATION_ACK", [lease.leaseIdentity, claim.ownerInstanceIdentity, "2", claim.claimRecordIdentity, rawTermination]), "changing only the fence token must change termination proof identity")
 
     const recovery = await inspectGvisorTtlPhysicalRecoveryRegistry(root)
     assert.equal(recovery.length, 1)
@@ -144,6 +166,56 @@ test("H4-R3G-D native watchdog durably records the exact physical arm replay bef
     assert.equal(recovery[0].clockContinuity, "SAME_BOOT")
     assert.equal(recovery[0].armReplay?.armRegistryRecordIdentity, replay.armRegistryRecordIdentity)
     assert.equal(recovery[0].terminal?.terminalOutcome, "ttl-expired")
+  } finally {
+    for (const socket of sockets) socket.destroy()
+    if (server.listening) await closeServer(server).catch(() => {})
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("H4-R3G-D replacing the retained lease lock before Signal disables mutation and terminal authority", { skip: process.platform !== "linux", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "kodac-r3gd-lock-loss-"))
+  await chmod(root, 0o700)
+  const binary = join(root, "watchdog")
+  const socketPath = join(root, "control.sock")
+  const lockPath = join(root, `${ID.arm}.lock`)
+  const terminalPath = join(root, `${ID.arm}.terminal`)
+  const sockets = new Set<Socket>()
+  let signals = 0
+  const server = createServer((socket) => {
+    sockets.add(socket)
+    socket.once("close", () => sockets.delete(socket))
+    let buffered = ""
+    socket.setEncoding("utf8")
+    socket.on("data", (chunk: string) => {
+      buffered += chunk
+      let request: { method?: unknown; arg?: unknown }
+      try { request = JSON.parse(buffered) as { method?: unknown; arg?: unknown } } catch { return }
+      buffered = ""
+      if (request.method === "containerManager.Wait") return
+      if (request.method === "containerManager.Processes") {
+        void (async () => {
+          await rm(lockPath)
+          await writeFile(lockPath, "", { mode: 0o600 })
+          socket.write(JSON.stringify({ success: true, err: "", result: [{ pid: 1 }] }))
+        })()
+        return
+      }
+      if (request.method === "containerManager.Signal") {
+        signals += 1
+        socket.write(JSON.stringify({ success: true, err: "", result: null }))
+      }
+    })
+  })
+  try {
+    await new Promise<void>((resolvePromise, rejectPromise) => { server.once("error", rejectPromise); server.listen(socketPath, () => { server.off("error", rejectPromise); resolvePromise() }) })
+    const args = await nativeArgs(root, binary, socketPath)
+    const result = await runChild(binary, args)
+    assert.equal(result.signal, null)
+    assert.equal(result.code, 126, result.stderr)
+    assert.match(result.stderr, /owner\/fence authority changed before live-at-expiry proof/)
+    assert.equal(signals, 0, "lock replacement must revoke Signal authority")
+    await assert.rejects(readFile(terminalPath, "utf8"), (error: unknown) => error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT")
   } finally {
     for (const socket of sockets) socket.destroy()
     if (server.listening) await closeServer(server).catch(() => {})
