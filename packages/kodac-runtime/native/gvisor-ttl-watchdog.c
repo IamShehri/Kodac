@@ -36,6 +36,9 @@
 #define KODAC_MAX_RECORD_BYTES 16384
 #define KODAC_BOOT_ID_BYTES 36
 #define KODAC_MAX_TTL_MS 86400000ULL
+#ifndef KODAC_ARM_DISPATCH_TIMEOUT_MS
+#define KODAC_ARM_DISPATCH_TIMEOUT_MS 5000
+#endif
 #ifndef KODAC_TERMINATION_ACK_TIMEOUT_MS
 #define KODAC_TERMINATION_ACK_TIMEOUT_MS 30000
 #endif
@@ -629,27 +632,7 @@ static void close_subject(retained_subject *subject) {
   close_if_open(&subject->wait_fd); close_if_open(&subject->processes_fd); close_if_open(&subject->signal_fd); close_if_open(&subject->pidfd); close_if_open(&subject->exe_fd); close_if_open(&subject->socket_path_fd);
 }
 
-static int write_all(int fd, const char *buffer, size_t length) {
-  size_t offset = 0;
-  while (offset < length) {
-    ssize_t count;
-    do { count = send(fd, buffer + offset, length - offset, MSG_NOSIGNAL); } while (count < 0 && errno == EINTR);
-    if (count <= 0) return -1;
-    offset += (size_t)count;
-  }
-  return 0;
-}
-
-static int send_rpc(int fd, const char *method, const char *container_id, int signal_request) {
-  char request[512];
-  int length;
-  if (signal_request) length = snprintf(request, sizeof(request), "{\"method\":\"%s\",\"arg\":{\"CID\":\"%s\",\"Signo\":9,\"PID\":0,\"Mode\":1}}", method, container_id);
-  else length = snprintf(request, sizeof(request), "{\"method\":\"%s\",\"arg\":\"%s\"}", method, container_id);
-  if (length <= 0 || (size_t)length >= sizeof(request)) return -1;
-  return write_all(fd, request, (size_t)length);
-}
-
-static int poll_readable_until_boottime(int fd, uint64_t deadline_ns) {
+static int poll_until_boottime(int fd, short events, uint64_t deadline_ns) {
   for (;;) {
     uint64_t now = 0;
     if (boottime_ns(&now) != 0) return -1;
@@ -657,14 +640,41 @@ static int poll_readable_until_boottime(int fd, uint64_t deadline_ns) {
     uint64_t remaining_ns = deadline_ns - now;
     uint64_t remaining_ms = remaining_ns / 1000000ULL + (remaining_ns % 1000000ULL == 0 ? 0 : 1);
     int timeout_ms = remaining_ms > (uint64_t)INT_MAX ? INT_MAX : (int)remaining_ms;
-    struct pollfd pfd = { .fd = fd, .events = POLLIN, .revents = 0 };
+    struct pollfd pfd = { .fd = fd, .events = events, .revents = 0 };
     int result;
     do { result = poll(&pfd, 1, timeout_ms); } while (result < 0 && errno == EINTR);
     if (result < 0) return -1;
     if (result == 0) continue;
-    if ((pfd.revents & POLLIN) != 0) return 0;
+    if ((pfd.revents & events) != 0) return 0;
     return -1;
   }
+}
+
+static int write_all_until_boottime(int fd, const char *buffer, size_t length, uint64_t deadline_ns) {
+  size_t offset = 0;
+  while (offset < length) {
+    int ready = poll_until_boottime(fd, POLLOUT, deadline_ns);
+    if (ready != 0) return ready;
+    ssize_t count;
+    do { count = send(fd, buffer + offset, length - offset, MSG_NOSIGNAL | MSG_DONTWAIT); } while (count < 0 && errno == EINTR);
+    if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+    if (count <= 0) return -1;
+    offset += (size_t)count;
+  }
+  return 0;
+}
+
+static int send_rpc(int fd, const char *method, const char *container_id, int signal_request, uint64_t deadline_ns) {
+  char request[512];
+  int length;
+  if (signal_request) length = snprintf(request, sizeof(request), "{\"method\":\"%s\",\"arg\":{\"CID\":\"%s\",\"Signo\":9,\"PID\":0,\"Mode\":1}}", method, container_id);
+  else length = snprintf(request, sizeof(request), "{\"method\":\"%s\",\"arg\":\"%s\"}", method, container_id);
+  if (length <= 0 || (size_t)length >= sizeof(request)) return -1;
+  return write_all_until_boottime(fd, request, (size_t)length, deadline_ns);
+}
+
+static int poll_readable_until_boottime(int fd, uint64_t deadline_ns) {
+  return poll_until_boottime(fd, POLLIN, deadline_ns);
 }
 
 static int read_json_object(int fd, char *buffer, size_t capacity, size_t *length_out, uint64_t deadline_ns) {
@@ -802,7 +812,13 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   lease->deadline_boottime_ns = lease->lease_start_boottime_ns + request->ttl_ms * 1000000ULL;
   if (durable_create_claim(request, registry, lease) != 0) return fail("cannot durably claim watchdog owner/fence generation");
   if (durable_create_lease(request, registry, lease) != 0) return fail("cannot durably commit watchdog lease registry entry");
-  if (send_rpc(subject->wait_fd, "containerManager.Wait", request->container_id, 0) != 0) return indeterminate("retained Wait request failed before positive arm acknowledgement");
+
+  uint64_t arm_dispatch_deadline_ns = 0;
+  if (boottime_deadline_after_ms(KODAC_ARM_DISPATCH_TIMEOUT_MS, &arm_dispatch_deadline_ns) != 0) return indeterminate("cannot establish bounded retained Wait dispatch deadline");
+  if (arm_dispatch_deadline_ns > lease->deadline_boottime_ns) arm_dispatch_deadline_ns = lease->deadline_boottime_ns;
+  int wait_dispatch = send_rpc(subject->wait_fd, "containerManager.Wait", request->container_id, 0, arm_dispatch_deadline_ns);
+  if (wait_dispatch == KODAC_RESPONSE_TIMEOUT) return indeterminate("retained Wait request dispatch timed out before positive arm acknowledgement");
+  if (wait_dispatch != 0) return indeterminate("retained Wait request failed before positive arm acknowledgement");
   if (emit_arm_ack(request, subject, lease) != 0) return fail("cannot emit physical arm acknowledgement");
 
   int timer_fd = create_absolute_timer(lease->deadline_boottime_ns);
@@ -851,7 +867,9 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   uint64_t terminal_response_deadline_ns = 0;
   if (boottime_deadline_after_ms(KODAC_TERMINATION_ACK_TIMEOUT_MS, &terminal_response_deadline_ns) != 0) return indeterminate("cannot establish bounded terminal RPC deadline");
 
-  if (send_rpc(subject->processes_fd, "containerManager.Processes", request->container_id, 0) != 0) return indeterminate("retained Processes request failed at expiry");
+  int processes_dispatch = send_rpc(subject->processes_fd, "containerManager.Processes", request->container_id, 0, terminal_response_deadline_ns);
+  if (processes_dispatch == KODAC_RESPONSE_TIMEOUT) return indeterminate("retained Processes request dispatch timed out at expiry");
+  if (processes_dispatch != 0) return indeterminate("retained Processes request failed at expiry");
   char process_set_identity[65];
   int process_result = response_success(subject->processes_fd, 1, process_set_identity, terminal_response_deadline_ns);
   if (process_result == 1) return indeterminate("retained Processes proved no live process at expiry; kill causality is not authorized");
@@ -864,7 +882,9 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   char live_probe_identity[65];
   const char *live_parts[] = { request->runtime_instance_identity, live_ns, process_set_identity, subject->control_peer_binding_identity, subject->retained_pidfd_process_identity };
   if (hash_joined(live_probe_identity, "LIVE_AT_EXPIRY", live_parts, 5) != 0) return indeterminate("cannot derive live-at-expiry proof identity");
-  if (send_rpc(subject->signal_fd, "containerManager.Signal", request->container_id, 1) != 0) return indeterminate("retained Signal request failed");
+  int signal_dispatch = send_rpc(subject->signal_fd, "containerManager.Signal", request->container_id, 1, terminal_response_deadline_ns);
+  if (signal_dispatch == KODAC_RESPONSE_TIMEOUT) return indeterminate("retained Signal request dispatch timed out");
+  if (signal_dispatch != 0) return indeterminate("retained Signal request failed");
   char signal_identity[65];
   int signal_result = response_success(subject->signal_fd, 0, signal_identity, terminal_response_deadline_ns);
   if (signal_result == KODAC_RESPONSE_TIMEOUT) return indeterminate("fixed SIGKILL-all signal acknowledgement timed out");
