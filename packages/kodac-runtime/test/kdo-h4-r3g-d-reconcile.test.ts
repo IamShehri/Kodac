@@ -170,14 +170,17 @@ test("H4-R3G-D recovery matrix retries only PREPARED state with no physical obli
   assert.equal(decisions[0].kind, "RETRY_PREPARED")
 })
 
-test("H4-R3G-D recovery matrix reconciles or confirms arm state deterministically", () => {
-  const { physical, k2Prepared, k2Arm, arm } = fixture()
+test("H4-R3G-D recovery matrix fails closed for ARM without terminal because retained control-channel authority is not inherited", () => {
+  const { physical, k2Prepared, k2Arm } = fixture()
   const armOnly = Object.freeze({ ...physical, terminal: null })
-  const missing = reconcileGvisorTtlRecoveryState({ k2Snapshots: [k2Prepared], physicalSnapshots: [armOnly] })
-  assert.equal(missing[0].kind, "RECONCILE_ARM")
-  if (missing[0].kind === "RECONCILE_ARM") assert.equal(missing[0].recoveredArm.recordIdentity, arm.recordIdentity)
-  const current = reconcileGvisorTtlRecoveryState({ k2Snapshots: [k2Arm], physicalSnapshots: [armOnly] })
-  assert.equal(current[0].kind, "ARM_CURRENT")
+  assert.throws(
+    () => reconcileGvisorTtlRecoveryState({ k2Snapshots: [k2Prepared], physicalSnapshots: [armOnly] }),
+    /restarted K2 process does not retain the authenticated watchdog control channels/,
+  )
+  assert.throws(
+    () => reconcileGvisorTtlRecoveryState({ k2Snapshots: [k2Arm], physicalSnapshots: [armOnly] }),
+    /positive ARM recovery or ARM_CURRENT classification is forbidden/,
+  )
 })
 
 test("H4-R3G-D recovery matrix preserves arm-before-terminal reconciliation order", () => {
