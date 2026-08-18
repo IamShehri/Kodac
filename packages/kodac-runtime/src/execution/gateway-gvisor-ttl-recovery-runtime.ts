@@ -4,10 +4,10 @@ import { inspectGvisorTtlPhysicalRecoveryRegistry } from "./gateway-gvisor-ttl-r
 import { reconcileGvisorTtlRecoveryState, type GvisorTtlRecoveryDecision } from "./gateway-gvisor-ttl-reconcile.ts"
 import {
   KDO_H4_R3G_D_LIMITS,
+  createGvisorTtlEvidenceCommit,
   payloadDigest,
   validateGvisorTtlEvidenceCommit,
   type GvisorTtlArmRecord,
-  type GvisorTtlEvidenceCommit,
   type GvisorTtlTerminalRecord,
 } from "../trust/sandbox-lifecycle-gvisor-ttl.ts"
 import {
@@ -69,6 +69,7 @@ export function validateGvisorTtlRecoveryRuntimeConfig(value: unknown): GvisorTt
 
 function strictDenseArray(value: unknown): readonly unknown[] {
   if (!Array.isArray(value) || utilTypes.isProxy(value)) throw new TypeError("R3G-D recovery snapshot reader must return a non-proxy array")
+  if (Object.getOwnPropertySymbols(value).length !== 0) throw new TypeError("R3G-D recovery snapshot array must not contain symbol properties")
   if (value.length > MAX_RECOVERY_SNAPSHOTS) throw new TypeError("R3G-D recovery snapshot reader exceeded the internal recovery bound")
   const descriptors = Object.getOwnPropertyDescriptors(value)
   const allowed = new Set<string>(["length"])
@@ -156,27 +157,11 @@ export class GvisorTtlRecoveryCoordinator {
   private async applyDecision(decision: GvisorTtlRecoveryDecision): Promise<void> {
     if (decision.kind === "RETRY_PREPARED" || decision.kind === "ARM_CURRENT" || decision.kind === "TERMINAL_CURRENT") return
     if (decision.kind === "RECONCILE_ARM" || decision.kind === "RECONCILE_ARM_AND_TERMINAL") {
-      const expected: GvisorTtlEvidenceCommit = {
-        version: "kodac-h4-r3g-d-evidence-commit-v1",
-        kind: "arm",
-        armOperationIdentity: decision.recoveredArm.armOperationIdentity,
-        leaseIdentity: decision.recoveredArm.leaseIdentity,
-        recordIdentity: decision.recoveredArm.recordIdentity,
-        payloadDigest: payloadDigest(decision.recoveredArm),
-        commitIdentity: "",
-      }
+      const expected = createGvisorTtlEvidenceCommit({ kind: "arm", armOperationIdentity: decision.recoveredArm.armOperationIdentity, leaseIdentity: decision.recoveredArm.leaseIdentity, recordIdentity: decision.recoveredArm.recordIdentity, payloadDigest: payloadDigest(decision.recoveredArm) })
       await this.commitEvidenceExact("R3G-D recovered arm evidence commit", () => this.commitArmEvidence(decision.recoveredArm), expected)
     }
     if (decision.kind === "RECONCILE_TERMINAL" || decision.kind === "RECONCILE_ARM_AND_TERMINAL") {
-      const expected: GvisorTtlEvidenceCommit = {
-        version: "kodac-h4-r3g-d-evidence-commit-v1",
-        kind: "terminal",
-        armOperationIdentity: decision.recoveredTerminal.armOperationIdentity,
-        leaseIdentity: decision.recoveredTerminal.leaseIdentity,
-        recordIdentity: decision.recoveredTerminal.recordIdentity,
-        payloadDigest: payloadDigest(decision.recoveredTerminal),
-        commitIdentity: "",
-      }
+      const expected = createGvisorTtlEvidenceCommit({ kind: "terminal", armOperationIdentity: decision.recoveredTerminal.armOperationIdentity, leaseIdentity: decision.recoveredTerminal.leaseIdentity, recordIdentity: decision.recoveredTerminal.recordIdentity, payloadDigest: payloadDigest(decision.recoveredTerminal) })
       await this.commitEvidenceExact("R3G-D recovered terminal evidence commit", () => this.commitTerminalEvidence(decision.recoveredTerminal), expected)
     }
   }
