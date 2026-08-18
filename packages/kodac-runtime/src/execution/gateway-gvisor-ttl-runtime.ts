@@ -19,6 +19,10 @@ import {
   type GvisorTtlPhysicalArmAcknowledgement,
   type GvisorTtlPhysicalArmExpectation,
 } from "./gateway-gvisor-ttl.ts"
+import {
+  GvisorTtlRecoveryCoordinator,
+  type GvisorTtlRecoveryRuntimeConfig,
+} from "./gateway-gvisor-ttl-recovery-runtime.ts"
 import { validateSandboxExecutionRequirement, type SandboxExecutionRequirement } from "../trust/sandbox-backend-evidence.ts"
 import {
   KDO_H4_R3G_D_ARM_ACK_VERSION,
@@ -35,7 +39,6 @@ import {
   payloadDigest,
   validateGvisorTtlArmAcknowledgement,
   validateGvisorTtlArmRecord,
-  validateGvisorTtlEvidenceCommit,
   validateGvisorTtlRuntimeConfig,
   validateGvisorTtlSubjectBinding,
   validateGvisorTtlTerminalRecord,
@@ -63,6 +66,7 @@ export interface GvisorTtlExecutionGatewayConfig {
   readonly filesystem: WorkspaceFileSystem
   readonly policy: PolicyEngine
   readonly ttlRuntime: GvisorTtlRuntimeConfig
+  readonly recoveryRuntime: GvisorTtlRecoveryRuntimeConfig
 }
 
 export interface GvisorTtlEnforcementResult {
@@ -191,10 +195,6 @@ async function boundedTrusted<T>(label: string, timeoutMs: number, operation: ()
       new Promise<never>((_, rejectPromise) => { timer = setTimeout(() => rejectPromise(new Error(`${label} timed out`)), timeoutMs) }),
     ])
   } finally { if (timer !== undefined) clearTimeout(timer) }
-}
-async function commitExact(label: string, runtimeCommit: () => Promise<unknown> | unknown, expected: { kind: "prepared" | "arm" | "terminal"; armOperationIdentity: string; leaseIdentity: string | null; recordIdentity: string; payloadDigest: string }): Promise<void> {
-  const raw = await boundedTrusted(label, KDO_H4_R3G_D_LIMITS.evidenceCommitTimeoutMs, runtimeCommit)
-  validateGvisorTtlEvidenceCommit(raw, expected)
 }
 
 function createPhysicalExpectation(prepared: GvisorTtlPreparedIntent, subject: GvisorTtlSubjectBinding, linuxBootId: string): GvisorTtlPhysicalArmExpectation {
@@ -515,11 +515,18 @@ function buildWatchdogArgs(runtime: GvisorTtlRuntimeConfig, prepared: GvisorTtlP
 export class GvisorTtlExecutionGateway extends ExecutionGateway {
   private readonly ttlPolicy: PolicyEngine
   private readonly ttlRuntime: GvisorTtlRuntimeConfig
+  private readonly recovery: GvisorTtlRecoveryCoordinator
 
   constructor(config: GvisorTtlExecutionGatewayConfig) {
     super(config.filesystem, config.policy)
     this.ttlPolicy = config.policy
     this.ttlRuntime = validateGvisorTtlRuntimeConfig(config.ttlRuntime)
+    this.recovery = new GvisorTtlRecoveryCoordinator({
+      registryRoot: this.ttlRuntime.registryRoot,
+      recoveryRuntime: config.recoveryRuntime,
+      commitArmEvidence: this.ttlRuntime.commitArmEvidence,
+      commitTerminalEvidence: this.ttlRuntime.commitTerminalEvidence,
+    })
   }
 
   async enforceGvisorTtl(requirementValue: SandboxExecutionRequirement, observer?: ExecutionObserver, options: { signal?: AbortSignal } = {}): Promise<GvisorTtlEnforcementResult> {
@@ -543,13 +550,15 @@ export class GvisorTtlExecutionGateway extends ExecutionGateway {
     let stderrPromise: Promise<DrainedText> | undefined
     let pendingDrainOwned = false
     try {
+      await this.recovery.ensureStartupRecovery()
+      if (options.signal?.aborted) return block("R3G-D enforcement aborted after startup recovery before subject resolution", "R3G-D lifecycle enforcement aborted before arm")
       watchdog = await observeTrustedWatchdog(this.ttlRuntime)
       const rawSubject = await boundedTrusted("R3G-D trusted subject resolution", KDO_H4_R3G_D_LIMITS.armAckTimeoutMs, () => this.ttlRuntime.resolveSubject(requirement, { signal: options.signal }))
       const subject = validateGvisorTtlSubjectBinding(rawSubject, requirement)
       if (options.signal?.aborted) return block("R3G-D enforcement aborted before PREPARED commit", "R3G-D lifecycle enforcement aborted before arm")
       const prepared = createGvisorTtlPreparedIntent({ requirement, subject, watchdogImplementationIdentity: watchdog.implementationIdentity })
       const preparedExpected = createGvisorTtlEvidenceCommit({ kind: "prepared", armOperationIdentity: prepared.armOperationIdentity, leaseIdentity: null, recordIdentity: prepared.intentIdentity, payloadDigest: payloadDigest(prepared) })
-      await commitExact("R3G-D PREPARED evidence commit", () => this.ttlRuntime.commitPreparedIntent(prepared), preparedExpected)
+      await this.recovery.commitEvidenceExact("R3G-D PREPARED evidence commit", () => this.ttlRuntime.commitPreparedIntent(prepared), preparedExpected)
       if (options.signal?.aborted) return block("R3G-D enforcement aborted after PREPARED but before watchdog spawn", "R3G-D lifecycle enforcement aborted before physical arm")
       const linuxBootId = canonicalBootId((await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim())
       await reverifyTrustedWatchdog(watchdog)
@@ -568,7 +577,7 @@ export class GvisorTtlExecutionGateway extends ExecutionGateway {
       const physicalArm = validateGvisorTtlPhysicalArmAcknowledgement(armNext.value, expectation)
       const logical = adaptGvisorTtlPhysicalArmAcknowledgement({ prepared, subject, physical: physicalArm })
       const armExpected = createGvisorTtlEvidenceCommit({ kind: "arm", armOperationIdentity: logical.arm.armOperationIdentity, leaseIdentity: logical.arm.leaseIdentity, recordIdentity: logical.arm.recordIdentity, payloadDigest: payloadDigest(logical.arm) })
-      await commitExact("R3G-D arm evidence commit", () => this.ttlRuntime.commitArmEvidence(logical.arm), armExpected)
+      await this.recovery.commitEvidenceExact("R3G-D arm evidence commit", () => this.ttlRuntime.commitArmEvidence(logical.arm), armExpected)
 
       const terminalPending = lines.next()
       let terminalNext: IteratorResult<string>
@@ -579,7 +588,7 @@ export class GvisorTtlExecutionGateway extends ExecutionGateway {
       const physicalTerminal = validateGvisorTtlPhysicalTerminalAcknowledgement(terminalNext.value, expectation, physicalArm)
       const terminal = adaptGvisorTtlPhysicalTerminalAcknowledgement({ arm: logical.arm, expectation, physical: physicalTerminal })
       const terminalExpected = createGvisorTtlEvidenceCommit({ kind: "terminal", armOperationIdentity: terminal.armOperationIdentity, leaseIdentity: terminal.leaseIdentity, recordIdentity: terminal.recordIdentity, payloadDigest: payloadDigest(terminal) })
-      await commitExact("R3G-D terminal evidence commit", () => this.ttlRuntime.commitTerminalEvidence(terminal), terminalExpected)
+      await this.recovery.commitEvidenceExact("R3G-D terminal evidence commit", () => this.ttlRuntime.commitTerminalEvidence(terminal), terminalExpected)
       const extraPending = lines.next()
       let extra: IteratorResult<string>
       try { extra = await withTimeout("R3G-D watchdog post-terminal stdout close", WATCHDOG_POST_TERMINAL_EXIT_TIMEOUT_MS, extraPending) }
