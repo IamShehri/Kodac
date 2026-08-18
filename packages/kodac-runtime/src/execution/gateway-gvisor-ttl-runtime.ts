@@ -55,6 +55,9 @@ const SHA256 = /^[0-9a-f]{64}$/
 const UINT = /^(?:0|[1-9][0-9]*)$/
 const MAX_UINT64 = 18_446_744_073_709_551_615n
 const WATCHDOG_CHILD_FD = 3
+// Must match native KODAC_TERMINATION_ACK_TIMEOUT_MS; a regression test locks this parity.
+const WATCHDOG_TERMINATION_ACK_TIMEOUT_MS = 30_000
+const WATCHDOG_POST_TERMINAL_EXIT_TIMEOUT_MS = 5_000
 
 export interface GvisorTtlExecutionGatewayConfig {
   readonly filesystem: WorkspaceFileSystem
@@ -567,15 +570,22 @@ export class GvisorTtlExecutionGateway extends ExecutionGateway {
       const armExpected = createGvisorTtlEvidenceCommit({ kind: "arm", armOperationIdentity: logical.arm.armOperationIdentity, leaseIdentity: logical.arm.leaseIdentity, recordIdentity: logical.arm.recordIdentity, payloadDigest: payloadDigest(logical.arm) })
       await commitExact("R3G-D arm evidence commit", () => this.ttlRuntime.commitArmEvidence(logical.arm), armExpected)
 
-      const terminalNext = await lines.next()
+      const terminalPending = lines.next()
+      let terminalNext: IteratorResult<string>
+      try { terminalNext = await withTimeout("R3G-D physical terminal acknowledgement", prepared.ttlMs + WATCHDOG_TERMINATION_ACK_TIMEOUT_MS, terminalPending) }
+      catch (error) { pendingDrainOwned = true; void drainAfterPending(terminalPending, lines, exitPromise, stderrPromise); throw error }
       if (terminalNext.done || terminalNext.value.length === 0) throw new Error("R3G-D watchdog exited without a physical terminal acknowledgement")
       if (Buffer.byteLength(terminalNext.value, "utf8") > KDO_H4_R3G_D_LIMITS.maxTerminalBytes) throw new Error("R3G-D physical terminal acknowledgement exceeds authorized bound")
       const physicalTerminal = validateGvisorTtlPhysicalTerminalAcknowledgement(terminalNext.value, expectation, physicalArm)
       const terminal = adaptGvisorTtlPhysicalTerminalAcknowledgement({ arm: logical.arm, expectation, physical: physicalTerminal })
       const terminalExpected = createGvisorTtlEvidenceCommit({ kind: "terminal", armOperationIdentity: terminal.armOperationIdentity, leaseIdentity: terminal.leaseIdentity, recordIdentity: terminal.recordIdentity, payloadDigest: payloadDigest(terminal) })
       await commitExact("R3G-D terminal evidence commit", () => this.ttlRuntime.commitTerminalEvidence(terminal), terminalExpected)
-      const extra = await lines.next(); if (!extra.done) throw new Error("R3G-D watchdog emitted unexpected output after terminal acknowledgement")
-      const [exit, stderrResult] = await Promise.all([exitPromise, stderrPromise])
+      const extraPending = lines.next()
+      let extra: IteratorResult<string>
+      try { extra = await withTimeout("R3G-D watchdog post-terminal stdout close", WATCHDOG_POST_TERMINAL_EXIT_TIMEOUT_MS, extraPending) }
+      catch (error) { pendingDrainOwned = true; void drainAfterPending(extraPending, lines, exitPromise, stderrPromise); throw error }
+      if (!extra.done) throw new Error("R3G-D watchdog emitted unexpected output after terminal acknowledgement")
+      const [exit, stderrResult] = await withTimeout("R3G-D watchdog post-terminal exit", WATCHDOG_POST_TERMINAL_EXIT_TIMEOUT_MS, Promise.all([exitPromise, stderrPromise]))
       if (stderrResult.overflow) throw new Error("R3G-D watchdog stderr exceeded the authorized bound")
       if (exit.code !== 0 || exit.signal !== null) throw new Error(`R3G-D watchdog failed after terminal acknowledgement: code=${String(exit.code)} signal=${String(exit.signal)} stderr=${stderrResult.text}`)
       const serialized = JSON.stringify(terminal); const receipt = createReceipt({ capability: intent.capability, inputDigest: intent.inputDigest, paths: intent.paths, policy, startedAt, completedAt: new Date().toISOString(), result: { status: "success", outputDigest: textSha256(serialized), outputBytes: Buffer.byteLength(serialized, "utf8"), exitCode: 0 } }); await persistReceipt(observer, receipt)
