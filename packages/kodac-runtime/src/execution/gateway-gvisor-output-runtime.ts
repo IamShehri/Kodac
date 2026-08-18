@@ -603,7 +603,7 @@ function asynchronousMutationResult<T>(value: Promise<T> | T, label: string): Pr
     if (error instanceof Error) throw error
     throw new Error(`${label} failed while inspecting trusted asynchronous result: ${String(error)}`)
   }
-  return typeof thenValue === "function" ? Promise.resolve(value as PromiseLike<T>) : null
+  return typeof thenValue === "function" ? Promise.resolve(value as unknown as PromiseLike<T>) : null
 }
 
 /**
