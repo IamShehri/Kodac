@@ -83,18 +83,24 @@ test("R3G-E contract pins capability and Moby/API source identities", () => {
   assert.match(createGvisorOutputObserverImplementationIdentity(), /^[0-9a-f]{64}$/)
 })
 
-test("R3G-E counts one raw aggregate budget across interleaved stdout and stderr", () => {
+test("R3G-E counts one raw aggregate budget across fragmented interleaved stdout and stderr", () => {
   const accumulator = new GvisorDockerMultiplexAccumulator(6)
-  const bytes = Buffer.concat([frame(1, "ab"), frame(2, "c"), frame(1, "def")])
-  for (const cut of [1, 2, 7, 3, bytes.byteLength]) {
-    if (bytes.byteLength === 0) break
-    const part = bytes.subarray(0, Math.min(cut, bytes.byteLength))
-    if (part.byteLength === 0) continue
-    accumulator.push(part)
-    bytes.copyWithin(0, part.byteLength)
-    ;(bytes as Buffer).fill(0, bytes.byteLength - part.byteLength)
-    Object.defineProperty(bytes, "byteLength", { value: bytes.byteLength - part.byteLength, configurable: true })
+  const encoded = Buffer.concat([frame(1, "ab"), frame(2, "c"), frame(1, "def")])
+  const fragmentSizes = [1, 2, 7, 3, 5]
+  let offset = 0
+  let fragment = 0
+  while (offset < encoded.byteLength) {
+    const size = fragmentSizes[fragment % fragmentSizes.length]!
+    accumulator.push(encoded.subarray(offset, Math.min(offset + size, encoded.byteLength)))
+    offset += size
+    fragment += 1
   }
+  const result = accumulator.finish()
+  assert.equal(result.acceptedStdoutBytes, 5)
+  assert.equal(result.acceptedStderrBytes, 1)
+  assert.equal(result.acceptedAggregateBytes, 6)
+  assert.equal(result.stdout.toString("utf8"), "abdef")
+  assert.equal(result.stderr.toString("utf8"), "c")
 })
 
 test("R3G-E exact aggregate bound is inclusive and Docker frame headers do not count", () => {
