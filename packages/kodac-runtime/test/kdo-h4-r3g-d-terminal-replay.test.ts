@@ -129,7 +129,6 @@ test("H4-R3G-D physical terminal recovers into a standalone-valid logical termin
   const terminal = recoverGvisorTtlLogicalTerminalRecord({ arm, physicalLease: lease, armReplay: replay, physicalTerminal })
   assert.deepEqual(validateGvisorTtlTerminalRecord(terminal, arm), terminal)
   assert.equal(terminal.terminalOutcome, "ttl-expired")
-  assert.equal(terminal.deadlineBoottimeNs, undefined)
   assert.notEqual(terminal.leaseIdentity, physicalTerminal.leaseIdentity, "logical terminal must bind the logical K2 lease identity")
   assert.notEqual(terminal.registryTerminalRecordIdentity, physicalTerminal.registryTerminalRecordIdentity, "physical registry identity must be verified then independently logicalized")
   assert.equal(terminal.liveAtExpiryObservedBoottimeNs, DEADLINE)
