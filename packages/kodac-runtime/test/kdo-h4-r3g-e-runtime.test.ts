@@ -9,6 +9,7 @@ import test from "node:test"
 import { NodeWorkspaceFileSystem } from "../src/edit/filesystem.ts"
 import {
   GvisorOutputExecutionGateway,
+  KDO_H4_R3G_E_ATTACH_MEDIA_TYPE,
   KDO_H4_R3G_E_DOCKER_TRANSPORT_VERSION,
   KDO_H4_R3G_E_RUNTIME_VERSION,
   createGvisorOutputFailureCommit,
@@ -51,7 +52,6 @@ import {
 } from "../src/trust/sandbox-observer-gvisor.ts"
 import {
   GvisorDockerMultiplexAccumulator,
-  KDO_H4_R3G_E_ATTACH_MEDIA_TYPE,
   createGvisorOutputBoundCommit,
   createGvisorOutputChannelIdentity,
   type GvisorOutputBoundRecord,
