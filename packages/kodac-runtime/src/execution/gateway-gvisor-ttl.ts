@@ -7,6 +7,8 @@ const CONTAINER_ID = /^[0-9a-f]{64}$/
 const WATCHDOG_HASH_PREFIX = "KODAC-H4-R3G-D-WATCHDOG"
 const WATCHDOG_HASH_VERSION = "V1"
 const WATCHDOG_ARM_LINE_VERSION = "kodac-gvisor-ttl-arm-v1"
+const OWNER_CLAIM_VERSION = "kodac-h4-r3g-d-owner-claim-v1"
+const OWNER_STATE_ACTIVE = "ACTIVE"
 const MAX_UINT64 = 18_446_744_073_709_551_615n
 
 export interface GvisorTtlPhysicalArmExpectation {
@@ -49,6 +51,7 @@ export interface GvisorTtlPhysicalArmAcknowledgement {
   readonly deadlineBoottimeNs: string
   readonly ownerInstanceIdentity: string
   readonly terminalFenceToken: string
+  readonly ownerUpdatedBoottimeNs: string
   readonly claimRecordIdentity: string
   readonly physicalArmAcknowledgementIdentity: string
 }
@@ -135,12 +138,16 @@ export function createGvisorTtlPhysicalLeaseIdentity(expectation: GvisorTtlPhysi
   ])
 }
 
-export function createGvisorTtlPhysicalClaimRecordIdentity(expectation: GvisorTtlPhysicalArmExpectation, acknowledgement: Pick<GvisorTtlPhysicalArmAcknowledgement, "ownerInstanceIdentity" | "terminalFenceToken" | "linuxBootId">): string {
+export function createGvisorTtlPhysicalClaimRecordIdentity(expectation: GvisorTtlPhysicalArmExpectation, acknowledgement: Pick<GvisorTtlPhysicalArmAcknowledgement, "leaseIdentity" | "ownerInstanceIdentity" | "terminalFenceToken" | "ownerUpdatedBoottimeNs" | "linuxBootId">): string {
   const expected = validateExpectation(expectation)
   return createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", [
+    OWNER_CLAIM_VERSION,
+    sha256(acknowledgement.leaseIdentity, "leaseIdentity"),
     expected.armOperationIdentity,
     sha256(acknowledgement.ownerInstanceIdentity, "ownerInstanceIdentity"),
     uint(acknowledgement.terminalFenceToken, "terminalFenceToken", false),
+    OWNER_STATE_ACTIVE,
+    uint(acknowledgement.ownerUpdatedBoottimeNs, "ownerUpdatedBoottimeNs"),
     bootId(acknowledgement.linuxBootId),
   ])
 }
@@ -232,6 +239,7 @@ function parseArmLine(line: string): GvisorTtlPhysicalArmAcknowledgement {
     "deadline-boottime-ns",
     "owner-instance",
     "terminal-fence-token",
+    "owner-updated-boottime-ns",
     "claim-record",
     "physical-ack",
   ] as const
@@ -261,6 +269,7 @@ function parseArmLine(line: string): GvisorTtlPhysicalArmAcknowledgement {
     deadlineBoottimeNs: uint(values.get("deadline-boottime-ns"), "deadlineBoottimeNs"),
     ownerInstanceIdentity: sha256(values.get("owner-instance"), "ownerInstanceIdentity"),
     terminalFenceToken: uint(values.get("terminal-fence-token"), "terminalFenceToken", false),
+    ownerUpdatedBoottimeNs: uint(values.get("owner-updated-boottime-ns"), "ownerUpdatedBoottimeNs"),
     claimRecordIdentity: sha256(values.get("claim-record"), "claimRecordIdentity"),
     physicalArmAcknowledgementIdentity: sha256(values.get("physical-ack"), "physicalArmAcknowledgementIdentity"),
   })
@@ -273,6 +282,8 @@ export function validateGvisorTtlPhysicalArmAcknowledgement(line: string, expect
   if (acknowledgement.linuxBootId !== expectation.expectedLinuxBootId) throw new TypeError("physical arm acknowledgement Linux boot identity mismatch")
   const expectedDeadline = BigInt(acknowledgement.leaseStartBoottimeNs) + BigInt(expectation.ttlMs) * 1_000_000n
   if (expectedDeadline > MAX_UINT64 || acknowledgement.deadlineBoottimeNs !== expectedDeadline.toString()) throw new TypeError("physical arm acknowledgement immutable deadline mismatch")
+  const ownerUpdated = BigInt(acknowledgement.ownerUpdatedBoottimeNs)
+  if (ownerUpdated < BigInt(acknowledgement.leaseStartBoottimeNs) || ownerUpdated >= BigInt(acknowledgement.deadlineBoottimeNs)) throw new TypeError("physical arm acknowledgement owner update is outside the immutable lease window")
   const expectedClockDomain = createGvisorTtlPhysicalClockDomainIdentity(acknowledgement.linuxBootId)
   if (acknowledgement.clockDomainIdentity !== expectedClockDomain) throw new TypeError("physical arm acknowledgement clock-domain identity mismatch")
   const expectedLease = createGvisorTtlPhysicalLeaseIdentity(expectation, acknowledgement)
