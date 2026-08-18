@@ -12,6 +12,35 @@ export * from "./evidence/ledger.ts"
 export * from "./evidence/receipt.ts"
 export * from "./execution/gateway.ts"
 export * from "./execution/gateway-gvisor-network.ts"
+export {
+  GvisorOutputExecutionGateway,
+  KDO_H4_R3G_E_ATTACH_MEDIA_TYPE,
+  KDO_H4_R3G_E_ATTACH_PATH_SUFFIX,
+  KDO_H4_R3G_E_DOCKER_TRANSPORT_VERSION,
+  KDO_H4_R3G_E_FAILURE_COMMIT_VERSION,
+  KDO_H4_R3G_E_FAILURE_VERSION,
+  KDO_H4_R3G_E_PREPARED_VERSION,
+  KDO_H4_R3G_E_RESERVATION_VERSION,
+  KDO_H4_R3G_E_RUNTIME_LIMITS,
+  KDO_H4_R3G_E_RUNTIME_VERSION,
+  createGvisorOutputFailureCommit,
+  createGvisorOutputFailureRecord,
+  createGvisorOutputPreparedOperation,
+  createGvisorOutputReservation,
+  validateGvisorOutputFailureCommit,
+  validateGvisorOutputFailureRecord,
+  validateGvisorOutputPreparedOperation,
+  validateGvisorOutputReservation,
+  validateGvisorOutputRuntimeConfig,
+  type GvisorOutputEnforcementResult,
+  type GvisorOutputExecutionGatewayConfig,
+  type GvisorOutputFailureCommit,
+  type GvisorOutputFailureReason,
+  type GvisorOutputFailureRecord,
+  type GvisorOutputPreparedOperation,
+  type GvisorOutputReservation,
+  type GvisorOutputRuntimeConfig,
+} from "./execution/gateway-gvisor-output-runtime.ts"
 export * from "./execution/gateway-gvisor-ttl-runtime.ts"
 export * from "./extensions/contracts.ts"
 export * from "./extensions/registry.ts"
@@ -45,6 +74,7 @@ export * from "./trust/confinement-runtime.ts"
 export * from "./trust/confinement.ts"
 export * from "./trust/sandbox-backend-evidence.ts"
 export * from "./trust/sandbox-lifecycle-gvisor-ttl.ts"
+export * from "./trust/sandbox-output-gvisor.ts"
 export * from "./trust/sandbox-observer-docker-control-plane.ts"
 export * from "./trust/sandbox-observer-gvisor-cgroup-v2.ts"
 export * from "./trust/sandbox-observer-gvisor-network.ts"
