@@ -42,7 +42,6 @@ function requirePhysicalLeaseMatchesLogicalArm(physical: GvisorTtlPhysicalLeaseR
     physical.ttlMs !== arm.ttlMs ||
     physical.watchdogImplementationIdentity !== arm.watchdogImplementationIdentity ||
     physical.linuxBootId !== arm.linuxBootId ||
-    physical.clockDomainIdentity !== arm.clockDomainIdentity ||
     physical.leaseStartBoottimeNs !== arm.leaseStartBoottimeNs ||
     physical.deadlineBoottimeNs !== arm.deadlineBoottimeNs ||
     physical.ownerInstanceIdentity !== arm.ownerInstanceIdentity ||
