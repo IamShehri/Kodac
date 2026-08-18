@@ -17,10 +17,7 @@ import type { GvisorTtlPhysicalRecoverySnapshot } from "../src/execution/gateway
 import { reconcileGvisorTtlRecoveryState } from "../src/execution/gateway-gvisor-ttl-reconcile.ts"
 import { recoverGvisorTtlLogicalTerminalRecord } from "../src/execution/gateway-gvisor-ttl-terminal-replay.ts"
 import { createConfinementRequest } from "../src/trust/confinement.ts"
-import {
-  createSandboxExecutionRequirement,
-  type SandboxExecutionRequirement,
-} from "../src/trust/sandbox-backend-evidence.ts"
+import { createSandboxExecutionRequirement, type SandboxExecutionRequirement } from "../src/trust/sandbox-backend-evidence.ts"
 import {
   KDO_H4_R3A_NETWORK_MODE,
   createSandboxEntrypoint,
@@ -29,10 +26,7 @@ import {
   createSandboxResourcePolicy,
   createSandboxWorkloadRequest,
 } from "../src/trust/sandbox-workload.ts"
-import {
-  KDO_H4_R3G_D_PREPARED_VERSION,
-  type GvisorTtlPreparedIntent,
-} from "../src/trust/sandbox-lifecycle-gvisor-ttl.ts"
+import { KDO_H4_R3G_D_PREPARED_VERSION, type GvisorTtlPreparedIntent } from "../src/trust/sandbox-lifecycle-gvisor-ttl.ts"
 import { createGvisorTtlK2RecoverySnapshot } from "../src/trust/sandbox-lifecycle-gvisor-ttl-recovery.ts"
 
 const ID = Object.freeze({
@@ -40,6 +34,7 @@ const ID = Object.freeze({
 })
 const BOOT = "123e4567-e89b-42d3-a456-426614174000"
 const START = "1000000000"
+const OWNER_UPDATED = "1000000001"
 const DEADLINE = "2000000000"
 const TTL_MS = 1000
 const SOCKET_DEV = "41"
@@ -54,19 +49,11 @@ const EXE_SIZE = "12345678"
 const FENCE = "1"
 
 function logicalHash(domain: string, value: unknown): string {
-  return createHash("sha256")
-    .update(Buffer.from(`KODAC-H4-R3G-D\0${domain}\0V1\0`, "ascii"))
-    .update(Buffer.from(JSON.stringify(value), "utf8"))
-    .digest("hex")
+  return createHash("sha256").update(Buffer.from(`KODAC-H4-R3G-D\0${domain}\0V1\0`, "ascii")).update(Buffer.from(JSON.stringify(value), "utf8")).digest("hex")
 }
 
 function requirementFixture(): SandboxExecutionRequirement {
-  const confinement = createConfinementRequest({
-    mode: "read-only",
-    workspaceIdentity: "1".repeat(64),
-    executionIntentIdentity: "2".repeat(64),
-    scope: { readPaths: ["src"], writePaths: [] },
-  })
+  const confinement = createConfinementRequest({ mode: "read-only", workspaceIdentity: "1".repeat(64), executionIntentIdentity: "2".repeat(64), scope: { readPaths: ["src"], writePaths: [] } })
   const workload = createSandboxWorkloadRequest({
     source: createSandboxOciImageSource({ repository: "ghcr.io/acme/r3g-d-reconcile", digest: `sha256:${"3".repeat(64)}` }),
     entrypoint: createSandboxEntrypoint({ executable: "/usr/bin/node", args: ["--version"] }),
@@ -79,16 +66,7 @@ function requirementFixture(): SandboxExecutionRequirement {
 }
 
 function preparedFixture(requirement: SandboxExecutionRequirement): GvisorTtlPreparedIntent {
-  const armPayload = Object.freeze({
-    executionAttemptIdentity: ID.execution,
-    requirementIdentity: requirement.requirementIdentity,
-    workloadIdentity: requirement.workload.workloadIdentity,
-    containerBindingIdentity: ID.binding,
-    containerId: ID.container,
-    runtimeInstanceIdentity: ID.runtime,
-    ttlMs: TTL_MS,
-    watchdogImplementationIdentity: ID.watchdog,
-  })
+  const armPayload = Object.freeze({ executionAttemptIdentity: ID.execution, requirementIdentity: requirement.requirementIdentity, workloadIdentity: requirement.workload.workloadIdentity, containerBindingIdentity: ID.binding, containerId: ID.container, runtimeInstanceIdentity: ID.runtime, ttlMs: TTL_MS, watchdogImplementationIdentity: ID.watchdog })
   const canonicalArmPayloadDigest = logicalHash("ARM_PAYLOAD", armPayload)
   const armOperationIdentity = logicalHash("ARM_OPERATION", armPayload)
   const base = Object.freeze({ version: KDO_H4_R3G_D_PREPARED_VERSION, state: "PREPARED" as const, armOperationIdentity, ...armPayload, canonicalArmPayloadDigest })
@@ -98,15 +76,13 @@ function preparedFixture(requirement: SandboxExecutionRequirement): GvisorTtlPre
 function fixture() {
   const requirement = requirementFixture()
   const prepared = preparedFixture(requirement)
-  const claimRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", [prepared.armOperationIdentity, ID.owner, FENCE, BOOT])
+  const physicalLeaseIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE", [prepared.armOperationIdentity, prepared.canonicalArmPayloadDigest, prepared.runtimeInstanceIdentity, BOOT, START, DEADLINE, prepared.watchdogImplementationIdentity])
+  const claimRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", ["kodac-h4-r3g-d-owner-claim-v1", physicalLeaseIdentity, prepared.armOperationIdentity, ID.owner, FENCE, "ACTIVE", OWNER_UPDATED, BOOT])
   const claim = parseGvisorTtlPhysicalOwnerClaimRecord([
-    "version=kodac-h4-r3g-d-owner-claim-v1", `armOperationIdentity=${prepared.armOperationIdentity}`, `ownerInstanceIdentity=${ID.owner}`, `terminalFenceToken=${FENCE}`, `linuxBootId=${BOOT}`, `claimRecordIdentity=${claimRecordIdentity}`, "",
+    "version=kodac-h4-r3g-d-owner-claim-v1", `leaseIdentity=${physicalLeaseIdentity}`, `armOperationIdentity=${prepared.armOperationIdentity}`, `ownerInstanceIdentity=${ID.owner}`, `terminalFenceToken=${FENCE}`, "ownerState=ACTIVE", `updatedBoottimeNs=${OWNER_UPDATED}`, `linuxBootId=${BOOT}`, `claimRecordIdentity=${claimRecordIdentity}`, "",
   ].join("\n"))
   const clock = createGvisorTtlWatchdogProtocolIdentity("CLOCK_DOMAIN", [BOOT, "CLOCK_BOOTTIME"])
-  const physicalLeaseIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE", [prepared.armOperationIdentity, prepared.canonicalArmPayloadDigest, prepared.runtimeInstanceIdentity, BOOT, START, DEADLINE, prepared.watchdogImplementationIdentity])
-  const physicalRegistryIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE_REGISTRY", [
-    "kodac-h4-r3g-d-watchdog-lease-v1", prepared.armOperationIdentity, prepared.canonicalArmPayloadDigest, physicalLeaseIdentity, prepared.executionAttemptIdentity, prepared.requirementIdentity, prepared.workloadIdentity, prepared.containerBindingIdentity, prepared.containerId, prepared.runtimeInstanceIdentity, String(TTL_MS), BOOT, clock, START, DEADLINE, prepared.watchdogImplementationIdentity, ID.owner, FENCE, claimRecordIdentity,
-  ])
+  const physicalRegistryIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE_REGISTRY", ["kodac-h4-r3g-d-watchdog-lease-v1", prepared.armOperationIdentity, prepared.canonicalArmPayloadDigest, physicalLeaseIdentity, prepared.executionAttemptIdentity, prepared.requirementIdentity, prepared.workloadIdentity, prepared.containerBindingIdentity, prepared.containerId, prepared.runtimeInstanceIdentity, String(TTL_MS), BOOT, clock, START, DEADLINE, prepared.watchdogImplementationIdentity, ID.owner, FENCE, claimRecordIdentity])
   const lease = parseGvisorTtlPhysicalLeaseRecord([
     "version=kodac-h4-r3g-d-watchdog-lease-v1", `armOperationIdentity=${prepared.armOperationIdentity}`, `canonicalArmPayloadDigest=${prepared.canonicalArmPayloadDigest}`, `leaseIdentity=${physicalLeaseIdentity}`, `executionAttemptIdentity=${prepared.executionAttemptIdentity}`, `requirementIdentity=${prepared.requirementIdentity}`, `workloadIdentity=${prepared.workloadIdentity}`, `containerBindingIdentity=${prepared.containerBindingIdentity}`, `containerId=${prepared.containerId}`, `runtimeInstanceIdentity=${prepared.runtimeInstanceIdentity}`, `ttlMs=${TTL_MS}`, `linuxBootId=${BOOT}`, `clockDomainIdentity=${clock}`, `leaseStartBoottimeNs=${START}`, `deadlineBoottimeNs=${DEADLINE}`, `watchdogImplementationIdentity=${prepared.watchdogImplementationIdentity}`, "physicalArmState=ARMED", `ownerInstanceIdentity=${ID.owner}`, `terminalFenceToken=${FENCE}`, `claimRecordIdentity=${claimRecordIdentity}`, `registryRecordIdentity=${physicalRegistryIdentity}`, "",
   ].join("\n"), claim)
@@ -114,44 +90,11 @@ function fixture() {
   const pidfd = createGvisorTtlWatchdogProtocolIdentity("PIDFD_PROCESS", [String(PEER_PID), START_TICKS, EXE_DEV, EXE_INO, EXE_SIZE, prepared.runtimeInstanceIdentity])
   const retainedRunsc = createGvisorTtlWatchdogProtocolIdentity("RUNSC_EXECUTABLE", [ID.runscSha, EXE_DEV, EXE_INO, EXE_SIZE, ID.runscArtifact])
   const physicalAck = createGvisorTtlWatchdogProtocolIdentity("PHYSICAL_ARM_ACK", [physicalLeaseIdentity, prepared.armOperationIdentity, prepared.runtimeInstanceIdentity, physicalPeer, ID.runscArtifact, ID.runscSha, physicalRegistryIdentity, clock, BOOT, ID.owner, claimRecordIdentity])
-  const replayBase = Object.freeze({
-    version: KDO_H4_R3G_D_PHYSICAL_ARM_REGISTRY_VERSION,
-    armOperationIdentity: prepared.armOperationIdentity,
-    canonicalArmPayloadDigest: prepared.canonicalArmPayloadDigest,
-    leaseIdentity: physicalLeaseIdentity,
-    runtimeInstanceIdentity: prepared.runtimeInstanceIdentity,
-    controlPeerBindingIdentity: physicalPeer,
-    socketDevice: SOCKET_DEV,
-    socketInode: SOCKET_INO,
-    peerPid: PEER_PID,
-    peerUid: PEER_UID,
-    peerGid: PEER_GID,
-    processStartTicks: START_TICKS,
-    executableDevice: EXE_DEV,
-    executableInode: EXE_INO,
-    executableSize: EXE_SIZE,
-    retainedPidfdProcessIdentity: pidfd,
-    runscArtifactIdentity: ID.runscArtifact,
-    verifiedRunscSha256: ID.runscSha,
-    retainedRunscExecutableIdentity: retainedRunsc,
-    watchdogRegistryRecordIdentity: physicalRegistryIdentity,
-    clockDomainIdentity: clock,
-    linuxBootId: BOOT,
-    leaseStartBoottimeNs: START,
-    deadlineBoottimeNs: DEADLINE,
-    ownerInstanceIdentity: ID.owner,
-    terminalFenceToken: FENCE,
-    claimRecordIdentity,
-    physicalArmAcknowledgementIdentity: physicalAck,
-  })
-  const armRegistryRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("ARM_REGISTRY", [
-    replayBase.version, replayBase.armOperationIdentity, replayBase.canonicalArmPayloadDigest, replayBase.leaseIdentity, replayBase.runtimeInstanceIdentity, replayBase.controlPeerBindingIdentity, replayBase.socketDevice, replayBase.socketInode, String(replayBase.peerPid), replayBase.peerUid, replayBase.peerGid, replayBase.processStartTicks, replayBase.executableDevice, replayBase.executableInode, replayBase.executableSize, replayBase.retainedPidfdProcessIdentity, replayBase.runscArtifactIdentity, replayBase.verifiedRunscSha256, replayBase.retainedRunscExecutableIdentity, replayBase.watchdogRegistryRecordIdentity, replayBase.clockDomainIdentity, replayBase.linuxBootId, replayBase.leaseStartBoottimeNs, replayBase.deadlineBoottimeNs, replayBase.ownerInstanceIdentity, replayBase.terminalFenceToken, replayBase.claimRecordIdentity, replayBase.physicalArmAcknowledgementIdentity,
-  ])
+  const replayBase = Object.freeze({ version: KDO_H4_R3G_D_PHYSICAL_ARM_REGISTRY_VERSION, armOperationIdentity: prepared.armOperationIdentity, canonicalArmPayloadDigest: prepared.canonicalArmPayloadDigest, leaseIdentity: physicalLeaseIdentity, runtimeInstanceIdentity: prepared.runtimeInstanceIdentity, controlPeerBindingIdentity: physicalPeer, socketDevice: SOCKET_DEV, socketInode: SOCKET_INO, peerPid: PEER_PID, peerUid: PEER_UID, peerGid: PEER_GID, processStartTicks: START_TICKS, executableDevice: EXE_DEV, executableInode: EXE_INO, executableSize: EXE_SIZE, retainedPidfdProcessIdentity: pidfd, runscArtifactIdentity: ID.runscArtifact, verifiedRunscSha256: ID.runscSha, retainedRunscExecutableIdentity: retainedRunsc, watchdogRegistryRecordIdentity: physicalRegistryIdentity, clockDomainIdentity: clock, linuxBootId: BOOT, leaseStartBoottimeNs: START, deadlineBoottimeNs: DEADLINE, ownerInstanceIdentity: ID.owner, terminalFenceToken: FENCE, claimRecordIdentity, physicalArmAcknowledgementIdentity: physicalAck })
+  const armRegistryRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("ARM_REGISTRY", [replayBase.version, replayBase.armOperationIdentity, replayBase.canonicalArmPayloadDigest, replayBase.leaseIdentity, replayBase.runtimeInstanceIdentity, replayBase.controlPeerBindingIdentity, replayBase.socketDevice, replayBase.socketInode, String(replayBase.peerPid), replayBase.peerUid, replayBase.peerGid, replayBase.processStartTicks, replayBase.executableDevice, replayBase.executableInode, replayBase.executableSize, replayBase.retainedPidfdProcessIdentity, replayBase.runscArtifactIdentity, replayBase.verifiedRunscSha256, replayBase.retainedRunscExecutableIdentity, replayBase.watchdogRegistryRecordIdentity, replayBase.clockDomainIdentity, replayBase.linuxBootId, replayBase.leaseStartBoottimeNs, replayBase.deadlineBoottimeNs, replayBase.ownerInstanceIdentity, replayBase.terminalFenceToken, replayBase.claimRecordIdentity, replayBase.physicalArmAcknowledgementIdentity])
   const armReplay: GvisorTtlPhysicalArmReplayRecord = Object.freeze({ ...replayBase, armRegistryRecordIdentity })
   const arm = recoverGvisorTtlLogicalArmRecord({ prepared, physicalLease: lease, replay: armReplay })
-  const physicalTerminalIdentity = createGvisorTtlWatchdogProtocolIdentity("TERMINAL_REGISTRY", [
-    prepared.armOperationIdentity, physicalLeaseIdentity, prepared.runtimeInstanceIdentity, "ttl-expired", ID.owner, FENCE, claimRecordIdentity, physicalPeer, pidfd, ID.runscArtifact, ID.runscSha, retainedRunsc, clock, BOOT, "-", DEADLINE, ID.liveProbe, ID.processSet, ID.signal, ID.termination,
-  ])
+  const physicalTerminalIdentity = createGvisorTtlWatchdogProtocolIdentity("TERMINAL_REGISTRY", [prepared.armOperationIdentity, physicalLeaseIdentity, prepared.runtimeInstanceIdentity, "ttl-expired", ID.owner, FENCE, claimRecordIdentity, physicalPeer, pidfd, ID.runscArtifact, ID.runscSha, retainedRunsc, clock, BOOT, "-", DEADLINE, ID.liveProbe, ID.processSet, ID.signal, ID.termination])
   const terminal = parseGvisorTtlPhysicalTerminalRecord([
     "version=kodac-h4-r3g-d-terminal-registry-v1", `armOperationIdentity=${prepared.armOperationIdentity}`, `leaseIdentity=${physicalLeaseIdentity}`, `runtimeInstanceIdentity=${prepared.runtimeInstanceIdentity}`, "terminalOutcome=ttl-expired", `ownerInstanceIdentity=${ID.owner}`, `terminalFenceToken=${FENCE}`, `claimRecordIdentity=${claimRecordIdentity}`, `controlPeerBindingIdentity=${physicalPeer}`, `retainedPidfdProcessIdentity=${pidfd}`, `runscArtifactIdentity=${ID.runscArtifact}`, `verifiedRunscSha256=${ID.runscSha}`, `retainedRunscExecutableIdentity=${retainedRunsc}`, `clockDomainIdentity=${clock}`, `linuxBootId=${BOOT}`, "exitEventObservedBoottimeNs=-", `liveAtExpiryObservedBoottimeNs=${DEADLINE}`, `liveAtExpiryProbeIdentity=${ID.liveProbe}`, `liveAtExpiryProcessSetIdentity=${ID.processSet}`, `signalAcknowledgementIdentity=${ID.signal}`, `terminationAcknowledgementIdentity=${ID.termination}`, `registryTerminalRecordIdentity=${physicalTerminalIdentity}`, "",
   ].join("\n"), lease)
@@ -173,14 +116,8 @@ test("H4-R3G-D recovery matrix retries only PREPARED state with no physical obli
 test("H4-R3G-D recovery matrix fails closed for ARM without terminal because retained control-channel authority is not inherited", () => {
   const { physical, k2Prepared, k2Arm } = fixture()
   const armOnly = Object.freeze({ ...physical, terminal: null })
-  assert.throws(
-    () => reconcileGvisorTtlRecoveryState({ k2Snapshots: [k2Prepared], physicalSnapshots: [armOnly] }),
-    /restarted K2 process does not retain the authenticated watchdog control channels/,
-  )
-  assert.throws(
-    () => reconcileGvisorTtlRecoveryState({ k2Snapshots: [k2Arm], physicalSnapshots: [armOnly] }),
-    /positive ARM recovery or ARM_CURRENT classification is forbidden/,
-  )
+  assert.throws(() => reconcileGvisorTtlRecoveryState({ k2Snapshots: [k2Prepared], physicalSnapshots: [armOnly] }), /restarted K2 process does not retain the authenticated watchdog control channels/)
+  assert.throws(() => reconcileGvisorTtlRecoveryState({ k2Snapshots: [k2Arm], physicalSnapshots: [armOnly] }), /positive ARM recovery or ARM_CURRENT classification is forbidden/)
 })
 
 test("H4-R3G-D recovery matrix preserves arm-before-terminal reconciliation order", () => {
