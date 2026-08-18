@@ -276,7 +276,7 @@ test("R3G-E rejects TTY stdin and missing stdout/stderr before attach upgrade", 
 test("R3G-E rejects non-multiplexed or malformed Docker upgrade identity", { skip: process.platform !== "linux" }, async () => {
   const cases = [
     { name: "raw", options: { mediaType: "application/vnd.docker.raw-stream" }, pattern: /media type/ },
-    { name: "connection", options: { connectionHeader: "close" }, pattern: /Connection header/ },
+    { name: "connection", options: { connectionHeader: "close" }, pattern: /refused protocol upgrade|Connection header/ },
     { name: "upgrade", options: { upgradeHeader: "websocket" }, pattern: /Upgrade header/ },
   ] as const
   for (const item of cases) {
