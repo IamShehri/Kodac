@@ -747,3 +747,50 @@ test("H4-R3G-E blocks ASK before Docker provider/path validation, R3G-D subject 
   assert.equal(resolved, false)
   assert.equal(reserved, false)
 })
+
+test("H4-R3G-E durable positive commit has no abort microtask gap before mutation start", { skip: process.platform !== "linux", timeout: 5_000 }, async () => {
+  const fixture = await createRuntimeFixture()
+  const controller = new AbortController()
+  const reservations = new Map<string, GvisorOutputPreparedOperation>()
+  const nativeAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get
+  assert.equal(typeof nativeAborted, "function")
+  if (typeof nativeAborted !== "function") throw new Error("AbortSignal.aborted getter unavailable")
+  const readNativeAborted = () => Boolean(nativeAborted.call(controller.signal))
+  let abortQueued = false
+
+  Object.defineProperty(controller.signal, "aborted", {
+    configurable: true,
+    get() {
+      const value = readNativeAborted()
+      if (!value && !abortQueued && fixture.events.includes("ttl-terminal") && (new Error().stack ?? "").includes("settleDurableMutation")) {
+        abortQueued = true
+        queueMicrotask(() => {
+          fixture.events.push("caller-abort")
+          controller.abort()
+        })
+      }
+      return value
+    },
+  })
+
+  const baseRuntime = createOutputRuntime(fixture.events, reservations)
+  const outputRuntime: GvisorOutputRuntimeConfig = {
+    ...baseRuntime,
+    commitOutputEvidence(record) {
+      fixture.events.push("output-positive-start")
+      assert.equal(readNativeAborted(), false, "positive durable mutation must start before queued caller abort becomes observable")
+      return createGvisorOutputBoundCommit(record)
+    },
+  }
+
+  try {
+    const result = await fixture.createGateway(outputRuntime).enforceGvisorOutputBound(fixture.requirement, undefined, { signal: controller.signal })
+    await Promise.resolve()
+    assert.equal(abortQueued, true, "positive durable abort-gap probe must have been armed")
+    assert.equal(readNativeAborted(), true, "queued caller abort must become observable after positive mutation start")
+    const positiveStart = fixture.events.indexOf("output-positive-start")
+    const callerAbort = fixture.events.indexOf("caller-abort")
+    assert.ok(positiveStart >= 0 && callerAbort >= 0 && positiveStart < callerAbort, "positive durable mutation must start synchronously before the queued abort microtask")
+    assert.equal(result.record.acceptedAggregateBytes, 5)
+  } finally { await fixture.cleanup() }
+})
