@@ -110,7 +110,7 @@ function fullContainerId(value: unknown): string {
   return value
 }
 
-function outputBytes(value: unknown, label: string, maximum = KDO_H4_R3G_E_LIMITS.maxOutputBytes): number {
+function outputBytes(value: unknown, label: string, maximum: number = KDO_H4_R3G_E_LIMITS.maxOutputBytes): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > maximum) {
     throw new TypeError(`${label} must be a safe integer in 0..${maximum}`)
   }
