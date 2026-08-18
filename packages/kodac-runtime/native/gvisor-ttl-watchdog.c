@@ -632,36 +632,38 @@ static void close_subject(retained_subject *subject) {
   close_if_open(&subject->wait_fd); close_if_open(&subject->processes_fd); close_if_open(&subject->signal_fd); close_if_open(&subject->pidfd); close_if_open(&subject->exe_fd); close_if_open(&subject->socket_path_fd);
 }
 
-static int poll_until_boottime(int fd, short events, uint64_t deadline_ns) {
-  for (;;) {
-    uint64_t now = 0;
-    if (boottime_ns(&now) != 0) return -1;
-    if (now >= deadline_ns) return KODAC_RESPONSE_TIMEOUT;
-    uint64_t remaining_ns = deadline_ns - now;
-    uint64_t remaining_ms = remaining_ns / 1000000ULL + (remaining_ns % 1000000ULL == 0 ? 0 : 1);
-    int timeout_ms = remaining_ms > (uint64_t)INT_MAX ? INT_MAX : (int)remaining_ms;
-    struct pollfd pfd = { .fd = fd, .events = events, .revents = 0 };
-    int result;
-    do { result = poll(&pfd, 1, timeout_ms); } while (result < 0 && errno == EINTR);
-    if (result < 0) return -1;
-    if (result == 0) continue;
-    if ((pfd.revents & events) != 0) return 0;
-    return -1;
-  }
+static int create_absolute_timer(uint64_t deadline_ns);
+
+static int poll_io_with_boottime_timer(int fd, short io_events, int timer_fd) {
+  struct pollfd pollfds[2] = {
+    { .fd = fd, .events = io_events, .revents = 0 },
+    { .fd = timer_fd, .events = POLLIN, .revents = 0 },
+  };
+  int result;
+  do { result = poll(pollfds, 2, -1); } while (result < 0 && errno == EINTR);
+  if (result < 0) return -1;
+  if ((pollfds[1].revents & POLLIN) != 0) return KODAC_RESPONSE_TIMEOUT;
+  if (pollfds[1].revents != 0) return -1;
+  if ((pollfds[0].revents & io_events) != 0) return 0;
+  return -1;
 }
 
 static int write_all_until_boottime(int fd, const char *buffer, size_t length, uint64_t deadline_ns) {
+  int timer_fd = create_absolute_timer(deadline_ns);
+  if (timer_fd < 0) return -1;
   size_t offset = 0;
+  int result = 0;
   while (offset < length) {
-    int ready = poll_until_boottime(fd, POLLOUT, deadline_ns);
-    if (ready != 0) return ready;
+    int ready = poll_io_with_boottime_timer(fd, POLLOUT, timer_fd);
+    if (ready != 0) { result = ready; break; }
     ssize_t count;
     do { count = send(fd, buffer + offset, length - offset, MSG_NOSIGNAL | MSG_DONTWAIT); } while (count < 0 && errno == EINTR);
     if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
-    if (count <= 0) return -1;
+    if (count <= 0) { result = -1; break; }
     offset += (size_t)count;
   }
-  return 0;
+  close(timer_fd);
+  return result;
 }
 
 static int send_rpc(int fd, const char *method, const char *container_id, int signal_request, uint64_t deadline_ns) {
@@ -673,24 +675,23 @@ static int send_rpc(int fd, const char *method, const char *container_id, int si
   return write_all_until_boottime(fd, request, (size_t)length, deadline_ns);
 }
 
-static int poll_readable_until_boottime(int fd, uint64_t deadline_ns) {
-  return poll_until_boottime(fd, POLLIN, deadline_ns);
-}
-
 static int read_json_object(int fd, char *buffer, size_t capacity, size_t *length_out, uint64_t deadline_ns) {
+  int timer_fd = create_absolute_timer(deadline_ns);
+  if (timer_fd < 0) return -1;
   size_t used = 0; int started = 0, depth = 0, in_string = 0, escaped = 0;
+  int result = -1;
   for (;;) {
-    int ready = poll_readable_until_boottime(fd, deadline_ns);
-    if (ready != 0) return ready;
+    int ready = poll_io_with_boottime_timer(fd, POLLIN, timer_fd);
+    if (ready != 0) { result = ready; break; }
     char byte;
     ssize_t count;
     do { count = read(fd, &byte, 1); } while (count < 0 && errno == EINTR);
-    if (count <= 0) return -1;
-    if (used + 1 >= capacity) return -1;
+    if (count <= 0) break;
+    if (used + 1 >= capacity) break;
     buffer[used++] = byte;
     if (!started) {
       if (byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n') continue;
-      if (byte != '{') return -1;
+      if (byte != '{') break;
       started = 1; depth = 1; continue;
     }
     if (in_string) {
@@ -703,10 +704,12 @@ static int read_json_object(int fd, char *buffer, size_t capacity, size_t *lengt
     if (byte == '{' || byte == '[') ++depth;
     else if (byte == '}' || byte == ']') {
       --depth;
-      if (depth < 0) return -1;
-      if (depth == 0) { buffer[used] = '\0'; *length_out = used; return 0; }
+      if (depth < 0) break;
+      if (depth == 0) { buffer[used] = '\0'; *length_out = used; result = 0; break; }
     }
   }
+  close(timer_fd);
+  return result;
 }
 
 static const char *successful_result(const char *json) {
