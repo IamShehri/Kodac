@@ -762,7 +762,7 @@ test("H4-R3G-E durable positive commit has no abort microtask gap before mutatio
     configurable: true,
     get() {
       const value = readNativeAborted()
-      if (!value && !abortQueued && fixture.events.includes("ttl-terminal") && (new Error().stack ?? "").includes("settleDurableMutation")) {
+      if (!value && !abortQueued && fixture.events.includes("ttl-terminal") && (new Error().stack ?? "").includes("settleAbortFencedPositiveMutation")) {
         abortQueued = true
         queueMicrotask(() => {
           fixture.events.push("caller-abort")
