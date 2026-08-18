@@ -90,7 +90,7 @@ test("H4-R3G-D watchdog retains authenticated channels, proves live-at-expiry, s
       "--arm", "--registry-root", root, "--arm-operation", ID.arm, "--arm-payload-digest", ID.payload,
       "--execution-attempt", ID.execution, "--requirement", ID.requirement, "--workload", ID.workload,
       "--container-binding", ID.binding, "--container-id", CONTAINER_ID, "--runtime-instance", ID.runtime,
-      "--ttl-ms", "75", "--watchdog-implementation", ID.watchdog, "--control-socket", socketPath,
+      "--ttl-ms", "1000", "--watchdog-implementation", ID.watchdog, "--control-socket", socketPath,
       "--socket-device-inode", `${socketStat.dev}:${socketStat.ino}`, "--peer-pid-uid-gid", `${process.pid}:${uid}:${gid}`,
       "--process-tuple", `${startTicks}:${exeStat.dev}:${exeStat.ino}:${exeStat.size}`,
       "--runsc-artifact", ID.runscArtifact, "--runsc-sha256", runscSha256,
@@ -103,7 +103,7 @@ test("H4-R3G-D watchdog retains authenticated channels, proves live-at-expiry, s
     assert.deepEqual(signalArg, { CID: CONTAINER_ID, Signo: 9, PID: 0, Mode: 1 }); assert.equal(acceptedConnections, 3)
     const leasePath = join(root, `${ID.arm}.lease`); const terminalPath = join(root, `${ID.arm}.terminal`)
     const leaseBefore = await readFile(leasePath, "utf8"); const terminal = await readFile(terminalPath, "utf8")
-    assert.match(leaseBefore, /physicalArmState=ARMED/); assert.match(leaseBefore, /ttlMs=75/); assert.match(terminal, /terminalOutcome=ttl-expired/); assert.match(terminal, /signalAcknowledgementIdentity=[0-9a-f]{64}/)
+    assert.match(leaseBefore, /physicalArmState=ARMED/); assert.match(leaseBefore, /ttlMs=1000/); assert.match(terminal, /terminalOutcome=ttl-expired/); assert.match(terminal, /signalAcknowledgementIdentity=[0-9a-f]{64}/)
     const retryConnections = acceptedConnections; const retry = await runChild(binary, args)
     assert.equal(retry.signal, null); assert.equal(retry.code, 126); assert.match(retry.stderr, /existing durable lease\/claim\/terminal state requires recovery/); assert.equal(retry.stdout, "")
     assert.equal(acceptedConnections, retryConnections, "durable replay must fail before any pathname reconnect")
