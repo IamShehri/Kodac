@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Duplex } from "node:stream"
 import test from "node:test"
+import { runInNewContext } from "node:vm"
 
 import { NodeWorkspaceFileSystem } from "../src/edit/filesystem.ts"
 import {
@@ -846,5 +847,81 @@ test("H4-R3G-E caller abort while positive durable commit is pending prevents po
     assert.ok(abortFenceIndex >= 0 && failureIndex > abortFenceIndex, "durable aborted failure must commit after positive callback abort-fences and before propagation")
     await delay(250)
     assert.equal(positivePersisted, false, "aborted positive durable callback must not persist E3 later")
+  } finally { await fixture.cleanup() }
+})
+
+test("H4-R3G-E cross-realm positive Promise remains abort-fenced until authoritative settlement", { skip: process.platform !== "linux", timeout: 5_000 }, async () => {
+  const fixture = await createRuntimeFixture()
+  const controller = new AbortController()
+  const reservations = new Map<string, GvisorOutputPreparedOperation>()
+  let resolvePositiveStarted!: () => void
+  const positiveStarted = new Promise<void>((resolve) => { resolvePositiveStarted = resolve })
+  let mutationSettled = false
+  let enforcementSettled = false
+  let positivePersisted = false
+  let crossRealmPromiseObserved = false
+  const baseRuntime = createOutputRuntime(fixture.events, reservations)
+  const outputRuntime: GvisorOutputRuntimeConfig = {
+    ...baseRuntime,
+    commitOutputEvidence(record, commitOptions) {
+      fixture.events.push("output-positive-cross-realm-start")
+      resolvePositiveStarted()
+      const signal = commitOptions.signal
+      assert.ok(signal, "cross-realm positive durable callback must receive caller abort signal")
+      const crossRealmPromise = runInNewContext(
+        "new Promise((resolve, reject) => executor(resolve, reject))",
+        {
+          executor(resolve: (value: unknown) => void, reject: (reason?: unknown) => void) {
+            const cleanup = () => signal.removeEventListener("abort", onAbort)
+            const onAbort = () => {
+              clearTimeout(successTimer)
+              cleanup()
+              fixture.events.push("output-positive-cross-realm-abort")
+              setTimeout(() => {
+                mutationSettled = true
+                fixture.events.push("output-positive-cross-realm-settled")
+                reject(new Error("R3G-E cross-realm positive durable commit aborted before completion"))
+              }, 100)
+            }
+            const successTimer = setTimeout(() => {
+              cleanup()
+              mutationSettled = true
+              if (signal.aborted) { reject(new Error("R3G-E cross-realm positive durable commit observed late abort")); return }
+              positivePersisted = true
+              fixture.events.push("output-positive")
+              resolve(createGvisorOutputBoundCommit(record))
+            }, 300)
+            signal.addEventListener("abort", onAbort, { once: true })
+            if (signal.aborted) onAbort()
+          },
+        },
+      ) as Promise<unknown>
+      crossRealmPromiseObserved = !(crossRealmPromise instanceof Promise)
+      assert.equal(crossRealmPromiseObserved, true, "fixture must return a real Promise from another JavaScript realm")
+      return crossRealmPromise
+    },
+  }
+
+  try {
+    const enforcement = fixture.createGateway(outputRuntime).enforceGvisorOutputBound(fixture.requirement, undefined, { signal: controller.signal })
+    void enforcement.then(() => { enforcementSettled = true }, () => { enforcementSettled = true })
+    await positiveStarted
+    assert.equal(crossRealmPromiseObserved, true)
+    assert.equal(mutationSettled, false, "cross-realm positive mutation must still be pending before caller abort")
+    controller.abort()
+    await delay(50)
+    assert.equal(mutationSettled, false, "trusted cross-realm mutation settlement must remain authoritative after abort wins")
+    assert.equal(enforcementSettled, false, "gateway must wait for cross-realm mutation settlement before terminalizing")
+    await assert.rejects(enforcement, /cross-realm positive durable commit aborted before completion|aborted before durable completion/)
+    assert.equal(mutationSettled, true)
+    assert.equal(positivePersisted, false)
+    assert.equal(fixture.events.includes("output-positive"), false)
+    assert.equal(fixture.events.includes("output-failure:aborted"), true)
+    const mutationSettlementIndex = fixture.events.indexOf("output-positive-cross-realm-settled")
+    const failureIndex = fixture.events.indexOf("output-failure:aborted")
+    assert.ok(mutationSettlementIndex >= 0 && failureIndex > mutationSettlementIndex, "durable aborted failure must follow authoritative cross-realm mutation settlement")
+    await delay(350)
+    assert.equal(positivePersisted, false, "cross-realm abort-fenced callback must not persist positive E3 later")
+    assert.equal(fixture.events.includes("output-positive"), false, "no late positive E3 may appear after durable aborted failure")
   } finally { await fixture.cleanup() }
 })
