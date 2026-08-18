@@ -608,7 +608,7 @@ export function validateGvisorTtlTerminalRecord(value: unknown, armValue?: Gviso
   const arm = validateGvisorTtlArmRecord(armValue)
   if (base.armOperationIdentity !== arm.armOperationIdentity || base.leaseIdentity !== arm.leaseIdentity || base.armRecordIdentity !== arm.recordIdentity || base.runtimeInstanceIdentity !== arm.runtimeInstanceIdentity || base.controlPeerBindingIdentity !== arm.controlPeerBindingIdentity || base.runscArtifactIdentity !== arm.runscArtifactIdentity || base.verifiedRunscSha256 !== arm.verifiedRunscSha256 || base.clockDomainIdentity !== arm.clockDomainIdentity || base.linuxBootId !== arm.linuxBootId) throw new TypeError("R3G-D terminal record does not match authoritative arm record")
   if (base.socketDevice !== arm.controlPeer.socketDevice || base.socketInode !== arm.controlPeer.socketInode || base.peerPid !== arm.controlPeer.peerPid || base.peerUid !== arm.controlPeer.peerUid || base.peerGid !== arm.controlPeer.peerGid) throw new TypeError("R3G-D terminal control peer does not match authoritative arm peer")
-  if (BigInt(base.terminalFenceToken) < BigInt(arm.terminalFenceToken)) throw new TypeError("R3G-D terminal fence token is stale")
+  if (base.ownerInstanceIdentity !== arm.ownerInstanceIdentity || base.claimRecordIdentity !== arm.claimRecordIdentity || base.terminalFenceToken !== arm.terminalFenceToken) throw new TypeError("R3G-D terminal ownership generation does not match authoritative arm record")
   if (base.terminalOutcome === "natural-exit") {
     const event = BigInt(base.exitEventObservedBoottimeNs as string)
     if (event < BigInt(arm.leaseStartBoottimeNs) || event >= BigInt(arm.deadlineBoottimeNs)) throw new TypeError("R3G-D natural-exit winner must be observed during the lease")

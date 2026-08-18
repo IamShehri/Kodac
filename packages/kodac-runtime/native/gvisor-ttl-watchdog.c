@@ -24,6 +24,7 @@
 
 #define KODAC_FAILURE_EXIT 125
 #define KODAC_INDETERMINATE_EXIT 126
+#define KODAC_RESPONSE_TIMEOUT 2
 #define KODAC_PROTOCOL_VERSION "kodac-h4-r3g-d-watchdog-protocol-v1"
 #define KODAC_LEASE_VERSION "kodac-h4-r3g-d-watchdog-lease-v1"
 #define KODAC_ARM_LINE_VERSION "kodac-gvisor-ttl-arm-v1"
@@ -35,7 +36,9 @@
 #define KODAC_MAX_RECORD_BYTES 16384
 #define KODAC_BOOT_ID_BYTES 36
 #define KODAC_MAX_TTL_MS 86400000ULL
+#ifndef KODAC_TERMINATION_ACK_TIMEOUT_MS
 #define KODAC_TERMINATION_ACK_TIMEOUT_MS 30000
+#endif
 
 #ifndef O_PATH
 #define O_PATH 010000000
@@ -395,7 +398,6 @@ static int read_sha256_digest(int operation_fd, char out_hex[65]) {
 static int sha256_fd(int source_fd, char out_hex[65]) {
   struct stat source_stat;
   if (fstat(source_fd, &source_stat) != 0 || !S_ISREG(source_stat.st_mode) || source_stat.st_size < 0) return -1;
-  if ((uintmax_t)source_stat.st_size > UINT64_MAX) return -1;
   uint64_t remaining = (uint64_t)source_stat.st_size;
   if (lseek(source_fd, 0, SEEK_SET) < 0) return -1;
   int operation_fd = open_sha256_operation();
@@ -478,6 +480,13 @@ static int boottime_ns(uint64_t *out) {
   uint64_t seconds = (uint64_t)value.tv_sec;
   if (seconds > (UINT64_MAX - (uint64_t)value.tv_nsec) / 1000000000ULL) return -1;
   *out = seconds * 1000000000ULL + (uint64_t)value.tv_nsec;
+  return 0;
+}
+
+static int boottime_deadline_after_ms(uint64_t milliseconds, uint64_t *out) {
+  uint64_t now = 0;
+  if (boottime_ns(&now) != 0 || milliseconds > (UINT64_MAX - now) / 1000000ULL) return -1;
+  *out = now + milliseconds * 1000000ULL;
   return 0;
 }
 
@@ -640,9 +649,29 @@ static int send_rpc(int fd, const char *method, const char *container_id, int si
   return write_all(fd, request, (size_t)length);
 }
 
-static int read_json_object(int fd, char *buffer, size_t capacity, size_t *length_out) {
+static int poll_readable_until_boottime(int fd, uint64_t deadline_ns) {
+  for (;;) {
+    uint64_t now = 0;
+    if (boottime_ns(&now) != 0) return -1;
+    if (now >= deadline_ns) return KODAC_RESPONSE_TIMEOUT;
+    uint64_t remaining_ns = deadline_ns - now;
+    uint64_t remaining_ms = remaining_ns / 1000000ULL + (remaining_ns % 1000000ULL == 0 ? 0 : 1);
+    int timeout_ms = remaining_ms > (uint64_t)INT_MAX ? INT_MAX : (int)remaining_ms;
+    struct pollfd pfd = { .fd = fd, .events = POLLIN, .revents = 0 };
+    int result;
+    do { result = poll(&pfd, 1, timeout_ms); } while (result < 0 && errno == EINTR);
+    if (result < 0) return -1;
+    if (result == 0) continue;
+    if ((pfd.revents & POLLIN) != 0) return 0;
+    return -1;
+  }
+}
+
+static int read_json_object(int fd, char *buffer, size_t capacity, size_t *length_out, uint64_t deadline_ns) {
   size_t used = 0; int started = 0, depth = 0, in_string = 0, escaped = 0;
   for (;;) {
+    int ready = poll_readable_until_boottime(fd, deadline_ns);
+    if (ready != 0) return ready;
     char byte;
     ssize_t count;
     do { count = read(fd, &byte, 1); } while (count < 0 && errno == EINTR);
@@ -677,9 +706,10 @@ static const char *successful_result(const char *json) {
   return strncmp(json, prefix, length) == 0 ? json + length : NULL;
 }
 
-static int response_success(int fd, int require_nonempty_array, char identity_out[65]) {
+static int response_success(int fd, int require_nonempty_array, char identity_out[65], uint64_t deadline_ns) {
   char response[KODAC_MAX_RPC_BYTES + 1]; size_t length = 0;
-  if (read_json_object(fd, response, sizeof(response), &length) != 0) return -1;
+  int read_result = read_json_object(fd, response, sizeof(response), &length, deadline_ns);
+  if (read_result != 0) return read_result;
   const char *result = successful_result(response);
   if (result == NULL) return -1;
   if (require_nonempty_array) {
@@ -759,12 +789,8 @@ static int verify_no_prior_state(lease_registry *registry) {
   return lease || claim || terminal ? 1 : 0;
 }
 
-static int wait_for_terminal_after_signal(retained_subject *subject, char termination_identity[65]) {
-  struct pollfd pfd = { .fd = subject->wait_fd, .events = POLLIN, .revents = 0 };
-  int result;
-  do { result = poll(&pfd, 1, KODAC_TERMINATION_ACK_TIMEOUT_MS); } while (result < 0 && errno == EINTR);
-  if (result <= 0 || (pfd.revents & POLLIN) == 0) return -1;
-  return response_success(subject->wait_fd, 0, termination_identity);
+static int wait_for_terminal_after_signal(retained_subject *subject, uint64_t deadline_ns, char termination_identity[65]) {
+  return response_success(subject->wait_fd, 0, termination_identity, deadline_ns);
 }
 
 static int run_lease(const arm_request *request, lease_registry *registry, retained_subject *subject, lease_state *lease) {
@@ -792,28 +818,44 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   uint64_t observed_ns = 0;
   if (boottime_ns(&observed_ns) != 0) { close(timer_fd); return indeterminate("cannot timestamp terminal race"); }
 
+  int wait_reached_deadline = 0;
   if ((events[0].revents & POLLIN) != 0 && observed_ns < lease->deadline_boottime_ns) {
     char termination_identity[65];
-    if (response_success(subject->wait_fd, 0, termination_identity) != 0) { close(timer_fd); return indeterminate("pre-deadline Wait response is malformed or unsuccessful"); }
-    int alive = pidfd_is_alive(subject->pidfd);
-    if (alive != 0) { close(timer_fd); return indeterminate(alive > 0 ? "Wait reported exit but admitted peer remains alive" : "cannot validate pidfd after natural exit"); }
-    char exit_ns[32]; snprintf(exit_ns, sizeof(exit_ns), "%" PRIu64, observed_ns);
-    char registry_terminal[65];
-    if (durable_terminal(request, registry, lease, subject, "natural-exit", exit_ns, "-", "-", "-", "-", termination_identity, registry_terminal) != 0) { close(timer_fd); return indeterminate("cannot durably commit natural-exit terminal record"); }
-    if (emit_terminal(request, lease, subject, "natural-exit", exit_ns, "-", "-", "-", "-", termination_identity, registry_terminal) != 0) { close(timer_fd); return indeterminate("cannot emit natural-exit terminal acknowledgement"); }
-    close(timer_fd); return 0;
+    int wait_result = response_success(subject->wait_fd, 0, termination_identity, lease->deadline_boottime_ns);
+    if (wait_result == 0) {
+      int alive = pidfd_is_alive(subject->pidfd);
+      if (alive != 0) { close(timer_fd); return indeterminate(alive > 0 ? "Wait reported exit but admitted peer remains alive" : "cannot validate pidfd after natural exit"); }
+      char exit_ns[32]; snprintf(exit_ns, sizeof(exit_ns), "%" PRIu64, observed_ns);
+      char registry_terminal[65];
+      if (durable_terminal(request, registry, lease, subject, "natural-exit", exit_ns, "-", "-", "-", "-", termination_identity, registry_terminal) != 0) { close(timer_fd); return indeterminate("cannot durably commit natural-exit terminal record"); }
+      if (emit_terminal(request, lease, subject, "natural-exit", exit_ns, "-", "-", "-", "-", termination_identity, registry_terminal) != 0) { close(timer_fd); return indeterminate("cannot emit natural-exit terminal acknowledgement"); }
+      close(timer_fd); return 0;
+    }
+    if (wait_result == KODAC_RESPONSE_TIMEOUT) wait_reached_deadline = 1;
+    else { close(timer_fd); return indeterminate("pre-deadline Wait response is malformed or unsuccessful"); }
   }
 
-  if ((events[1].revents & POLLIN) == 0) { close(timer_fd); return indeterminate("terminal race became ambiguous before expiry"); }
-  if (read_timer(timer_fd) != 0) { close(timer_fd); return indeterminate("cannot consume immutable expiry timer"); }
+  uint64_t expiry_ns = 0;
+  if (boottime_ns(&expiry_ns) != 0) { close(timer_fd); return indeterminate("cannot timestamp expiry transition"); }
+  if (!wait_reached_deadline && (events[1].revents & POLLIN) != 0) {
+    if (read_timer(timer_fd) != 0) { close(timer_fd); return indeterminate("cannot consume immutable expiry timer"); }
+  } else if (expiry_ns < lease->deadline_boottime_ns) {
+    close(timer_fd); return indeterminate("terminal race became ambiguous before expiry");
+  }
   close(timer_fd);
+
   uint64_t live_ns_value = 0;
   if (boottime_ns(&live_ns_value) != 0 || live_ns_value < lease->deadline_boottime_ns) return indeterminate("expiry liveness timestamp precedes deadline");
   if (revalidate_retained_subject(request, subject) != 0) return indeterminate("exact admitted runsc peer is not live at expiry");
+
+  uint64_t terminal_response_deadline_ns = 0;
+  if (boottime_deadline_after_ms(KODAC_TERMINATION_ACK_TIMEOUT_MS, &terminal_response_deadline_ns) != 0) return indeterminate("cannot establish bounded terminal RPC deadline");
+
   if (send_rpc(subject->processes_fd, "containerManager.Processes", request->container_id, 0) != 0) return indeterminate("retained Processes request failed at expiry");
   char process_set_identity[65];
-  int process_result = response_success(subject->processes_fd, 1, process_set_identity);
+  int process_result = response_success(subject->processes_fd, 1, process_set_identity, terminal_response_deadline_ns);
   if (process_result == 1) return indeterminate("retained Processes proved no live process at expiry; kill causality is not authorized");
+  if (process_result == KODAC_RESPONSE_TIMEOUT) return indeterminate("retained Processes response timed out at expiry");
   if (process_result != 0) return indeterminate("retained Processes response is malformed or unsuccessful");
   uint64_t after_processes = 0;
   if (boottime_ns(&after_processes) != 0 || after_processes < lease->deadline_boottime_ns) return indeterminate("live-at-expiry observation is not monotonic");
@@ -824,9 +866,13 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   if (hash_joined(live_probe_identity, "LIVE_AT_EXPIRY", live_parts, 5) != 0) return indeterminate("cannot derive live-at-expiry proof identity");
   if (send_rpc(subject->signal_fd, "containerManager.Signal", request->container_id, 1) != 0) return indeterminate("retained Signal request failed");
   char signal_identity[65];
-  if (response_success(subject->signal_fd, 0, signal_identity) != 0) return indeterminate("fixed SIGKILL-all signal was not acknowledged");
+  int signal_result = response_success(subject->signal_fd, 0, signal_identity, terminal_response_deadline_ns);
+  if (signal_result == KODAC_RESPONSE_TIMEOUT) return indeterminate("fixed SIGKILL-all signal acknowledgement timed out");
+  if (signal_result != 0) return indeterminate("fixed SIGKILL-all signal was not acknowledged");
   char termination_identity[65];
-  if (wait_for_terminal_after_signal(subject, termination_identity) != 0) return indeterminate("terminal Wait acknowledgement missing after signal");
+  int termination_result = wait_for_terminal_after_signal(subject, terminal_response_deadline_ns, termination_identity);
+  if (termination_result == KODAC_RESPONSE_TIMEOUT) return indeterminate("terminal Wait acknowledgement timed out after signal");
+  if (termination_result != 0) return indeterminate("terminal Wait acknowledgement missing after signal");
   char registry_terminal[65];
   if (durable_terminal(request, registry, lease, subject, "ttl-expired", "-", live_ns, live_probe_identity, process_set_identity, signal_identity, termination_identity, registry_terminal) != 0) return indeterminate("cannot durably commit ttl-expired terminal record");
   if (emit_terminal(request, lease, subject, "ttl-expired", "-", live_ns, live_probe_identity, process_set_identity, signal_identity, termination_identity, registry_terminal) != 0) return indeterminate("cannot emit ttl-expired terminal acknowledgement");

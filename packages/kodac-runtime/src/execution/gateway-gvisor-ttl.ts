@@ -31,7 +31,7 @@ export interface GvisorTtlPhysicalArmExpectation {
   readonly executableSize: string
   readonly runscArtifactIdentity: string
   readonly verifiedRunscSha256: string
-  readonly expectedLinuxBootId?: string
+  readonly expectedLinuxBootId: string
 }
 
 export interface GvisorTtlPhysicalArmAcknowledgement {
@@ -67,6 +67,11 @@ function uint(value: unknown, label: string, allowZero = true): string {
 
 function pid(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 2_147_483_647) throw new TypeError("peerPid must be a positive Linux pid")
+  return value
+}
+
+function containerId(value: unknown): string {
+  if (typeof value !== "string" || !CONTAINER_ID.test(value)) throw new TypeError("containerId must be exactly 64 lowercase hexadecimal characters")
   return value
 }
 
@@ -184,14 +189,14 @@ export function createGvisorTtlPhysicalArmAcknowledgementIdentity(expectation: G
 
 function validateExpectation(value: GvisorTtlPhysicalArmExpectation): GvisorTtlPhysicalArmExpectation {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError("physical arm expectation must be an object")
-  const expected = Object.freeze({
+  return Object.freeze({
     armOperationIdentity: sha256(value.armOperationIdentity, "armOperationIdentity"),
     canonicalArmPayloadDigest: sha256(value.canonicalArmPayloadDigest, "canonicalArmPayloadDigest"),
     executionAttemptIdentity: sha256(value.executionAttemptIdentity, "executionAttemptIdentity"),
     requirementIdentity: sha256(value.requirementIdentity, "requirementIdentity"),
     workloadIdentity: sha256(value.workloadIdentity, "workloadIdentity"),
     containerBindingIdentity: sha256(value.containerBindingIdentity, "containerBindingIdentity"),
-    containerId: typeof value.containerId === "string" && CONTAINER_ID.test(value.containerId) ? value.containerId : (() => { throw new TypeError("containerId must be exactly 64 lowercase hexadecimal characters") })(),
+    containerId: containerId(value.containerId),
     runtimeInstanceIdentity: sha256(value.runtimeInstanceIdentity, "runtimeInstanceIdentity"),
     ttlMs: canonicalTtl(value.ttlMs),
     watchdogImplementationIdentity: sha256(value.watchdogImplementationIdentity, "watchdogImplementationIdentity"),
@@ -206,9 +211,8 @@ function validateExpectation(value: GvisorTtlPhysicalArmExpectation): GvisorTtlP
     executableSize: uint(value.executableSize, "executableSize", false),
     runscArtifactIdentity: sha256(value.runscArtifactIdentity, "runscArtifactIdentity"),
     verifiedRunscSha256: sha256(value.verifiedRunscSha256, "verifiedRunscSha256"),
-    ...(value.expectedLinuxBootId === undefined ? {} : { expectedLinuxBootId: bootId(value.expectedLinuxBootId) }),
+    expectedLinuxBootId: bootId(value.expectedLinuxBootId),
   })
-  return expected
 }
 
 function parseArmLine(line: string): GvisorTtlPhysicalArmAcknowledgement {
@@ -266,7 +270,7 @@ export function validateGvisorTtlPhysicalArmAcknowledgement(line: string, expect
   const expectation = validateExpectation(expectationValue)
   const acknowledgement = parseArmLine(line)
   if (acknowledgement.armOperationIdentity !== expectation.armOperationIdentity || acknowledgement.runtimeInstanceIdentity !== expectation.runtimeInstanceIdentity || acknowledgement.runscArtifactIdentity !== expectation.runscArtifactIdentity || acknowledgement.verifiedRunscSha256 !== expectation.verifiedRunscSha256) throw new TypeError("physical arm acknowledgement subject/artifact identity mismatch")
-  if (expectation.expectedLinuxBootId !== undefined && acknowledgement.linuxBootId !== expectation.expectedLinuxBootId) throw new TypeError("physical arm acknowledgement Linux boot identity mismatch")
+  if (acknowledgement.linuxBootId !== expectation.expectedLinuxBootId) throw new TypeError("physical arm acknowledgement Linux boot identity mismatch")
   const expectedDeadline = BigInt(acknowledgement.leaseStartBoottimeNs) + BigInt(expectation.ttlMs) * 1_000_000n
   if (expectedDeadline > MAX_UINT64 || acknowledgement.deadlineBoottimeNs !== expectedDeadline.toString()) throw new TypeError("physical arm acknowledgement immutable deadline mismatch")
   const expectedClockDomain = createGvisorTtlPhysicalClockDomainIdentity(acknowledgement.linuxBootId)

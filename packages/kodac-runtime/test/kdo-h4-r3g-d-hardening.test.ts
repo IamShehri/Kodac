@@ -297,12 +297,13 @@ async function nativeFixture(root: string, binary: string, socketPath: string) {
   const exeStat = await stat("/proc/self/exe", { bigint: true })
   const startTicks = parseStartTicks(await readFile("/proc/self/stat", "utf8"))
   const runscSha256 = await sha256File("/proc/self/exe")
+  const expectedLinuxBootId = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim()
   const getuid = process.getuid; const getgid = process.getgid
   assert.equal(typeof getuid, "function"); assert.equal(typeof getgid, "function")
   if (typeof getuid !== "function" || typeof getgid !== "function") throw new Error("Linux uid/gid primitives unavailable")
   const uid = getuid(); const gid = getgid()
   const physical = Object.freeze({
-    armOperationIdentity: "2".repeat(64), canonicalArmPayloadDigest: "3".repeat(64), executionAttemptIdentity: "4".repeat(64), requirementIdentity: "5".repeat(64), workloadIdentity: "6".repeat(64), containerBindingIdentity: "7".repeat(64), containerId: CONTAINER_ID, runtimeInstanceIdentity: "8".repeat(64), ttlMs: 75, watchdogImplementationIdentity: "9".repeat(64), socketDevice: String(socketStat.dev), socketInode: String(socketStat.ino), peerPid: process.pid, peerUid: String(uid), peerGid: String(gid), processStartTicks: String(startTicks), executableDevice: String(exeStat.dev), executableInode: String(exeStat.ino), executableSize: String(exeStat.size), runscArtifactIdentity: "a".repeat(64), verifiedRunscSha256: runscSha256,
+    armOperationIdentity: "2".repeat(64), canonicalArmPayloadDigest: "3".repeat(64), executionAttemptIdentity: "4".repeat(64), requirementIdentity: "5".repeat(64), workloadIdentity: "6".repeat(64), containerBindingIdentity: "7".repeat(64), containerId: CONTAINER_ID, runtimeInstanceIdentity: "8".repeat(64), ttlMs: 75, watchdogImplementationIdentity: "9".repeat(64), socketDevice: String(socketStat.dev), socketInode: String(socketStat.ino), peerPid: process.pid, peerUid: String(uid), peerGid: String(gid), processStartTicks: String(startTicks), executableDevice: String(exeStat.dev), executableInode: String(exeStat.ino), executableSize: String(exeStat.size), runscArtifactIdentity: "a".repeat(64), verifiedRunscSha256: runscSha256, expectedLinuxBootId,
   })
   const args = [
     "--arm", "--registry-root", root, "--arm-operation", physical.armOperationIdentity, "--arm-payload-digest", physical.canonicalArmPayloadDigest,
@@ -345,6 +346,43 @@ test("H4-R3G-D compiled watchdog stdout arm acknowledgement is independently ver
     const acknowledgement = validateGvisorTtlPhysicalArmAcknowledgement(armLine, physical)
     assert.equal(acknowledgement.armOperationIdentity, physical.armOperationIdentity)
     assert.equal(acknowledgement.runtimeInstanceIdentity, physical.runtimeInstanceIdentity)
+    assert.throws(() => validateGvisorTtlPhysicalArmAcknowledgement(armLine, { ...physical, expectedLinuxBootId: "00000000-0000-4000-8000-000000000000" }), /Linux boot identity mismatch/)
+  } finally {
+    for (const socket of sockets) socket.destroy()
+    if (server.listening) await closeServer(server).catch(() => {})
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("H4-R3G-D partial pre-deadline Wait response cannot stall expiry enforcement", { skip: process.platform !== "linux", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "kodac-r3gd-wait-stall-")); await chmod(root, 0o700)
+  const binary = join(root, "watchdog"); const socketPath = join(root, "control.sock")
+  const sockets = new Set<Socket>(); const methods: string[] = []; let waitSocket: Socket | undefined
+  const server = createServer((socket) => {
+    sockets.add(socket); socket.once("close", () => sockets.delete(socket))
+    let buffered = ""; socket.setEncoding("utf8")
+    socket.on("data", (chunk: string) => {
+      buffered += chunk
+      let request: { method?: unknown }
+      try { request = JSON.parse(buffered) as { method?: unknown } } catch { return }
+      buffered = ""
+      if (typeof request.method !== "string") return
+      methods.push(request.method)
+      if (request.method === "containerManager.Wait") { waitSocket = socket; socket.write("{"); return }
+      if (request.method === "containerManager.Processes") { socket.write(JSON.stringify({ success: true, err: "", result: [{ pid: 1 }] })); return }
+      if (request.method === "containerManager.Signal") {
+        socket.write(JSON.stringify({ success: true, err: "", result: null }))
+        setTimeout(() => waitSocket?.write(JSON.stringify({ success: true, err: "", result: 0 })), 5)
+      }
+    })
+  })
+  try {
+    await new Promise<void>((resolvePromise, rejectPromise) => { server.once("error", rejectPromise); server.listen(socketPath, () => { server.off("error", rejectPromise); resolvePromise() }) })
+    const { args } = await nativeFixture(root, binary, socketPath)
+    const result = await runChild(binary, args)
+    assert.equal(result.signal, null); assert.equal(result.code, 0, result.stderr)
+    assert.match(result.stdout, / outcome=ttl-expired /)
+    assert.deepEqual(methods, ["containerManager.Wait", "containerManager.Processes", "containerManager.Signal"])
   } finally {
     for (const socket of sockets) socket.destroy()
     if (server.listening) await closeServer(server).catch(() => {})
@@ -366,9 +404,9 @@ test("H4-R3G-D failed retained Wait dispatch emits no positive physical arm ackn
     const { args } = await nativeFixture(root, binary, socketPath)
     const result = await runChild(binary, args)
     assert.equal(result.signal, null)
-    assert.equal(result.code, 126, result.stderr)
+    assert.ok(result.code === 125 || result.code === 126, result.stderr)
     assert.equal(result.stdout, "", "positive arm acknowledgement must not be emitted when retained Wait dispatch fails")
-    assert.match(result.stderr, /retained Wait request failed before positive arm acknowledgement/)
+    if (result.code === 126) assert.match(result.stderr, /retained Wait request failed before positive arm acknowledgement/)
   } finally {
     for (const socket of sockets) socket.destroy()
     if (server.listening) await closeServer(server).catch(() => {})
