@@ -157,7 +157,15 @@ export interface GvisorOutputRuntimeConfig {
   readonly version: typeof KDO_H4_R3G_E_RUNTIME_VERSION
   /** Trusted persistence primitive: atomically create-once by executionAttemptIdentity. */
   readonly reserveOutputOperation: (prepared: GvisorOutputPreparedOperation) => Promise<unknown> | unknown
-  readonly commitOutputEvidence: (record: GvisorOutputBoundRecord) => Promise<unknown> | unknown
+  /**
+   * Trusted positive-evidence durable boundary. If options.signal aborts before
+   * durable completion, the callback MUST reject and MUST NOT persist the
+   * positive record. Once started, K2 waits for authoritative settlement.
+   */
+  readonly commitOutputEvidence: (
+    record: GvisorOutputBoundRecord,
+    options: { readonly signal?: AbortSignal },
+  ) => Promise<unknown> | unknown
   readonly commitFailureEvidence: (failure: GvisorOutputFailureRecord) => Promise<unknown> | unknown
 }
 
@@ -578,6 +586,43 @@ async function settleDurableMutation<T>(label: string, signal: AbortSignal | und
     throw new Error(`${label} failed: ${String(error)}`)
   }
 }
+
+/**
+ * Positive evidence has a stronger cancellation contract than other durable
+ * callbacks. The trusted callback receives the caller signal and must abort its
+ * transaction without persisting E3 if cancellation wins before durable
+ * completion. K2 still waits for the started callback to settle and never
+ * returns positive success if cancellation is observed before that settlement.
+ */
+async function settleAbortFencedPositiveMutation<T>(
+  label: string,
+  signal: AbortSignal | undefined,
+  operation: () => Promise<T> | T,
+): Promise<T> {
+  if (signal?.aborted) throw new Error(`${label} aborted before start`)
+  let settled = false
+  let abortedBeforeSettlement = false
+  const onAbort = () => { if (!settled) abortedBeforeSettlement = true }
+  signal?.addEventListener("abort", onAbort, { once: true })
+  try {
+    if (signal?.aborted) throw new Error(`${label} aborted before start`)
+    const mutation = operation()
+    if (!(mutation instanceof Promise)) {
+      settled = true
+      if (abortedBeforeSettlement || signal?.aborted) throw new Error(`${label} aborted before durable completion`)
+      return mutation
+    }
+    const result = await mutation
+    settled = true
+    if (abortedBeforeSettlement || signal?.aborted) throw new Error(`${label} aborted before durable completion`)
+    return result
+  } catch (error) {
+    if (error instanceof Error) throw error
+    throw new Error(`${label} failed: ${String(error)}`)
+  } finally {
+    signal?.removeEventListener("abort", onAbort)
+  }
+}
 function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
   let resolvePromise!: (value: T) => void
   const promise = new Promise<T>((resolve) => { resolvePromise = resolve })
@@ -765,7 +810,11 @@ export class GvisorOutputExecutionGateway extends ExecutionGateway {
         })
         if (record.outputOperationIdentity !== prepared.outputOperationIdentity) throw new Error("R3G-E final record operation identity does not match durable PREPARED operation")
         const commit = validateGvisorOutputBoundCommit(
-          await settleDurableMutation("R3G-E durable positive output evidence", options.signal, () => this.outputRuntime.commitOutputEvidence(record)),
+          await settleAbortFencedPositiveMutation(
+            "R3G-E durable positive output evidence",
+            options.signal,
+            () => this.outputRuntime.commitOutputEvidence(record, { signal: options.signal }),
+          ),
           record,
         )
         const receipt = createReceipt({ capability: intent.capability, inputDigest: intent.inputDigest, paths: intent.paths, policy, startedAt, completedAt: new Date().toISOString(), result: { status: "success", outputDigest: record.recordIdentity, outputBytes: record.acceptedAggregateBytes, exitCode: 0 } })
