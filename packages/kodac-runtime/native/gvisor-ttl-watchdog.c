@@ -27,6 +27,7 @@
 #define KODAC_RESPONSE_TIMEOUT 2
 #define KODAC_PROTOCOL_VERSION "kodac-h4-r3g-d-watchdog-protocol-v1"
 #define KODAC_LEASE_VERSION "kodac-h4-r3g-d-watchdog-lease-v1"
+#define KODAC_ARM_REGISTRY_VERSION "kodac-h4-r3g-d-arm-registry-v1"
 #define KODAC_ARM_LINE_VERSION "kodac-gvisor-ttl-arm-v1"
 #define KODAC_TERMINAL_LINE_VERSION "kodac-gvisor-ttl-terminal-v1"
 #define KODAC_CLOCK_NAME "CLOCK_BOOTTIME"
@@ -87,6 +88,7 @@ typedef struct {
   char lock_name[96];
   char lease_name[96];
   char claim_name[96];
+  char arm_name[96];
   char terminal_name[96];
 } lease_registry;
 
@@ -508,6 +510,7 @@ static int open_registry(const arm_request *request, lease_registry *registry) {
   if (snprintf(registry->lock_name, sizeof(registry->lock_name), "%s.lock", request->arm_operation_identity) >= (int)sizeof(registry->lock_name) ||
       snprintf(registry->lease_name, sizeof(registry->lease_name), "%s.lease", request->arm_operation_identity) >= (int)sizeof(registry->lease_name) ||
       snprintf(registry->claim_name, sizeof(registry->claim_name), "%s.claim", request->arm_operation_identity) >= (int)sizeof(registry->claim_name) ||
+      snprintf(registry->arm_name, sizeof(registry->arm_name), "%s.arm", request->arm_operation_identity) >= (int)sizeof(registry->arm_name) ||
       snprintf(registry->terminal_name, sizeof(registry->terminal_name), "%s.terminal", request->arm_operation_identity) >= (int)sizeof(registry->terminal_name)) return -1;
   registry->lock_fd = openat(registry->directory_fd, registry->lock_name, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (registry->lock_fd < 0) return -1;
@@ -773,10 +776,98 @@ static int read_timer(int fd) {
   return count == (ssize_t)sizeof(expirations) && expirations > 0 ? 0 : -1;
 }
 
+static int physical_arm_ack_identity(const arm_request *request, const retained_subject *subject, const lease_state *lease, char out[65]) {
+  const char *parts[] = { lease->lease_identity, request->arm_operation_identity, request->runtime_instance_identity, subject->control_peer_binding_identity, request->runsc_artifact_identity, request->expected_runsc_sha256, lease->registry_record_identity, lease->clock_domain_identity, lease->boot_id, lease->owner_instance_identity, lease->claim_record_identity };
+  return hash_joined(out, "PHYSICAL_ARM_ACK", parts, 11);
+}
+
+static int durable_create_arm_replay(const arm_request *request, lease_registry *registry, const retained_subject *subject, const lease_state *lease) {
+  char physical_ack_identity[65];
+  if (physical_arm_ack_identity(request, subject, lease, physical_ack_identity) != 0) return -1;
+  char socket_dev[32], socket_ino[32], pid[32], uid[32], gid[32], start_ticks[32], exe_dev[32], exe_ino[32], exe_size[32], lease_start[32], deadline[32], fence[32];
+  snprintf(socket_dev, sizeof(socket_dev), "%ju", (uintmax_t)subject->endpoint_stat.st_dev);
+  snprintf(socket_ino, sizeof(socket_ino), "%ju", (uintmax_t)subject->endpoint_stat.st_ino);
+  snprintf(pid, sizeof(pid), "%ld", (long)subject->peer.pid);
+  snprintf(uid, sizeof(uid), "%u", (unsigned)subject->peer.uid);
+  snprintf(gid, sizeof(gid), "%u", (unsigned)subject->peer.gid);
+  snprintf(start_ticks, sizeof(start_ticks), "%" PRIu64, subject->start_ticks);
+  snprintf(exe_dev, sizeof(exe_dev), "%ju", (uintmax_t)subject->exe_stat.st_dev);
+  snprintf(exe_ino, sizeof(exe_ino), "%ju", (uintmax_t)subject->exe_stat.st_ino);
+  snprintf(exe_size, sizeof(exe_size), "%ju", (uintmax_t)subject->exe_stat.st_size);
+  snprintf(lease_start, sizeof(lease_start), "%" PRIu64, lease->lease_start_boottime_ns);
+  snprintf(deadline, sizeof(deadline), "%" PRIu64, lease->deadline_boottime_ns);
+  snprintf(fence, sizeof(fence), "%" PRIu64, lease->fence_token);
+  const char *arm_parts[] = {
+    KODAC_ARM_REGISTRY_VERSION,
+    request->arm_operation_identity,
+    request->canonical_arm_payload_digest,
+    lease->lease_identity,
+    request->runtime_instance_identity,
+    subject->control_peer_binding_identity,
+    socket_dev,
+    socket_ino,
+    pid,
+    uid,
+    gid,
+    start_ticks,
+    exe_dev,
+    exe_ino,
+    exe_size,
+    subject->retained_pidfd_process_identity,
+    request->runsc_artifact_identity,
+    request->expected_runsc_sha256,
+    subject->retained_runsc_executable_identity,
+    lease->registry_record_identity,
+    lease->clock_domain_identity,
+    lease->boot_id,
+    lease_start,
+    deadline,
+    lease->owner_instance_identity,
+    fence,
+    lease->claim_record_identity,
+    physical_ack_identity,
+  };
+  char arm_registry_identity[65];
+  if (hash_joined(arm_registry_identity, "ARM_REGISTRY", arm_parts, 28) != 0) return -1;
+  char record[KODAC_MAX_RECORD_BYTES];
+  int length = snprintf(record, sizeof(record),
+    "version=%s\narmOperationIdentity=%s\ncanonicalArmPayloadDigest=%s\nleaseIdentity=%s\nruntimeInstanceIdentity=%s\ncontrolPeerBindingIdentity=%s\nsocketDevice=%s\nsocketInode=%s\npeerPid=%s\npeerUid=%s\npeerGid=%s\nprocessStartTicks=%s\nexecutableDevice=%s\nexecutableInode=%s\nexecutableSize=%s\nretainedPidfdProcessIdentity=%s\nrunscArtifactIdentity=%s\nverifiedRunscSha256=%s\nretainedRunscExecutableIdentity=%s\nwatchdogRegistryRecordIdentity=%s\nclockDomainIdentity=%s\nlinuxBootId=%s\nleaseStartBoottimeNs=%s\ndeadlineBoottimeNs=%s\nownerInstanceIdentity=%s\nterminalFenceToken=%s\nclaimRecordIdentity=%s\nphysicalArmAcknowledgementIdentity=%s\narmRegistryRecordIdentity=%s\n",
+    KODAC_ARM_REGISTRY_VERSION,
+    request->arm_operation_identity,
+    request->canonical_arm_payload_digest,
+    lease->lease_identity,
+    request->runtime_instance_identity,
+    subject->control_peer_binding_identity,
+    socket_dev,
+    socket_ino,
+    pid,
+    uid,
+    gid,
+    start_ticks,
+    exe_dev,
+    exe_ino,
+    exe_size,
+    subject->retained_pidfd_process_identity,
+    request->runsc_artifact_identity,
+    request->expected_runsc_sha256,
+    subject->retained_runsc_executable_identity,
+    lease->registry_record_identity,
+    lease->clock_domain_identity,
+    lease->boot_id,
+    lease_start,
+    deadline,
+    lease->owner_instance_identity,
+    fence,
+    lease->claim_record_identity,
+    physical_ack_identity,
+    arm_registry_identity);
+  if (length <= 0 || (size_t)length >= sizeof(record)) return -1;
+  return durable_replace_at(registry->directory_fd, registry->arm_name, record, (size_t)length);
+}
+
 static int emit_arm_ack(const arm_request *request, const retained_subject *subject, const lease_state *lease) {
   char physical_ack_identity[65];
-  const char *parts[] = { lease->lease_identity, request->arm_operation_identity, request->runtime_instance_identity, subject->control_peer_binding_identity, request->runsc_artifact_identity, request->expected_runsc_sha256, lease->registry_record_identity, lease->clock_domain_identity, lease->boot_id, lease->owner_instance_identity, lease->claim_record_identity };
-  if (hash_joined(physical_ack_identity, "PHYSICAL_ARM_ACK", parts, 11) != 0) return -1;
+  if (physical_arm_ack_identity(request, subject, lease, physical_ack_identity) != 0) return -1;
   if (printf("%s lease=%s arm-operation=%s runtime-instance=%s control-peer=%s runsc-artifact=%s verified-runsc-sha256=%s registry-record=%s clock-domain=%s boot-id=%s lease-start-boottime-ns=%" PRIu64 " deadline-boottime-ns=%" PRIu64 " owner-instance=%s terminal-fence-token=%" PRIu64 " claim-record=%s physical-ack=%s\n",
       KODAC_ARM_LINE_VERSION, lease->lease_identity, request->arm_operation_identity, request->runtime_instance_identity, subject->control_peer_binding_identity, request->runsc_artifact_identity, request->expected_runsc_sha256, lease->registry_record_identity, lease->clock_domain_identity, lease->boot_id, lease->lease_start_boottime_ns, lease->deadline_boottime_ns, lease->owner_instance_identity, lease->fence_token, lease->claim_record_identity, physical_ack_identity) < 0) return -1;
   return fflush(stdout) == 0 ? 0 : -1;
@@ -807,9 +898,10 @@ static int registry_entry_exists(int directory_fd, const char *name) {
 static int verify_no_prior_state(lease_registry *registry) {
   int lease = registry_entry_exists(registry->directory_fd, registry->lease_name);
   int claim = registry_entry_exists(registry->directory_fd, registry->claim_name);
+  int arm = registry_entry_exists(registry->directory_fd, registry->arm_name);
   int terminal = registry_entry_exists(registry->directory_fd, registry->terminal_name);
-  if (lease < 0 || claim < 0 || terminal < 0) return -1;
-  return lease || claim || terminal ? 1 : 0;
+  if (lease < 0 || claim < 0 || arm < 0 || terminal < 0) return -1;
+  return lease || claim || arm || terminal ? 1 : 0;
 }
 
 static int wait_for_terminal_after_signal(retained_subject *subject, uint64_t deadline_ns, char termination_identity[65]) {
@@ -838,6 +930,7 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   int before_ack = boottime_before_io(lease->deadline_boottime_ns);
   if (before_ack == KODAC_RESPONSE_TIMEOUT) { close(timer_fd); return indeterminate("lease expired before positive arm acknowledgement"); }
   if (before_ack != 0) { close(timer_fd); return indeterminate("cannot verify lease deadline before positive arm acknowledgement"); }
+  if (durable_create_arm_replay(request, registry, subject, lease) != 0) { close(timer_fd); return indeterminate("cannot durably commit physical arm replay record"); }
   if (emit_arm_ack(request, subject, lease) != 0) { close(timer_fd); return fail("cannot emit physical arm acknowledgement"); }
 
   struct pollfd events[2] = {
