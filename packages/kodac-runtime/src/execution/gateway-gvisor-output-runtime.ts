@@ -572,7 +572,7 @@ export function validateGvisorOutputRuntimeConfig(value: unknown): GvisorOutputR
  */
 async function settleDurableMutation<T>(label: string, signal: AbortSignal | undefined, operation: () => Promise<T> | T): Promise<T> {
   if (signal?.aborted) throw new Error(`${label} aborted before start`)
-  try { return await Promise.resolve().then(operation) }
+  try { return await operation() }
   catch (error) {
     if (error instanceof Error) throw error
     throw new Error(`${label} failed: ${String(error)}`)
