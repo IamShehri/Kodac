@@ -27,6 +27,8 @@
 #define KODAC_RESPONSE_TIMEOUT 2
 #define KODAC_PROTOCOL_VERSION "kodac-h4-r3g-d-watchdog-protocol-v1"
 #define KODAC_LEASE_VERSION "kodac-h4-r3g-d-watchdog-lease-v1"
+#define KODAC_OWNER_CLAIM_VERSION "kodac-h4-r3g-d-owner-claim-v1"
+#define KODAC_OWNER_STATE_ACTIVE "ACTIVE"
 #define KODAC_ARM_REGISTRY_VERSION "kodac-h4-r3g-d-arm-registry-v1"
 #define KODAC_ARM_LINE_VERSION "kodac-gvisor-ttl-arm-v1"
 #define KODAC_TERMINAL_LINE_VERSION "kodac-gvisor-ttl-terminal-v1"
@@ -85,6 +87,7 @@ typedef struct {
 typedef struct {
   int directory_fd;
   int lock_fd;
+  struct stat lock_stat;
   char lock_name[96];
   char lease_name[96];
   char claim_name[96];
@@ -116,6 +119,7 @@ typedef struct {
   char lease_identity[65];
   char owner_instance_identity[65];
   uint64_t fence_token;
+  uint64_t owner_updated_boottime_ns;
   char claim_record_identity[65];
   char registry_record_identity[65];
 } lease_state;
@@ -519,6 +523,7 @@ static int open_registry(const arm_request *request, lease_registry *registry) {
   if (flock(registry->lock_fd, LOCK_EX | LOCK_NB) != 0) return -1;
   struct stat named;
   if (fstatat(registry->directory_fd, registry->lock_name, &named, AT_SYMLINK_NOFOLLOW) != 0 || named.st_dev != lock_stat.st_dev || named.st_ino != lock_stat.st_ino) return -1;
+  registry->lock_stat = lock_stat;
   return 0;
 }
 
@@ -550,16 +555,43 @@ done:
   return result;
 }
 
+static int derive_lease_identity(const arm_request *request, lease_state *lease) {
+  char start[32], deadline[32];
+  snprintf(start, sizeof(start), "%" PRIu64, lease->lease_start_boottime_ns);
+  snprintf(deadline, sizeof(deadline), "%" PRIu64, lease->deadline_boottime_ns);
+  const char *parts[] = { request->arm_operation_identity, request->canonical_arm_payload_digest, request->runtime_instance_identity, lease->boot_id, start, deadline, request->watchdog_implementation_identity };
+  return hash_joined(lease->lease_identity, "LEASE", parts, 7);
+}
+
+static int derive_owner_claim_identity(const arm_request *request, const lease_state *lease, char out[65]) {
+  char token[32], updated[32];
+  snprintf(token, sizeof(token), "%" PRIu64, lease->fence_token);
+  snprintf(updated, sizeof(updated), "%" PRIu64, lease->owner_updated_boottime_ns);
+  const char *parts[] = { KODAC_OWNER_CLAIM_VERSION, lease->lease_identity, request->arm_operation_identity, lease->owner_instance_identity, token, KODAC_OWNER_STATE_ACTIVE, updated, lease->boot_id };
+  return hash_joined(out, "OWNER_CLAIM", parts, 8);
+}
+
+static int build_owner_claim_record(const arm_request *request, const lease_state *lease, char record[KODAC_MAX_RECORD_BYTES], size_t *length_out) {
+  char token[32], updated[32], identity[65];
+  snprintf(token, sizeof(token), "%" PRIu64, lease->fence_token);
+  snprintf(updated, sizeof(updated), "%" PRIu64, lease->owner_updated_boottime_ns);
+  if (derive_owner_claim_identity(request, lease, identity) != 0 || strcmp(identity, lease->claim_record_identity) != 0) return -1;
+  int length = snprintf(record, KODAC_MAX_RECORD_BYTES,
+    "version=%s\nleaseIdentity=%s\narmOperationIdentity=%s\nownerInstanceIdentity=%s\nterminalFenceToken=%s\nownerState=%s\nupdatedBoottimeNs=%s\nlinuxBootId=%s\nclaimRecordIdentity=%s\n",
+    KODAC_OWNER_CLAIM_VERSION, lease->lease_identity, request->arm_operation_identity, lease->owner_instance_identity, token, KODAC_OWNER_STATE_ACTIVE, updated, lease->boot_id, lease->claim_record_identity);
+  if (length <= 0 || (size_t)length >= KODAC_MAX_RECORD_BYTES) return -1;
+  *length_out = (size_t)length;
+  return 0;
+}
+
 static int durable_create_claim(const arm_request *request, lease_registry *registry, lease_state *lease) {
-  if (random_identity(lease->owner_instance_identity) != 0) return -1;
+  if (lease->lease_identity[0] == '\0' || random_identity(lease->owner_instance_identity) != 0) return -1;
   lease->fence_token = 1;
-  char token[32]; snprintf(token, sizeof(token), "%" PRIu64, lease->fence_token);
-  const char *parts[] = { request->arm_operation_identity, lease->owner_instance_identity, token, lease->boot_id };
-  if (hash_joined(lease->claim_record_identity, "OWNER_CLAIM", parts, 4) != 0) return -1;
-  char record[KODAC_MAX_RECORD_BYTES];
-  int length = snprintf(record, sizeof(record), "version=kodac-h4-r3g-d-owner-claim-v1\narmOperationIdentity=%s\nownerInstanceIdentity=%s\nterminalFenceToken=%s\nlinuxBootId=%s\nclaimRecordIdentity=%s\n", request->arm_operation_identity, lease->owner_instance_identity, token, lease->boot_id, lease->claim_record_identity);
-  if (length <= 0 || (size_t)length >= sizeof(record)) return -1;
-  return durable_replace_at(registry->directory_fd, registry->claim_name, record, (size_t)length);
+  if (boottime_ns(&lease->owner_updated_boottime_ns) != 0 || lease->owner_updated_boottime_ns < lease->lease_start_boottime_ns || lease->owner_updated_boottime_ns >= lease->deadline_boottime_ns) return -1;
+  if (derive_owner_claim_identity(request, lease, lease->claim_record_identity) != 0) return -1;
+  char record[KODAC_MAX_RECORD_BYTES]; size_t length = 0;
+  if (build_owner_claim_record(request, lease, record, &length) != 0) return -1;
+  return durable_replace_at(registry->directory_fd, registry->claim_name, record, length);
 }
 
 static int durable_create_lease(const arm_request *request, lease_registry *registry, lease_state *lease) {
@@ -568,8 +600,6 @@ static int durable_create_lease(const arm_request *request, lease_registry *regi
   snprintf(deadline, sizeof(deadline), "%" PRIu64, lease->deadline_boottime_ns);
   snprintf(ttl, sizeof(ttl), "%" PRIu64, request->ttl_ms);
   snprintf(fence, sizeof(fence), "%" PRIu64, lease->fence_token);
-  const char *lease_parts[] = { request->arm_operation_identity, request->canonical_arm_payload_digest, request->runtime_instance_identity, lease->boot_id, start, deadline, request->watchdog_implementation_identity };
-  if (hash_joined(lease->lease_identity, "LEASE", lease_parts, 7) != 0) return -1;
   const char *registry_parts[] = { KODAC_LEASE_VERSION, request->arm_operation_identity, request->canonical_arm_payload_digest, lease->lease_identity, request->execution_attempt_identity, request->requirement_identity, request->workload_identity, request->container_binding_identity, request->container_id, request->runtime_instance_identity, ttl, lease->boot_id, lease->clock_domain_identity, start, deadline, request->watchdog_implementation_identity, lease->owner_instance_identity, fence, lease->claim_record_identity };
   if (hash_joined(lease->registry_record_identity, "LEASE_REGISTRY", registry_parts, 19) != 0) return -1;
   char record[KODAC_MAX_RECORD_BYTES];
@@ -578,6 +608,30 @@ static int durable_create_lease(const arm_request *request, lease_registry *regi
     KODAC_LEASE_VERSION, request->arm_operation_identity, request->canonical_arm_payload_digest, lease->lease_identity, request->execution_attempt_identity, request->requirement_identity, request->workload_identity, request->container_binding_identity, request->container_id, request->runtime_instance_identity, ttl, lease->boot_id, lease->clock_domain_identity, start, deadline, request->watchdog_implementation_identity, lease->owner_instance_identity, fence, lease->claim_record_identity, lease->registry_record_identity);
   if (length <= 0 || (size_t)length >= sizeof(record)) return -1;
   return durable_replace_at(registry->directory_fd, registry->lease_name, record, (size_t)length);
+}
+
+static int revalidate_owner_authority(const arm_request *request, lease_registry *registry, const lease_state *lease) {
+  if (registry->lock_fd < 0 || registry->directory_fd < 0) return -1;
+  struct stat held, named;
+  if (fstat(registry->lock_fd, &held) != 0 || !S_ISREG(held.st_mode) || held.st_uid != geteuid() || held.st_nlink != 1 || (held.st_mode & 0077) != 0) return -1;
+  if (held.st_dev != registry->lock_stat.st_dev || held.st_ino != registry->lock_stat.st_ino) return -1;
+  if (fstatat(registry->directory_fd, registry->lock_name, &named, AT_SYMLINK_NOFOLLOW) != 0 || named.st_dev != held.st_dev || named.st_ino != held.st_ino) return -1;
+
+  char expected[KODAC_MAX_RECORD_BYTES]; size_t expected_length = 0;
+  if (build_owner_claim_record(request, lease, expected, &expected_length) != 0) return -1;
+  int fd = openat(registry->directory_fd, registry->claim_name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0) return -1;
+  struct stat before, after, claim_named;
+  char observed[KODAC_MAX_RECORD_BYTES]; size_t observed_length = 0;
+  int result = -1;
+  if (fstat(fd, &before) != 0 || !S_ISREG(before.st_mode) || before.st_uid != geteuid() || before.st_nlink != 1 || (before.st_mode & 0077) != 0 || before.st_size <= 0 || before.st_size >= KODAC_MAX_RECORD_BYTES) goto done;
+  if (read_bounded_fd(fd, observed, sizeof(observed), &observed_length) != 0 || observed_length != expected_length || memcmp(observed, expected, expected_length) != 0) goto done;
+  if (fstat(fd, &after) != 0 || before.st_dev != after.st_dev || before.st_ino != after.st_ino || before.st_size != after.st_size || before.st_mtim.tv_sec != after.st_mtim.tv_sec || before.st_mtim.tv_nsec != after.st_mtim.tv_nsec || before.st_ctim.tv_sec != after.st_ctim.tv_sec || before.st_ctim.tv_nsec != after.st_ctim.tv_nsec) goto done;
+  if (fstatat(registry->directory_fd, registry->claim_name, &claim_named, AT_SYMLINK_NOFOLLOW) != 0 || claim_named.st_dev != after.st_dev || claim_named.st_ino != after.st_ino) goto done;
+  result = 0;
+done:
+  { int saved = errno; close(fd); errno = saved; }
+  return result;
 }
 
 static int endpoint_pin(const arm_request *request, retained_subject *subject) {
@@ -776,6 +830,12 @@ static int read_timer(int fd) {
   return count == (ssize_t)sizeof(expirations) && expirations > 0 ? 0 : -1;
 }
 
+static int fenced_response_identity(const char *domain, const lease_state *lease, const char raw_identity[65], char out[65]) {
+  char fence[32]; snprintf(fence, sizeof(fence), "%" PRIu64, lease->fence_token);
+  const char *parts[] = { lease->lease_identity, lease->owner_instance_identity, fence, lease->claim_record_identity, raw_identity };
+  return hash_joined(out, domain, parts, 5);
+}
+
 static int physical_arm_ack_identity(const arm_request *request, const retained_subject *subject, const lease_state *lease, char out[65]) {
   const char *parts[] = { lease->lease_identity, request->arm_operation_identity, request->runtime_instance_identity, subject->control_peer_binding_identity, request->runsc_artifact_identity, request->expected_runsc_sha256, lease->registry_record_identity, lease->clock_domain_identity, lease->boot_id, lease->owner_instance_identity, lease->claim_record_identity };
   return hash_joined(out, "PHYSICAL_ARM_ACK", parts, 11);
@@ -868,12 +928,13 @@ static int durable_create_arm_replay(const arm_request *request, lease_registry 
 static int emit_arm_ack(const arm_request *request, const retained_subject *subject, const lease_state *lease) {
   char physical_ack_identity[65];
   if (physical_arm_ack_identity(request, subject, lease, physical_ack_identity) != 0) return -1;
-  if (printf("%s lease=%s arm-operation=%s runtime-instance=%s control-peer=%s runsc-artifact=%s verified-runsc-sha256=%s registry-record=%s clock-domain=%s boot-id=%s lease-start-boottime-ns=%" PRIu64 " deadline-boottime-ns=%" PRIu64 " owner-instance=%s terminal-fence-token=%" PRIu64 " claim-record=%s physical-ack=%s\n",
-      KODAC_ARM_LINE_VERSION, lease->lease_identity, request->arm_operation_identity, request->runtime_instance_identity, subject->control_peer_binding_identity, request->runsc_artifact_identity, request->expected_runsc_sha256, lease->registry_record_identity, lease->clock_domain_identity, lease->boot_id, lease->lease_start_boottime_ns, lease->deadline_boottime_ns, lease->owner_instance_identity, lease->fence_token, lease->claim_record_identity, physical_ack_identity) < 0) return -1;
+  if (printf("%s lease=%s arm-operation=%s runtime-instance=%s control-peer=%s runsc-artifact=%s verified-runsc-sha256=%s registry-record=%s clock-domain=%s boot-id=%s lease-start-boottime-ns=%" PRIu64 " deadline-boottime-ns=%" PRIu64 " owner-instance=%s terminal-fence-token=%" PRIu64 " owner-updated-boottime-ns=%" PRIu64 " claim-record=%s physical-ack=%s\n",
+      KODAC_ARM_LINE_VERSION, lease->lease_identity, request->arm_operation_identity, request->runtime_instance_identity, subject->control_peer_binding_identity, request->runsc_artifact_identity, request->expected_runsc_sha256, lease->registry_record_identity, lease->clock_domain_identity, lease->boot_id, lease->lease_start_boottime_ns, lease->deadline_boottime_ns, lease->owner_instance_identity, lease->fence_token, lease->owner_updated_boottime_ns, lease->claim_record_identity, physical_ack_identity) < 0) return -1;
   return fflush(stdout) == 0 ? 0 : -1;
 }
 
 static int durable_terminal(const arm_request *request, lease_registry *registry, const lease_state *lease, const retained_subject *subject, const char *outcome, const char *exit_ns, const char *live_ns, const char *live_probe_identity, const char *process_set_identity, const char *signal_identity, const char *termination_identity, char registry_terminal_identity[65]) {
+  if (revalidate_owner_authority(request, registry, lease) != 0) return -1;
   char fence[32]; snprintf(fence, sizeof(fence), "%" PRIu64, lease->fence_token);
   const char *parts[] = { request->arm_operation_identity, lease->lease_identity, request->runtime_instance_identity, outcome, lease->owner_instance_identity, fence, lease->claim_record_identity, subject->control_peer_binding_identity, subject->retained_pidfd_process_identity, request->runsc_artifact_identity, request->expected_runsc_sha256, subject->retained_runsc_executable_identity, lease->clock_domain_identity, lease->boot_id, exit_ns, live_ns, live_probe_identity, process_set_identity, signal_identity, termination_identity };
   if (hash_joined(registry_terminal_identity, "TERMINAL_REGISTRY", parts, 20) != 0) return -1;
@@ -904,8 +965,11 @@ static int verify_no_prior_state(lease_registry *registry) {
   return lease || claim || arm || terminal ? 1 : 0;
 }
 
-static int wait_for_terminal_after_signal(retained_subject *subject, uint64_t deadline_ns, char termination_identity[65]) {
-  return response_success(subject->wait_fd, 0, termination_identity, deadline_ns);
+static int wait_for_terminal_after_signal(retained_subject *subject, const lease_state *lease, uint64_t deadline_ns, char termination_identity[65]) {
+  char raw_identity[65];
+  int result = response_success(subject->wait_fd, 0, raw_identity, deadline_ns);
+  if (result != 0) return result;
+  return fenced_response_identity("TERMINATION_ACK", lease, raw_identity, termination_identity);
 }
 
 static int run_lease(const arm_request *request, lease_registry *registry, retained_subject *subject, lease_state *lease) {
@@ -915,6 +979,7 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   if (boottime_ns(&lease->lease_start_boottime_ns) != 0) return fail("cannot read CLOCK_BOOTTIME lease start");
   if (request->ttl_ms > (UINT64_MAX - lease->lease_start_boottime_ns) / 1000000ULL) return fail("TTL deadline overflows uint64");
   lease->deadline_boottime_ns = lease->lease_start_boottime_ns + request->ttl_ms * 1000000ULL;
+  if (derive_lease_identity(request, lease) != 0) return fail("cannot derive immutable watchdog lease identity");
   if (durable_create_claim(request, registry, lease) != 0) return fail("cannot durably claim watchdog owner/fence generation");
   if (durable_create_lease(request, registry, lease) != 0) return fail("cannot durably commit watchdog lease registry entry");
 
@@ -930,6 +995,7 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   int before_ack = boottime_before_io(lease->deadline_boottime_ns);
   if (before_ack == KODAC_RESPONSE_TIMEOUT) { close(timer_fd); return indeterminate("lease expired before positive arm acknowledgement"); }
   if (before_ack != 0) { close(timer_fd); return indeterminate("cannot verify lease deadline before positive arm acknowledgement"); }
+  if (revalidate_owner_authority(request, registry, lease) != 0) { close(timer_fd); return indeterminate("owner/fence authority changed before positive arm acknowledgement"); }
   if (durable_create_arm_replay(request, registry, subject, lease) != 0) { close(timer_fd); return indeterminate("cannot durably commit physical arm replay record"); }
   if (emit_arm_ack(request, subject, lease) != 0) { close(timer_fd); return fail("cannot emit physical arm acknowledgement"); }
 
@@ -946,14 +1012,16 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
 
   int wait_reached_deadline = 0;
   if ((events[0].revents & POLLIN) != 0 && observed_ns < lease->deadline_boottime_ns) {
-    char termination_identity[65];
-    int wait_result = response_success(subject->wait_fd, 0, termination_identity, lease->deadline_boottime_ns);
+    if (revalidate_owner_authority(request, registry, lease) != 0) { close(timer_fd); return indeterminate("owner/fence authority changed before natural-exit winner classification"); }
+    char raw_termination_identity[65], termination_identity[65];
+    int wait_result = response_success(subject->wait_fd, 0, raw_termination_identity, lease->deadline_boottime_ns);
     if (wait_result == 0) {
+      if (fenced_response_identity("TERMINATION_ACK", lease, raw_termination_identity, termination_identity) != 0) { close(timer_fd); return indeterminate("cannot fence natural-exit termination acknowledgement"); }
       int alive = pidfd_is_alive(subject->pidfd);
       if (alive != 0) { close(timer_fd); return indeterminate(alive > 0 ? "Wait reported exit but admitted peer remains alive" : "cannot validate pidfd after natural exit"); }
       char exit_ns[32]; snprintf(exit_ns, sizeof(exit_ns), "%" PRIu64, observed_ns);
       char registry_terminal[65];
-      if (durable_terminal(request, registry, lease, subject, "natural-exit", exit_ns, "-", "-", "-", "-", termination_identity, registry_terminal) != 0) { close(timer_fd); return indeterminate("cannot durably commit natural-exit terminal record"); }
+      if (durable_terminal(request, registry, lease, subject, "natural-exit", exit_ns, "-", "-", "-", "-", termination_identity, registry_terminal) != 0) { close(timer_fd); return indeterminate("cannot durably commit natural-exit terminal record under current owner/fence authority"); }
       if (emit_terminal(request, lease, subject, "natural-exit", exit_ns, "-", "-", "-", "-", termination_identity, registry_terminal) != 0) { close(timer_fd); return indeterminate("cannot emit natural-exit terminal acknowledgement"); }
       close(timer_fd); return 0;
     }
@@ -970,6 +1038,7 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   }
   close(timer_fd);
 
+  if (revalidate_owner_authority(request, registry, lease) != 0) return indeterminate("owner/fence authority changed before expiry liveness classification");
   uint64_t live_ns_value = 0;
   if (boottime_ns(&live_ns_value) != 0 || live_ns_value < lease->deadline_boottime_ns) return indeterminate("expiry liveness timestamp precedes deadline");
   if (revalidate_retained_subject(request, subject) != 0) return indeterminate("exact admitted runsc peer is not live at expiry");
@@ -987,24 +1056,31 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   if (process_result != 0) return indeterminate("retained Processes response is malformed or unsuccessful");
   uint64_t after_processes = 0;
   if (boottime_ns(&after_processes) != 0 || after_processes < lease->deadline_boottime_ns) return indeterminate("live-at-expiry observation is not monotonic");
+  if (revalidate_owner_authority(request, registry, lease) != 0) return indeterminate("owner/fence authority changed before live-at-expiry proof");
   if (revalidate_retained_subject(request, subject) != 0) return indeterminate("exact peer changed between liveness proof and signal");
-  char live_ns[32]; snprintf(live_ns, sizeof(live_ns), "%" PRIu64, after_processes);
+  char live_ns[32], fence[32];
+  snprintf(live_ns, sizeof(live_ns), "%" PRIu64, after_processes);
+  snprintf(fence, sizeof(fence), "%" PRIu64, lease->fence_token);
   char live_probe_identity[65];
-  const char *live_parts[] = { request->runtime_instance_identity, live_ns, process_set_identity, subject->control_peer_binding_identity, subject->retained_pidfd_process_identity };
-  if (hash_joined(live_probe_identity, "LIVE_AT_EXPIRY", live_parts, 5) != 0) return indeterminate("cannot derive live-at-expiry proof identity");
+  const char *live_parts[] = { lease->lease_identity, lease->owner_instance_identity, fence, lease->claim_record_identity, request->runtime_instance_identity, live_ns, process_set_identity, subject->control_peer_binding_identity, subject->retained_pidfd_process_identity };
+  if (hash_joined(live_probe_identity, "LIVE_AT_EXPIRY", live_parts, 9) != 0) return indeterminate("cannot derive fenced live-at-expiry proof identity");
+
+  if (revalidate_owner_authority(request, registry, lease) != 0) return indeterminate("owner/fence authority changed immediately before retained Signal mutation");
   int signal_dispatch = send_rpc(subject->signal_fd, "containerManager.Signal", request->container_id, 1, terminal_response_deadline_ns);
   if (signal_dispatch == KODAC_RESPONSE_TIMEOUT) return indeterminate("retained Signal request dispatch timed out");
   if (signal_dispatch != 0) return indeterminate("retained Signal request failed");
-  char signal_identity[65];
-  int signal_result = response_success(subject->signal_fd, 0, signal_identity, terminal_response_deadline_ns);
+  char raw_signal_identity[65], signal_identity[65];
+  int signal_result = response_success(subject->signal_fd, 0, raw_signal_identity, terminal_response_deadline_ns);
   if (signal_result == KODAC_RESPONSE_TIMEOUT) return indeterminate("fixed SIGKILL-all signal acknowledgement timed out");
   if (signal_result != 0) return indeterminate("fixed SIGKILL-all signal was not acknowledged");
+  if (fenced_response_identity("SIGNAL_ACK", lease, raw_signal_identity, signal_identity) != 0) return indeterminate("cannot fence fixed SIGKILL-all signal acknowledgement");
+
   char termination_identity[65];
-  int termination_result = wait_for_terminal_after_signal(subject, terminal_response_deadline_ns, termination_identity);
+  int termination_result = wait_for_terminal_after_signal(subject, lease, terminal_response_deadline_ns, termination_identity);
   if (termination_result == KODAC_RESPONSE_TIMEOUT) return indeterminate("terminal Wait acknowledgement timed out after signal");
   if (termination_result != 0) return indeterminate("terminal Wait acknowledgement missing after signal");
   char registry_terminal[65];
-  if (durable_terminal(request, registry, lease, subject, "ttl-expired", "-", live_ns, live_probe_identity, process_set_identity, signal_identity, termination_identity, registry_terminal) != 0) return indeterminate("cannot durably commit ttl-expired terminal record");
+  if (durable_terminal(request, registry, lease, subject, "ttl-expired", "-", live_ns, live_probe_identity, process_set_identity, signal_identity, termination_identity, registry_terminal) != 0) return indeterminate("cannot durably commit ttl-expired terminal record under current owner/fence authority");
   if (emit_terminal(request, lease, subject, "ttl-expired", "-", live_ns, live_probe_identity, process_set_identity, signal_identity, termination_identity, registry_terminal) != 0) return indeterminate("cannot emit ttl-expired terminal acknowledgement");
   return 0;
 }
