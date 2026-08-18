@@ -36,6 +36,7 @@ const ID = Object.freeze({
 const BOOT = "123e4567-e89b-42d3-a456-426614174000"
 const TTL = "1000"
 const START = "1000000000"
+const OWNER_UPDATED = "1000000001"
 const DEADLINE = "2000000000"
 
 function serialize(entries: readonly (readonly [string, string])[]): string {
@@ -44,17 +45,20 @@ function serialize(entries: readonly (readonly [string, string])[]): string {
 
 function fixture(boot = BOOT) {
   const fence = "1"
-  const claimIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", [ID.arm, ID.owner, fence, boot])
+  const leaseIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE", [ID.arm, ID.payload, ID.runtime, boot, START, DEADLINE, ID.watchdog])
+  const claimIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", ["kodac-h4-r3g-d-owner-claim-v1", leaseIdentity, ID.arm, ID.owner, fence, "ACTIVE", OWNER_UPDATED, boot])
   const claimText = serialize([
     ["version", "kodac-h4-r3g-d-owner-claim-v1"],
+    ["leaseIdentity", leaseIdentity],
     ["armOperationIdentity", ID.arm],
     ["ownerInstanceIdentity", ID.owner],
     ["terminalFenceToken", fence],
+    ["ownerState", "ACTIVE"],
+    ["updatedBoottimeNs", OWNER_UPDATED],
     ["linuxBootId", boot],
     ["claimRecordIdentity", claimIdentity],
   ])
   const clock = createGvisorTtlWatchdogProtocolIdentity("CLOCK_DOMAIN", [boot, "CLOCK_BOOTTIME"])
-  const leaseIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE", [ID.arm, ID.payload, ID.runtime, boot, START, DEADLINE, ID.watchdog])
   const registryIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE_REGISTRY", [
     "kodac-h4-r3g-d-watchdog-lease-v1", ID.arm, ID.payload, leaseIdentity, ID.execution, ID.requirement, ID.workload, ID.binding, ID.container, ID.runtime, TTL, boot, clock, START, DEADLINE, ID.watchdog, ID.owner, fence, claimIdentity,
   ])
@@ -117,6 +121,9 @@ test("H4-R3G-D physical registry parsers rederive native claim lease and termina
   const lease = parseGvisorTtlPhysicalLeaseRecord(value.leaseText, claim)
   const terminal = parseGvisorTtlPhysicalTerminalRecord(value.terminalText, lease)
   assert.equal(claim.claimRecordIdentity, value.claimIdentity)
+  assert.equal(claim.leaseIdentity, value.leaseIdentity)
+  assert.equal(claim.ownerState, "ACTIVE")
+  assert.equal(claim.updatedBoottimeNs, OWNER_UPDATED)
   assert.equal(lease.leaseIdentity, value.leaseIdentity)
   assert.equal(lease.registryRecordIdentity, value.registryIdentity)
   assert.equal(terminal.registryTerminalRecordIdentity, value.terminalIdentity)
@@ -133,11 +140,19 @@ test("H4-R3G-D physical registry rejects tampered native hashes and immutable de
   assert.throws(() => parseGvisorTtlPhysicalTerminalRecord(value.terminalText.replace(value.terminalIdentity, "0".repeat(64)), lease), /terminal registry identity mismatch/)
 })
 
+test("H4-R3G-D physical owner claim rejects stale or corrupted generation authority", () => {
+  const value = fixture()
+  assert.throws(() => parseGvisorTtlPhysicalOwnerClaimRecord(value.claimText.replace("ownerState=ACTIVE", "ownerState=STALE")), /state is not ACTIVE/)
+  assert.throws(() => parseGvisorTtlPhysicalOwnerClaimRecord(value.claimText.replace(`leaseIdentity=${value.leaseIdentity}`, `leaseIdentity=${"0".repeat(64)}`)), /claim identity mismatch/)
+  assert.throws(() => parseGvisorTtlPhysicalOwnerClaimRecord(value.claimText.replace(`updatedBoottimeNs=${OWNER_UPDATED}`, `updatedBoottimeNs=${DEADLINE}`)), /claim identity mismatch/)
+  assert.throws(() => parseGvisorTtlPhysicalOwnerClaimRecord(value.claimText.replace("terminalFenceToken=1", "terminalFenceToken=2")), /claim identity mismatch/)
+})
+
 test("H4-R3G-D physical registry parser rejects cross-generation owner substitution", () => {
   const value = fixture()
   const claim = parseGvisorTtlPhysicalOwnerClaimRecord(value.claimText)
   const forgedOwner = "0".repeat(64)
-  const forgedClaimIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", [ID.arm, forgedOwner, "1", BOOT])
+  const forgedClaimIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", ["kodac-h4-r3g-d-owner-claim-v1", value.leaseIdentity, ID.arm, forgedOwner, "1", "ACTIVE", OWNER_UPDATED, BOOT])
   const forgedClaim = parseGvisorTtlPhysicalOwnerClaimRecord(value.claimText.replace(ID.owner, forgedOwner).replace(value.claimIdentity, forgedClaimIdentity))
   assert.throws(() => parseGvisorTtlPhysicalLeaseRecord(value.leaseText, forgedClaim), /authoritative owner claim/)
   assert.equal(claim.ownerInstanceIdentity, ID.owner)
