@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 
 import { parseGvisorTtlPhysicalArmReplayRecord } from "../src/execution/gateway-gvisor-ttl-arm-replay.ts"
+import { inspectGvisorTtlPhysicalRecoveryRegistry } from "../src/execution/gateway-gvisor-ttl-recovery-registry.ts"
 import {
   parseGvisorTtlPhysicalLeaseRecord,
   parseGvisorTtlPhysicalOwnerClaimRecord,
@@ -136,6 +137,13 @@ test("H4-R3G-D native watchdog durably records the exact physical arm replay bef
     assert.equal(replay.controlPeerBindingIdentity.length, 64)
     assert.equal(replay.retainedPidfdProcessIdentity.length, 64)
     assert.equal(replay.retainedRunscExecutableIdentity.length, 64)
+
+    const recovery = await inspectGvisorTtlPhysicalRecoveryRegistry(root)
+    assert.equal(recovery.length, 1)
+    assert.equal(recovery[0].armOperationIdentity, ID.arm)
+    assert.equal(recovery[0].clockContinuity, "SAME_BOOT")
+    assert.equal(recovery[0].armReplay?.armRegistryRecordIdentity, replay.armRegistryRecordIdentity)
+    assert.equal(recovery[0].terminal?.terminalOutcome, "ttl-expired")
   } finally {
     for (const socket of sockets) socket.destroy()
     if (server.listening) await closeServer(server).catch(() => {})
@@ -167,6 +175,12 @@ test("H4-R3G-D failed retained Wait dispatch leaves no physical arm replay and e
     await assert.rejects(readFile(join(root, `${ID.arm}.arm`), "utf8"), (error: unknown) => {
       return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT"
     })
+    const recovery = await inspectGvisorTtlPhysicalRecoveryRegistry(root)
+    assert.equal(recovery.length, 1)
+    assert.equal(recovery[0].armOperationIdentity, ID.arm)
+    assert.equal(recovery[0].armReplay, null)
+    assert.equal(recovery[0].terminal, null)
+    assert.equal(recovery[0].clockContinuity, "SAME_BOOT")
   } finally {
     for (const socket of sockets) socket.destroy()
     if (server.listening) await closeServer(server).catch(() => {})
