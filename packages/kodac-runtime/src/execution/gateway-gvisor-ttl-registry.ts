@@ -15,6 +15,7 @@ const MAX_REGISTRY_ENTRIES = 4_096
 const MAX_PATH_BYTES = 4_096
 const WATCHDOG_LEASE_VERSION = "kodac-h4-r3g-d-watchdog-lease-v1"
 const OWNER_CLAIM_VERSION = "kodac-h4-r3g-d-owner-claim-v1"
+const OWNER_STATE_ACTIVE = "ACTIVE"
 const TERMINAL_REGISTRY_VERSION = "kodac-h4-r3g-d-terminal-registry-v1"
 const CLOCK_NAME = "CLOCK_BOOTTIME"
 
@@ -22,9 +23,12 @@ export type GvisorTtlPhysicalClockContinuity = "SAME_BOOT" | "UNRECOVERABLE_CLOC
 
 export interface GvisorTtlPhysicalOwnerClaim {
   readonly version: typeof OWNER_CLAIM_VERSION
+  readonly leaseIdentity: string
   readonly armOperationIdentity: string
   readonly ownerInstanceIdentity: string
   readonly terminalFenceToken: string
+  readonly ownerState: typeof OWNER_STATE_ACTIVE
+  readonly updatedBoottimeNs: string
   readonly linuxBootId: string
   readonly claimRecordIdentity: string
 }
@@ -142,15 +146,18 @@ function parseCanonicalRecord(text: string, keys: readonly string[], label: stri
 }
 
 export function parseGvisorTtlPhysicalOwnerClaimRecord(text: string): GvisorTtlPhysicalOwnerClaim {
-  const record = parseCanonicalRecord(text, ["version", "armOperationIdentity", "ownerInstanceIdentity", "terminalFenceToken", "linuxBootId", "claimRecordIdentity"], "R3G-D physical owner claim")
+  const record = parseCanonicalRecord(text, ["version", "leaseIdentity", "armOperationIdentity", "ownerInstanceIdentity", "terminalFenceToken", "ownerState", "updatedBoottimeNs", "linuxBootId", "claimRecordIdentity"], "R3G-D physical owner claim")
   if (record.version !== OWNER_CLAIM_VERSION) throw new TypeError("R3G-D physical owner claim version mismatch")
+  const leaseIdentity = identity(record.leaseIdentity, "leaseIdentity")
   const armOperationIdentity = identity(record.armOperationIdentity, "armOperationIdentity")
   const ownerInstanceIdentity = identity(record.ownerInstanceIdentity, "ownerInstanceIdentity")
   const terminalFenceToken = canonicalUint(record.terminalFenceToken, "terminalFenceToken", false)
+  if (record.ownerState !== OWNER_STATE_ACTIVE) throw new TypeError("R3G-D physical owner claim state is not ACTIVE")
+  const updatedBoottimeNs = canonicalUint(record.updatedBoottimeNs, "updatedBoottimeNs")
   const linuxBootId = bootId(record.linuxBootId)
-  const expected = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", [armOperationIdentity, ownerInstanceIdentity, terminalFenceToken, linuxBootId])
+  const expected = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", [OWNER_CLAIM_VERSION, leaseIdentity, armOperationIdentity, ownerInstanceIdentity, terminalFenceToken, OWNER_STATE_ACTIVE, updatedBoottimeNs, linuxBootId])
   if (identity(record.claimRecordIdentity, "claimRecordIdentity") !== expected) throw new TypeError("R3G-D physical owner claim identity mismatch")
-  return Object.freeze({ version: OWNER_CLAIM_VERSION, armOperationIdentity, ownerInstanceIdentity, terminalFenceToken, linuxBootId, claimRecordIdentity: expected })
+  return Object.freeze({ version: OWNER_CLAIM_VERSION, leaseIdentity, armOperationIdentity, ownerInstanceIdentity, terminalFenceToken, ownerState: OWNER_STATE_ACTIVE, updatedBoottimeNs, linuxBootId, claimRecordIdentity: expected })
 }
 
 export function parseGvisorTtlPhysicalLeaseRecord(text: string, claimValue?: GvisorTtlPhysicalOwnerClaim): GvisorTtlPhysicalLeaseRecord {
@@ -189,9 +196,12 @@ export function parseGvisorTtlPhysicalLeaseRecord(text: string, claimValue?: Gvi
   if (identity(record.registryRecordIdentity, "registryRecordIdentity") !== registryRecordIdentity) throw new TypeError("R3G-D physical lease registry identity mismatch")
   if (claimValue !== undefined) {
     const claim = claimValue
-    if (claim.armOperationIdentity !== armOperationIdentity || claim.ownerInstanceIdentity !== ownerInstanceIdentity || claim.terminalFenceToken !== terminalFenceToken || claim.linuxBootId !== linuxBootId || claim.claimRecordIdentity !== claimRecordIdentity) {
-      throw new TypeError("R3G-D physical lease does not match authoritative owner claim")
-    }
+    if (
+      claim.leaseIdentity !== leaseIdentity || claim.armOperationIdentity !== armOperationIdentity || claim.ownerInstanceIdentity !== ownerInstanceIdentity ||
+      claim.terminalFenceToken !== terminalFenceToken || claim.ownerState !== OWNER_STATE_ACTIVE || claim.linuxBootId !== linuxBootId || claim.claimRecordIdentity !== claimRecordIdentity
+    ) throw new TypeError("R3G-D physical lease does not match authoritative owner claim")
+    const updated = BigInt(claim.updatedBoottimeNs)
+    if (updated < BigInt(leaseStartBoottimeNs) || updated >= BigInt(deadlineBoottimeNs)) throw new TypeError("R3G-D physical owner claim update is outside the immutable lease window")
   }
   return Object.freeze({
     version: WATCHDOG_LEASE_VERSION,
