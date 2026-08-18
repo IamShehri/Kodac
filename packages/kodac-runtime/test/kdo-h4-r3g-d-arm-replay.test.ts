@@ -34,6 +34,7 @@ const ID = Object.freeze({
 })
 const BOOT = "123e4567-e89b-42d3-a456-426614174000"
 const START = "1000000000"
+const OWNER_UPDATED = "1000000001"
 const TTL_MS = 1000
 const DEADLINE = "2000000000"
 const SOCKET_DEV = "41"
@@ -79,19 +80,22 @@ function preparedFixture(): GvisorTtlPreparedIntent {
 
 function physicalFixture() {
   const prepared = preparedFixture()
-  const claimRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", [prepared.armOperationIdentity, ID.owner, FENCE, BOOT])
+  const leaseIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE", [prepared.armOperationIdentity, prepared.canonicalArmPayloadDigest, prepared.runtimeInstanceIdentity, BOOT, START, DEADLINE, prepared.watchdogImplementationIdentity])
+  const claimRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", ["kodac-h4-r3g-d-owner-claim-v1", leaseIdentity, prepared.armOperationIdentity, ID.owner, FENCE, "ACTIVE", OWNER_UPDATED, BOOT])
   const claimText = [
     "version=kodac-h4-r3g-d-owner-claim-v1",
+    `leaseIdentity=${leaseIdentity}`,
     `armOperationIdentity=${prepared.armOperationIdentity}`,
     `ownerInstanceIdentity=${ID.owner}`,
     `terminalFenceToken=${FENCE}`,
+    "ownerState=ACTIVE",
+    `updatedBoottimeNs=${OWNER_UPDATED}`,
     `linuxBootId=${BOOT}`,
     `claimRecordIdentity=${claimRecordIdentity}`,
     "",
   ].join("\n")
   const claim = parseGvisorTtlPhysicalOwnerClaimRecord(claimText)
   const clockDomainIdentity = createGvisorTtlWatchdogProtocolIdentity("CLOCK_DOMAIN", [BOOT, "CLOCK_BOOTTIME"])
-  const leaseIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE", [prepared.armOperationIdentity, prepared.canonicalArmPayloadDigest, prepared.runtimeInstanceIdentity, BOOT, START, DEADLINE, prepared.watchdogImplementationIdentity])
   const registryRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE_REGISTRY", [
     "kodac-h4-r3g-d-watchdog-lease-v1",
     prepared.armOperationIdentity,
