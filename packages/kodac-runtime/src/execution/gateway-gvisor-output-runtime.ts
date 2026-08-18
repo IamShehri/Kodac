@@ -594,6 +594,18 @@ class GvisorOutputPositiveAbortError extends Error {
   }
 }
 
+function asynchronousMutationResult<T>(value: Promise<T> | T, label: string): Promise<T> | null {
+  if (utilTypes.isPromise(value)) return Promise.resolve(value as Promise<T>)
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return null
+  let thenValue: unknown
+  try { thenValue = Reflect.get(value as object, "then") }
+  catch (error) {
+    if (error instanceof Error) throw error
+    throw new Error(`${label} failed while inspecting trusted asynchronous result: ${String(error)}`)
+  }
+  return typeof thenValue === "function" ? Promise.resolve(value as PromiseLike<T>) : null
+}
+
 /**
  * Positive evidence has a stronger cancellation contract than other durable
  * callbacks. The trusted callback receives the caller signal and must abort its
@@ -623,11 +635,12 @@ async function settleAbortFencedPositiveMutation<T>(
       if (error instanceof Error) throw error
       throw new Error(`${label} failed: ${String(error)}`)
     }
-    if (!(started instanceof Promise)) {
+    const mutation = asynchronousMutationResult(started, label)
+    if (mutation === null) {
       if (signal?.aborted) throw new Error(`${label} trusted positive callback returned success after caller abort`)
       return started
     }
-    const mutationOutcome = started.then(
+    const mutationOutcome = mutation.then(
       (value) => ({ kind: "fulfilled" as const, value }),
       (error: unknown) => ({ kind: "rejected" as const, error }),
     )
