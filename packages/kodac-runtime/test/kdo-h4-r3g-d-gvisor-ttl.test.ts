@@ -282,7 +282,7 @@ test("H4-R3G-D exact subject binds canonical R3E runtime lineage runsc artifact 
   assert.equal(subject.state.pid, subject.process.pid)
   assert.equal(subject.runscArtifact.role, "runsc")
   assert.throws(() => validateGvisorTtlSubjectBinding({ ...subject, expectedPeerUid: "1001" }, requirement), /R3G-D subjectBindingIdentity mismatch/)
-  assert.throws(() => createGvisorTtlSubjectBinding({ binding: subject.binding, lineage: subject.lineage, state: subject.state, process: { ...subject.process, pid: 4243 }, runscArtifact: subject.runscArtifact, controlEndpoint: subject.controlEndpoint, expectedPeerUid: "1000", expectedPeerGid: "1000" }), /R3G-D subject canonical container\/process lineage mismatch/)
+  assert.throws(() => createGvisorTtlSubjectBinding({ binding: subject.binding, lineage: subject.lineage, state: subject.state, process: { ...subject.process, pid: 4243 }, runscArtifact: subject.runscArtifact, controlEndpoint: subject.controlEndpoint, expectedPeerUid: "1000", expectedPeerGid: "1000" }), /gVisor process observation identity mismatch/)
 })
 
 test("H4-R3G-D PREPARED intent and arm operation identity are deterministic and ttl-bound", () => {
