@@ -28,6 +28,7 @@ import {
   KDO_H4_R3F_LABELS,
   KDO_H4_R3F_PROVIDER_ID,
   createDockerControlPlaneBindingProvider,
+  createDockerSocketEndpointIdentity,
   type DockerControlPlaneBindingProvider,
   type DockerControlPlaneResolution,
   type DockerSocketEndpointIdentity,
@@ -68,6 +69,7 @@ const CONTAINER_ID = "1".repeat(64)
 const WORKSPACE_ID = "a".repeat(64)
 const EXECUTION_INTENT_ID = "b".repeat(64)
 const SOURCE_DIGEST = `sha256:${"2".repeat(64)}`
+const ROOTFS_DIFF_ID = `sha256:${"3".repeat(64)}`
 
 const PROTOCOL_FIXTURE = String.raw`#!/usr/bin/python3
 import hashlib
@@ -224,6 +226,11 @@ function listPath(requirement: SandboxExecutionRequirement): string {
   })
   return `/v${KDO_H4_R3F_DOCKER_API_VERSION}/containers/json?all=1&filters=${encodeURIComponent(filters)}`
 }
+function sourceInfoPath(): string { return `/v${KDO_H4_R3F_DOCKER_API_VERSION}/info` }
+function sourceImagePath(requirement: SandboxExecutionRequirement): string {
+  const sourceReference = `${requirement.workload.source.repository}@${requirement.workload.source.digest}`
+  return `/v${KDO_H4_R3F_DOCKER_API_VERSION}/images/${sourceReference}/json`
+}
 
 function dockerInspectValue(requirement: SandboxExecutionRequirement): Record<string, unknown> {
   return {
@@ -263,6 +270,23 @@ function dockerInspectValue(requirement: SandboxExecutionRequirement): Record<st
     },
   }
 }
+function dockerSystemInfoValue(): Record<string, unknown> {
+  return {
+    OSType: "linux",
+    Driver: "overlayfs",
+    DockerRootDir: "/var/lib/docker",
+    Containerd: {
+      Address: "/var/run/docker/containerd/containerd.sock",
+      Namespaces: { Containers: "moby" },
+    },
+  }
+}
+function dockerSourceImageValue(requirement: SandboxExecutionRequirement): Record<string, unknown> {
+  return {
+    Descriptor: { digest: requirement.workload.source.digest },
+    RootFS: { Type: "layers", Layers: [ROOTFS_DIFF_ID] },
+  }
+}
 
 type FakeDocker = {
   readonly socketPath: string
@@ -279,11 +303,25 @@ async function startFakeDocker(root: string, requirement: SandboxExecutionRequir
   const intervals = new Set<NodeJS.Timeout>()
   const expectedList = listPath(requirement)
   const expectedInspect = `/v1.48/containers/${CONTAINER_ID}/json?size=0`
+  const expectedInfo = sourceInfoPath()
+  const expectedSourceImage = sourceImagePath(requirement)
   const server: HttpServer = createHttpServer((request, response) => {
     const method = request.method ?? ""
     const url = request.url ?? ""
     requests.push(`${method} ${url}`)
     if (method !== "GET") { response.statusCode = 405; response.end(); return }
+    if (url === expectedInfo) {
+      response.statusCode = 200
+      response.setHeader("content-type", "application/json")
+      response.end(JSON.stringify(dockerSystemInfoValue()))
+      return
+    }
+    if (url === expectedSourceImage) {
+      response.statusCode = 200
+      response.setHeader("content-type", "application/json")
+      response.end(JSON.stringify(dockerSourceImageValue(requirement)))
+      return
+    }
     if (url === expectedList) {
       response.statusCode = 200
       response.setHeader("content-type", "application/json")
@@ -352,6 +390,27 @@ function fakeProvider(requirementIdentity: string, workloadIdentity: string): Do
     socketEndpoint: endpoint,
     requirementIdentity,
     workloadIdentity,
+    resolveDockerControlPlaneBinding: unavailable,
+    resolveContainerBinding: unavailableBinding,
+  })
+}
+async function forgedProviderForSocket(requirement: SandboxExecutionRequirement, socketPath: string): Promise<DockerControlPlaneBindingProvider> {
+  const stats = await stat(socketPath, { bigint: true })
+  const endpoint = createDockerSocketEndpointIdentity({
+    device: stats.dev.toString(),
+    inode: stats.ino.toString(),
+    uid: stats.uid.toString(),
+    gid: stats.gid.toString(),
+    mode: stats.mode.toString(),
+  })
+  const unavailable = async (): Promise<DockerControlPlaneResolution> => { throw new Error("forged provider resolution must never run") }
+  const unavailableBinding = async (): Promise<GvisorContainerBinding> => { throw new Error("forged provider binding must never run") }
+  return Object.freeze({
+    providerId: KDO_H4_R3F_PROVIDER_ID,
+    providerIdentity: "7".repeat(64),
+    socketEndpoint: endpoint,
+    requirementIdentity: requirement.requirementIdentity,
+    workloadIdentity: requirement.workload.workloadIdentity,
     resolveDockerControlPlaneBinding: unavailable,
     resolveContainerBinding: unavailableBinding,
   })
@@ -533,6 +592,8 @@ test("H4-R3G-E K2 gateway orders durable ARM -> reservation -> canonical R3F Doc
     assert.ok(reserveIndex < captureIndex, "durable output reservation must precede any Docker attach capture")
     assert.ok(terminalIndex >= 0 && terminalIndex < positiveIndex, "positive output evidence must follow durable terminal lifecycle evidence")
     assert.equal(fixture.docker.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, 1)
+    assert.equal(fixture.docker.requests.includes(`GET ${sourceInfoPath()}`), true)
+    assert.equal(fixture.docker.requests.includes(`GET ${sourceImagePath(fixture.requirement)}`), true)
 
     await assert.rejects(fixture.createGateway(outputRuntime).enforceGvisorOutputBound(fixture.requirement), /already exists|cannot be replenished/)
     assert.equal(fixture.docker.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, 1, "fresh gateway transport must not bypass durable reservation replay")
@@ -617,6 +678,35 @@ test("H4-R3G-E rejects an alternate Unix socket path before subject resolution, 
     assert.equal(reserved, false)
     assert.equal(fixture.events.includes("ttl-prepared"), false, "socket authority mismatch must fail before R3G-D subject/lifecycle work")
     assert.equal(attackerDocker.requests.length, 0, "alternate socket must receive no Docker request or attach")
+  } finally {
+    await attackerDocker?.close()
+    await rm(attackerRoot, { recursive: true, force: true })
+    await fixture.cleanup()
+  }
+})
+
+test("H4-R3G-E rejects a structural forged provider even when its Unix socket endpoint matches", { skip: process.platform !== "linux", timeout: 5_000 }, async () => {
+  const fixture = await createRuntimeFixture()
+  const attackerRoot = await mkdtemp(join(tmpdir(), "kodac-r3ge-forged-provider-"))
+  const attackerEvents: string[] = []
+  let attackerDocker: FakeDocker | undefined
+  let reserved = false
+  try {
+    attackerDocker = await startFakeDocker(attackerRoot, fixture.requirement, attackerEvents)
+    const forgedProvider = await forgedProviderForSocket(fixture.requirement, attackerDocker.socketPath)
+    const outputRuntime: GvisorOutputRuntimeConfig = {
+      version: KDO_H4_R3G_E_RUNTIME_VERSION,
+      reserveOutputOperation() { reserved = true; throw new Error("must not reserve") },
+      commitOutputEvidence() { throw new Error("must not commit positive evidence") },
+      commitFailureEvidence() { throw new Error("must not commit failure before subject") },
+    }
+    await assert.rejects(
+      fixture.createGateway(outputRuntime, { dockerControlPlane: forgedProvider, dockerSocketPath: attackerDocker.socketPath }).enforceGvisorOutputBound(fixture.requirement),
+      /requires a canonical R3F Docker binding resolver/,
+    )
+    assert.equal(reserved, false)
+    assert.equal(fixture.events.includes("ttl-prepared"), false, "resolver provenance failure must precede R3G-D lifecycle work")
+    assert.equal(attackerDocker.requests.length, 0, "forged provider socket must receive no Docker request or attach")
   } finally {
     await attackerDocker?.close()
     await rm(attackerRoot, { recursive: true, force: true })
