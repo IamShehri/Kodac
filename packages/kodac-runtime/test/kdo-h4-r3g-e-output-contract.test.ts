@@ -75,7 +75,17 @@ function aggregationRecord(result: ReturnType<GvisorDockerMultiplexAccumulator["
   }
 }
 
-test("R3G-E contract pins capability and Moby/API source identities", () => {
+function expectOutputLimitExceeded(operation: () => void): GvisorOutputLimitExceededError {
+  try {
+    operation()
+  } catch (error) {
+    assert.ok(error instanceof GvisorOutputLimitExceededError)
+    return error
+  }
+  assert.fail("expected GvisorOutputLimitExceededError")
+}
+
+test("R3G-E pins the narrow output capability and Moby/API source identities", () => {
   assert.equal(KDO_H4_R3G_E_CAPABILITY, "runtime.enforce.gvisor.output-bound")
   assert.equal(KDO_H4_R3G_E_DOCKER_API_VERSION, "1.48")
   assert.equal(KDO_H4_R3G_E_MOBY_SOURCE_COMMIT, "d430e1c2c7e53611d16d19d2ffb8c6fecae5dae3")
@@ -83,7 +93,7 @@ test("R3G-E contract pins capability and Moby/API source identities", () => {
   assert.match(createGvisorOutputObserverImplementationIdentity(), /^[0-9a-f]{64}$/)
 })
 
-test("R3G-E counts one raw aggregate budget across fragmented interleaved stdout and stderr", () => {
+test("R3G-E parses fragmented interleaved frames and uses one stdout+stderr byte budget", () => {
   const accumulator = new GvisorDockerMultiplexAccumulator(6)
   const encoded = Buffer.concat([frame(1, "ab"), frame(2, "c"), frame(1, "def")])
   const fragmentSizes = [1, 2, 7, 3, 5]
@@ -96,71 +106,56 @@ test("R3G-E counts one raw aggregate budget across fragmented interleaved stdout
     fragment += 1
   }
   const result = accumulator.finish()
-  assert.equal(result.acceptedStdoutBytes, 5)
-  assert.equal(result.acceptedStderrBytes, 1)
-  assert.equal(result.acceptedAggregateBytes, 6)
+  assert.deepEqual(
+    [result.acceptedStdoutBytes, result.acceptedStderrBytes, result.acceptedAggregateBytes],
+    [5, 1, 6],
+  )
   assert.equal(result.stdout.toString("utf8"), "abdef")
   assert.equal(result.stderr.toString("utf8"), "c")
 })
 
-test("R3G-E exact aggregate bound is inclusive and Docker frame headers do not count", () => {
+test("R3G-E bound is inclusive and transport headers do not count as workload bytes", () => {
   const accumulator = new GvisorDockerMultiplexAccumulator(6)
-  const encoded = Buffer.concat([frame(1, "ab"), frame(2, "cdef")])
-  for (let offset = 0; offset < encoded.byteLength; offset += 3) accumulator.push(encoded.subarray(offset, Math.min(offset + 3, encoded.byteLength)))
+  accumulator.push(Buffer.concat([frame(1, "ab"), frame(2, "cdef")]))
   const result = accumulator.finish()
-  assert.equal(result.acceptedStdoutBytes, 2)
-  assert.equal(result.acceptedStderrBytes, 4)
   assert.equal(result.acceptedAggregateBytes, 6)
-  assert.equal(result.stdout.toString("utf8"), "ab")
-  assert.equal(result.stderr.toString("utf8"), "cdef")
+  assert.ok(Buffer.concat([frame(1, "ab"), frame(2, "cdef")]).byteLength > 6)
 })
 
-test("R3G-E rejects N+1 before accepting the offending frame payload", () => {
+test("R3G-E rejects N+1 at the offending frame header and never grants per-stream allowances", () => {
   const accumulator = new GvisorDockerMultiplexAccumulator(4)
   accumulator.push(frame(1, "abcd"))
-  const next = frame(2, "x")
-  const error = assert.throws(() => accumulator.push(next), GvisorOutputLimitExceededError)
-  assert.equal(error.limitBytes, 4)
-  assert.equal(error.acceptedBytes, 4)
-  assert.equal(error.rejectedFrameBytes, 1)
+  const error = expectOutputLimitExceeded(() => accumulator.push(frame(2, "x")))
+  assert.deepEqual([error.limitBytes, error.acceptedBytes, error.rejectedFrameBytes], [4, 4, 1])
   assert.throws(() => accumulator.finish(), /already terminal/)
+
+  const split = new GvisorDockerMultiplexAccumulator(4)
+  split.push(frame(1, "abc"))
+  expectOutputLimitExceeded(() => split.push(frame(2, "de")))
 })
 
-test("R3G-E does not grant independent maxOutputBytes allowances to stdout and stderr", () => {
-  const accumulator = new GvisorDockerMultiplexAccumulator(4)
-  accumulator.push(frame(1, "abc"))
-  assert.throws(() => accumulator.push(frame(2, "de")), GvisorOutputLimitExceededError)
-})
-
-test("R3G-E counts UTF-8 payload bytes before text decoding", () => {
+test("R3G-E counts raw UTF-8 bytes and zero-length frames never replenish budget", () => {
   const payload = Buffer.from("💥", "utf8")
   assert.equal(payload.byteLength, 4)
-  const accumulator = new GvisorDockerMultiplexAccumulator(4)
-  accumulator.push(frame(1, payload))
-  assert.equal(accumulator.finish().acceptedAggregateBytes, 4)
+  const utf8 = new GvisorDockerMultiplexAccumulator(4)
+  utf8.push(frame(1, payload))
+  assert.equal(utf8.finish().acceptedAggregateBytes, 4)
+
+  const zero = new GvisorDockerMultiplexAccumulator(2)
+  zero.push(Buffer.concat([frame(1, "a"), frame(2, Buffer.alloc(0)), frame(2, "b")]))
+  assert.equal(zero.finish().acceptedAggregateBytes, 2)
+  const overflow = new GvisorDockerMultiplexAccumulator(1)
+  expectOutputLimitExceeded(() => overflow.push(Buffer.concat([frame(1, Buffer.alloc(0)), frame(1, "ab")])))
 })
 
-test("R3G-E zero-length frames do not reset or replenish the aggregate budget", () => {
-  const accumulator = new GvisorDockerMultiplexAccumulator(2)
-  accumulator.push(Buffer.concat([frame(1, "a"), frame(2, Buffer.alloc(0)), frame(2, "b")]))
-  const result = accumulator.finish()
-  assert.equal(result.acceptedAggregateBytes, 2)
-  assert.throws(() => {
-    const next = new GvisorDockerMultiplexAccumulator(1)
-    next.push(Buffer.concat([frame(1, Buffer.alloc(0)), frame(1, "ab")]))
-  }, GvisorOutputLimitExceededError)
-})
-
-test("R3G-E rejects stdin/unknown stream types and nonzero reserved header bytes", () => {
+test("R3G-E rejects untrusted stream types, reserved bits, and incomplete framing", () => {
   for (const stream of [0, 3, 255]) {
     const header = Buffer.alloc(8); header[0] = stream
     assert.throws(() => new GvisorDockerMultiplexAccumulator(8).push(header), /stream type/)
   }
   const reserved = Buffer.alloc(8); reserved[0] = 1; reserved[2] = 1
   assert.throws(() => new GvisorDockerMultiplexAccumulator(8).push(reserved), /reserved header bytes/)
-})
 
-test("R3G-E rejects truncated headers and payloads at terminalization", () => {
   const shortHeader = new GvisorDockerMultiplexAccumulator(8)
   shortHeader.push(Buffer.from([1, 0, 0, 0]))
   assert.throws(() => shortHeader.finish(), /truncated 8-byte header/)
@@ -171,33 +166,21 @@ test("R3G-E rejects truncated headers and payloads at terminalization", () => {
   assert.throws(() => shortPayload.finish(), /truncated payload/)
 })
 
-test("R3G-E rejects oversized declared frame lengths without payload-sized allocation", () => {
+test("R3G-E rejects oversized declared frames before payload-sized allocation", () => {
   const header = Buffer.alloc(8); header[0] = 1; header.writeUInt32BE(1024, 4)
-  const accumulator = new GvisorDockerMultiplexAccumulator(16)
-  const error = assert.throws(() => accumulator.push(header), GvisorOutputLimitExceededError)
-  assert.equal(error.acceptedBytes, 0)
-  assert.equal(error.rejectedFrameBytes, 1024)
+  const error = expectOutputLimitExceeded(() => new GvisorDockerMultiplexAccumulator(16).push(header))
+  assert.deepEqual([error.acceptedBytes, error.rejectedFrameBytes], [0, 1024])
 })
 
-test("R3G-E aggregate transcript digest distinguishes stream and frame boundaries", () => {
-  const first = new GvisorDockerMultiplexAccumulator(8)
-  first.push(Buffer.concat([frame(1, "ab"), frame(2, "c")]))
-  const a = first.finish()
-
-  const second = new GvisorDockerMultiplexAccumulator(8)
-  second.push(Buffer.concat([frame(1, "a"), frame(2, "bc")]))
-  const b = second.finish()
-
-  const third = new GvisorDockerMultiplexAccumulator(8)
-  third.push(frame(1, "abc"))
-  const c = third.finish()
-
-  assert.notEqual(a.aggregateTranscriptDigest, b.aggregateTranscriptDigest)
-  assert.notEqual(a.aggregateTranscriptDigest, c.aggregateTranscriptDigest)
-  assert.notEqual(b.aggregateTranscriptDigest, c.aggregateTranscriptDigest)
+test("R3G-E transcript digest distinguishes stream and frame boundaries", () => {
+  const first = new GvisorDockerMultiplexAccumulator(8); first.push(Buffer.concat([frame(1, "ab"), frame(2, "c")]))
+  const second = new GvisorDockerMultiplexAccumulator(8); second.push(Buffer.concat([frame(1, "a"), frame(2, "bc")]))
+  const third = new GvisorDockerMultiplexAccumulator(8); third.push(frame(1, "abc"))
+  const digests = [first.finish(), second.finish(), third.finish()].map((value) => value.aggregateTranscriptDigest)
+  assert.equal(new Set(digests).size, 3)
 })
 
-test("R3G-E positive E3 record is deterministic, requirement-bound, and not an R3B final record", () => {
+test("R3G-E E3 record is deterministic, requirement-bound, and structurally distinct from final R3B evidence", () => {
   const requirement = fixtureRequirement(5)
   const outputChannelIdentity = createGvisorOutputChannelIdentity({
     executionAttemptIdentity: EXECUTION_ATTEMPT_IDENTITY,
@@ -210,7 +193,6 @@ test("R3G-E positive E3 record is deterministic, requirement-bound, and not an R
   })
   const accumulator = new GvisorDockerMultiplexAccumulator(5)
   accumulator.push(Buffer.concat([frame(1, "abc"), frame(2, "de")]))
-  const result = accumulator.finish()
   const record = createGvisorOutputBoundRecord({
     executionAttemptIdentity: EXECUTION_ATTEMPT_IDENTITY,
     requirement,
@@ -220,7 +202,7 @@ test("R3G-E positive E3 record is deterministic, requirement-bound, and not an R
     providerIdentity: PROVIDER_IDENTITY,
     socketEndpointIdentity: SOCKET_ENDPOINT_IDENTITY,
     outputChannelIdentity,
-    aggregation: aggregationRecord(result),
+    aggregation: aggregationRecord(accumulator.finish()),
     terminalEvidenceIdentity: TERMINAL_EVIDENCE_IDENTITY,
   })
   assert.equal(record.version, KDO_H4_R3G_E_OUTPUT_VERSION)
@@ -234,8 +216,6 @@ test("R3G-E positive E3 record is deterministic, requirement-bound, and not an R
 
   const commit = createGvisorOutputBoundCommit(record)
   assert.equal(validateGvisorOutputBoundCommit(commit, record), commit)
-
-  const forged = { ...record, acceptedAggregateBytes: 4 }
-  assert.throws(() => validateGvisorOutputBoundRecord(forged, requirement), /must equal stdout\+stderr/)
+  assert.throws(() => validateGvisorOutputBoundRecord({ ...record, acceptedAggregateBytes: 4 }, requirement), /must equal stdout\+stderr/)
   assert.throws(() => validateGvisorOutputBoundRecord(record, fixtureRequirement(6)), /expected requirement|does not match/)
 })
