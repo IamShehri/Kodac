@@ -624,7 +624,7 @@ static int write_all(int fd, const char *buffer, size_t length) {
   size_t offset = 0;
   while (offset < length) {
     ssize_t count;
-    do { count = write(fd, buffer + offset, length - offset); } while (count < 0 && errno == EINTR);
+    do { count = send(fd, buffer + offset, length - offset, MSG_NOSIGNAL); } while (count < 0 && errno == EINTR);
     if (count <= 0) return -1;
     offset += (size_t)count;
   }
@@ -776,9 +776,9 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   lease->deadline_boottime_ns = lease->lease_start_boottime_ns + request->ttl_ms * 1000000ULL;
   if (durable_create_claim(request, registry, lease) != 0) return fail("cannot durably claim watchdog owner/fence generation");
   if (durable_create_lease(request, registry, lease) != 0) return fail("cannot durably commit watchdog lease registry entry");
+  if (send_rpc(subject->wait_fd, "containerManager.Wait", request->container_id, 0) != 0) return indeterminate("retained Wait request failed before positive arm acknowledgement");
   if (emit_arm_ack(request, subject, lease) != 0) return fail("cannot emit physical arm acknowledgement");
 
-  if (send_rpc(subject->wait_fd, "containerManager.Wait", request->container_id, 0) != 0) return indeterminate("retained Wait request failed after arm");
   int timer_fd = create_absolute_timer(lease->deadline_boottime_ns);
   if (timer_fd < 0) return indeterminate("cannot arm CLOCK_BOOTTIME timerfd after durable lease");
   struct pollfd events[2] = {

@@ -82,6 +82,14 @@ function hash(prefix: string, domain: string, value: unknown): string {
 }
 function r3gdHash(domain: string, value: unknown): string { return hash("KODAC-H4-R3G-D", domain, value) }
 function r3gcHash(domain: string, value: unknown): string { return hash("KODAC-H4-R3G-C", domain, value) }
+function watchdogHash(domain: string, parts: readonly string[]): string {
+  const digest = createHash("sha256")
+  for (const value of ["KODAC-H4-R3G-D-WATCHDOG", domain, "V1", ...parts]) {
+    digest.update(Buffer.from(value, "utf8"))
+    digest.update(Buffer.of(0))
+  }
+  return digest.digest("hex")
+}
 
 function fixtureRequirement(ttlMs = 60_000): SandboxExecutionRequirement {
   const confinement = createConfinementRequest({ mode: "read-only", workspaceIdentity: WORKSPACE_IDENTITY, executionIntentIdentity: EXECUTION_INTENT_IDENTITY, scope: { readPaths: ["src"], writePaths: [] } })
@@ -178,6 +186,8 @@ function fixtureArm() {
 
 function fixtureTerminal(arm: ReturnType<typeof createGvisorTtlArmRecord>, outcome: "natural-exit" | "ttl-expired"): GvisorTtlTerminalRecord {
   const natural = outcome === "natural-exit"
+  const retainedPidfdProcessIdentity = watchdogHash("PIDFD_PROCESS", [String(arm.controlPeer.peerPid), arm.controlPeer.processStartTicks, arm.controlPeer.executableDevice, arm.controlPeer.executableInode, arm.controlPeer.executableSize, arm.runtimeInstanceIdentity])
+  const retainedRunscExecutableIdentity = watchdogHash("RUNSC_EXECUTABLE", [arm.verifiedRunscSha256, arm.controlPeer.executableDevice, arm.controlPeer.executableInode, arm.controlPeer.executableSize, arm.runscArtifactIdentity])
   const base = {
     version: KDO_H4_R3G_D_TERMINAL_RECORD_VERSION,
     evidenceClass: KDO_H4_R3G_D_TERMINAL_EVIDENCE_CLASS,
@@ -195,10 +205,10 @@ function fixtureTerminal(arm: ReturnType<typeof createGvisorTtlArmRecord>, outco
     peerPid: arm.controlPeer.peerPid,
     peerUid: arm.controlPeer.peerUid,
     peerGid: arm.controlPeer.peerGid,
-    retainedPidfdProcessIdentity: "8".repeat(64),
+    retainedPidfdProcessIdentity,
     runscArtifactIdentity: arm.runscArtifactIdentity,
     verifiedRunscSha256: arm.verifiedRunscSha256,
-    retainedRunscExecutableIdentity: "9".repeat(64),
+    retainedRunscExecutableIdentity,
     clockDomainIdentity: arm.clockDomainIdentity,
     linuxBootId: arm.linuxBootId,
     exitEventObservedBoottimeNs: natural ? arm.leaseStartBoottimeNs : null,
@@ -207,9 +217,31 @@ function fixtureTerminal(arm: ReturnType<typeof createGvisorTtlArmRecord>, outco
     liveAtExpiryProcessSetIdentity: natural ? null : "b".repeat(64),
     signalAcknowledgementIdentity: natural ? null : "c".repeat(64),
     terminationAcknowledgementIdentity: "d".repeat(64),
-    registryTerminalRecordIdentity: "e".repeat(64),
   } as const
-  return Object.freeze({ ...base, recordIdentity: r3gdHash("TERMINAL_RECORD", base) })
+  const registryTerminalRecordIdentity = watchdogHash("TERMINAL_REGISTRY", [
+    base.armOperationIdentity,
+    base.leaseIdentity,
+    base.runtimeInstanceIdentity,
+    base.terminalOutcome,
+    base.ownerInstanceIdentity,
+    base.terminalFenceToken,
+    base.claimRecordIdentity,
+    base.controlPeerBindingIdentity,
+    base.retainedPidfdProcessIdentity,
+    base.runscArtifactIdentity,
+    base.verifiedRunscSha256,
+    base.retainedRunscExecutableIdentity,
+    base.clockDomainIdentity,
+    base.linuxBootId,
+    base.exitEventObservedBoottimeNs ?? "-",
+    base.liveAtExpiryObservedBoottimeNs ?? "-",
+    base.liveAtExpiryProbeIdentity ?? "-",
+    base.liveAtExpiryProcessSetIdentity ?? "-",
+    base.signalAcknowledgementIdentity ?? "-",
+    base.terminationAcknowledgementIdentity,
+  ])
+  const withRegistry = Object.freeze({ ...base, registryTerminalRecordIdentity })
+  return Object.freeze({ ...withRegistry, recordIdentity: r3gdHash("TERMINAL_RECORD", withRegistry) })
 }
 
 test("H4-R3G-D constants keep TTL enforcement narrow and gVisor-pinned", () => {

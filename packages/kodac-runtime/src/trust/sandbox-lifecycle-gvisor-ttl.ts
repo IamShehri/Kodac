@@ -233,6 +233,8 @@ const FULL_CONTAINER_ID = /^[0-9a-f]{64}$/
 const UINT = /^(?:0|[1-9][0-9]*)$/
 const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const MAX_UINT64 = 18_446_744_073_709_551_615n
+const WATCHDOG_HASH_PREFIX = "KODAC-H4-R3G-D-WATCHDOG"
+const WATCHDOG_HASH_VERSION = "V1"
 
 function hash(domain: string, value: unknown): string {
   if (!/^[A-Z0-9_]+$/.test(domain)) throw new TypeError("R3G-D hash domain must be canonical uppercase ASCII")
@@ -241,6 +243,17 @@ function hash(domain: string, value: unknown): string {
     .update(Buffer.from(JSON.stringify(value), "utf8"))
     .digest("hex")
 }
+function watchdogProtocolIdentity(domain: string, parts: readonly string[]): string {
+  if (!/^[A-Z0-9_]+$/.test(domain)) throw new TypeError("R3G-D watchdog hash domain must be canonical uppercase ASCII")
+  const digest = createHash("sha256")
+  for (const component of [WATCHDOG_HASH_PREFIX, domain, WATCHDOG_HASH_VERSION, ...parts]) {
+    if (component.length === 0 || component.includes("\0")) throw new TypeError("R3G-D watchdog hash components must be non-empty and NUL-free")
+    digest.update(Buffer.from(component, "utf8"))
+    digest.update(Buffer.of(0))
+  }
+  return digest.digest("hex")
+}
+function watchdogNullable(value: string | null): string { return value === null ? "-" : value }
 function byteLength(value: string): number { return Buffer.byteLength(value, "utf8") }
 function asPlainRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value) || utilTypes.isProxy(value)) throw new TypeError(`${label} must be a non-proxy plain object`)
@@ -567,6 +580,10 @@ export function validateGvisorTtlArmRecord(value: unknown): GvisorTtlArmRecord {
   const expectedPeerIdentity = hash("CONTROL_PEER", [controlPeer.runtimeInstanceIdentity, controlPeer.peerPid, controlPeer.peerUid, controlPeer.peerGid, controlPeer.socketDevice, controlPeer.socketInode, controlPeer.processStartTicks, controlPeer.executableDevice, controlPeer.executableInode, controlPeer.executableSize, controlPeer.runscArtifactIdentity, controlPeer.verifiedRunscSha256, KDO_H4_R3G_D_WATCHDOG_PROTOCOL_VERSION])
   if (controlPeer.controlPeerBindingIdentity !== expectedPeerIdentity) throw new TypeError("R3G-D arm controlPeerBindingIdentity mismatch")
   const base = Object.freeze({ version: KDO_H4_R3G_D_ARM_RECORD_VERSION, evidenceClass: KDO_H4_R3G_D_ARM_EVIDENCE_CLASS, armOperationIdentity: identity(record.armOperationIdentity, "armOperationIdentity"), canonicalArmPayloadDigest: identity(record.canonicalArmPayloadDigest, "canonicalArmPayloadDigest"), leaseIdentity: identity(record.leaseIdentity, "leaseIdentity"), executionAttemptIdentity: identity(record.executionAttemptIdentity, "executionAttemptIdentity"), requirementIdentity: identity(record.requirementIdentity, "requirementIdentity"), workloadIdentity: identity(record.workloadIdentity, "workloadIdentity"), containerBindingIdentity: identity(record.containerBindingIdentity, "containerBindingIdentity"), containerId: fullContainerId(record.containerId), runtimeInstanceIdentity: identity(record.runtimeInstanceIdentity, "runtimeInstanceIdentity"), ttlMs: positiveTtl(record.ttlMs), watchdogImplementationIdentity: identity(record.watchdogImplementationIdentity, "watchdogImplementationIdentity"), controlPeer, controlPeerBindingIdentity: identity(record.controlPeerBindingIdentity, "controlPeerBindingIdentity"), runscArtifactIdentity: identity(record.runscArtifactIdentity, "runscArtifactIdentity"), verifiedRunscSha256: identity(record.verifiedRunscSha256, "verifiedRunscSha256"), watchdogRegistryRecordIdentity: identity(record.watchdogRegistryRecordIdentity, "watchdogRegistryRecordIdentity"), clockDomainIdentity: identity(record.clockDomainIdentity, "clockDomainIdentity"), linuxBootId: bootId(record.linuxBootId), leaseStartBoottimeNs: canonicalUint(record.leaseStartBoottimeNs, "leaseStartBoottimeNs"), deadlineBoottimeNs: canonicalUint(record.deadlineBoottimeNs, "deadlineBoottimeNs"), ownerInstanceIdentity: identity(record.ownerInstanceIdentity, "ownerInstanceIdentity"), terminalFenceToken: canonicalUint(record.terminalFenceToken, "terminalFenceToken", false), claimRecordIdentity: identity(record.claimRecordIdentity, "claimRecordIdentity"), armAcknowledgementIdentity: identity(record.armAcknowledgementIdentity, "armAcknowledgementIdentity") })
+  const armPayload = Object.freeze({ executionAttemptIdentity: base.executionAttemptIdentity, requirementIdentity: base.requirementIdentity, workloadIdentity: base.workloadIdentity, containerBindingIdentity: base.containerBindingIdentity, containerId: base.containerId, runtimeInstanceIdentity: base.runtimeInstanceIdentity, ttlMs: base.ttlMs, watchdogImplementationIdentity: base.watchdogImplementationIdentity })
+  const expectedCanonicalArmPayloadDigest = hash("ARM_PAYLOAD", armPayload)
+  const expectedArmOperationIdentity = hash("ARM_OPERATION", armPayload)
+  if (base.canonicalArmPayloadDigest !== expectedCanonicalArmPayloadDigest || base.armOperationIdentity !== expectedArmOperationIdentity) throw new TypeError("R3G-D arm record semantic arm identity mismatch")
   if (createGvisorTtlClockDomainIdentity(base.linuxBootId) !== base.clockDomainIdentity || BigInt(base.deadlineBoottimeNs) - BigInt(base.leaseStartBoottimeNs) !== BigInt(base.ttlMs) * 1_000_000n) throw new TypeError("R3G-D arm record clock/deadline mismatch")
   if (base.controlPeerBindingIdentity !== controlPeer.controlPeerBindingIdentity || base.runtimeInstanceIdentity !== controlPeer.runtimeInstanceIdentity || base.runscArtifactIdentity !== controlPeer.runscArtifactIdentity || base.verifiedRunscSha256 !== controlPeer.verifiedRunscSha256) throw new TypeError("R3G-D arm record control-peer/artifact mismatch")
   const expected = hash("ARM_RECORD", base)
@@ -575,6 +592,7 @@ export function validateGvisorTtlArmRecord(value: unknown): GvisorTtlArmRecord {
 }
 
 export function validateGvisorTtlTerminalRecord(value: unknown, armValue?: GvisorTtlArmRecord): GvisorTtlTerminalRecord {
+  if (armValue === undefined) throw new TypeError("R3G-D terminal record requires an authoritative arm record")
   const record = asPlainRecord(value, "R3G-D terminal record")
   exactKeys(record, ["version", "evidenceClass", "armOperationIdentity", "leaseIdentity", "armRecordIdentity", "runtimeInstanceIdentity", "terminalOutcome", "ownerInstanceIdentity", "terminalFenceToken", "claimRecordIdentity", "controlPeerBindingIdentity", "socketDevice", "socketInode", "peerPid", "peerUid", "peerGid", "retainedPidfdProcessIdentity", "runscArtifactIdentity", "verifiedRunscSha256", "retainedRunscExecutableIdentity", "clockDomainIdentity", "linuxBootId", "exitEventObservedBoottimeNs", "liveAtExpiryProbeIdentity", "liveAtExpiryObservedBoottimeNs", "liveAtExpiryProcessSetIdentity", "signalAcknowledgementIdentity", "terminationAcknowledgementIdentity", "registryTerminalRecordIdentity", "recordIdentity"], "R3G-D terminal record")
   if (record.version !== KDO_H4_R3G_D_TERMINAL_RECORD_VERSION || record.evidenceClass !== KDO_H4_R3G_D_TERMINAL_EVIDENCE_CLASS) throw new TypeError("R3G-D terminal record version/evidence class mismatch")
@@ -587,17 +605,42 @@ export function validateGvisorTtlTerminalRecord(value: unknown, armValue?: Gviso
   if (base.terminalOutcome === "ttl-expired") {
     if (base.exitEventObservedBoottimeNs !== null || base.liveAtExpiryProbeIdentity === null || base.liveAtExpiryObservedBoottimeNs === null || base.liveAtExpiryProcessSetIdentity === null || base.signalAcknowledgementIdentity === null) throw new TypeError("R3G-D ttl-expired terminal record is missing required live-at-expiry/signal fields")
   }
-  if (armValue !== undefined) {
-    const arm = validateGvisorTtlArmRecord(armValue)
-    if (base.armOperationIdentity !== arm.armOperationIdentity || base.leaseIdentity !== arm.leaseIdentity || base.armRecordIdentity !== arm.recordIdentity || base.runtimeInstanceIdentity !== arm.runtimeInstanceIdentity || base.controlPeerBindingIdentity !== arm.controlPeerBindingIdentity || base.runscArtifactIdentity !== arm.runscArtifactIdentity || base.verifiedRunscSha256 !== arm.verifiedRunscSha256 || base.clockDomainIdentity !== arm.clockDomainIdentity || base.linuxBootId !== arm.linuxBootId) throw new TypeError("R3G-D terminal record does not match authoritative arm record")
-    if (base.socketDevice !== arm.controlPeer.socketDevice || base.socketInode !== arm.controlPeer.socketInode || base.peerPid !== arm.controlPeer.peerPid || base.peerUid !== arm.controlPeer.peerUid || base.peerGid !== arm.controlPeer.peerGid) throw new TypeError("R3G-D terminal control peer does not match authoritative arm peer")
-    if (BigInt(base.terminalFenceToken) < BigInt(arm.terminalFenceToken)) throw new TypeError("R3G-D terminal fence token is stale")
-    if (base.terminalOutcome === "natural-exit") {
-      const event = BigInt(base.exitEventObservedBoottimeNs as string)
-      if (event < BigInt(arm.leaseStartBoottimeNs) || event >= BigInt(arm.deadlineBoottimeNs)) throw new TypeError("R3G-D natural-exit winner must be observed during the lease")
-    }
-    if (base.terminalOutcome === "ttl-expired" && BigInt(base.liveAtExpiryObservedBoottimeNs as string) < BigInt(arm.deadlineBoottimeNs)) throw new TypeError("R3G-D expiry liveness must be observed at/after deadline")
+  const arm = validateGvisorTtlArmRecord(armValue)
+  if (base.armOperationIdentity !== arm.armOperationIdentity || base.leaseIdentity !== arm.leaseIdentity || base.armRecordIdentity !== arm.recordIdentity || base.runtimeInstanceIdentity !== arm.runtimeInstanceIdentity || base.controlPeerBindingIdentity !== arm.controlPeerBindingIdentity || base.runscArtifactIdentity !== arm.runscArtifactIdentity || base.verifiedRunscSha256 !== arm.verifiedRunscSha256 || base.clockDomainIdentity !== arm.clockDomainIdentity || base.linuxBootId !== arm.linuxBootId) throw new TypeError("R3G-D terminal record does not match authoritative arm record")
+  if (base.socketDevice !== arm.controlPeer.socketDevice || base.socketInode !== arm.controlPeer.socketInode || base.peerPid !== arm.controlPeer.peerPid || base.peerUid !== arm.controlPeer.peerUid || base.peerGid !== arm.controlPeer.peerGid) throw new TypeError("R3G-D terminal control peer does not match authoritative arm peer")
+  if (BigInt(base.terminalFenceToken) < BigInt(arm.terminalFenceToken)) throw new TypeError("R3G-D terminal fence token is stale")
+  if (base.terminalOutcome === "natural-exit") {
+    const event = BigInt(base.exitEventObservedBoottimeNs as string)
+    if (event < BigInt(arm.leaseStartBoottimeNs) || event >= BigInt(arm.deadlineBoottimeNs)) throw new TypeError("R3G-D natural-exit winner must be observed during the lease")
   }
+  if (base.terminalOutcome === "ttl-expired" && BigInt(base.liveAtExpiryObservedBoottimeNs as string) < BigInt(arm.deadlineBoottimeNs)) throw new TypeError("R3G-D expiry liveness must be observed at/after deadline")
+  const expectedRetainedPidfdProcessIdentity = watchdogProtocolIdentity("PIDFD_PROCESS", [String(arm.controlPeer.peerPid), arm.controlPeer.processStartTicks, arm.controlPeer.executableDevice, arm.controlPeer.executableInode, arm.controlPeer.executableSize, arm.runtimeInstanceIdentity])
+  if (base.retainedPidfdProcessIdentity !== expectedRetainedPidfdProcessIdentity) throw new TypeError("R3G-D terminal retained pidfd process identity mismatch")
+  const expectedRetainedRunscExecutableIdentity = watchdogProtocolIdentity("RUNSC_EXECUTABLE", [arm.verifiedRunscSha256, arm.controlPeer.executableDevice, arm.controlPeer.executableInode, arm.controlPeer.executableSize, arm.runscArtifactIdentity])
+  if (base.retainedRunscExecutableIdentity !== expectedRetainedRunscExecutableIdentity) throw new TypeError("R3G-D terminal retained runsc executable identity mismatch")
+  const expectedRegistryTerminalRecordIdentity = watchdogProtocolIdentity("TERMINAL_REGISTRY", [
+    arm.armOperationIdentity,
+    arm.leaseIdentity,
+    arm.runtimeInstanceIdentity,
+    base.terminalOutcome,
+    base.ownerInstanceIdentity,
+    base.terminalFenceToken,
+    base.claimRecordIdentity,
+    arm.controlPeerBindingIdentity,
+    expectedRetainedPidfdProcessIdentity,
+    arm.runscArtifactIdentity,
+    arm.verifiedRunscSha256,
+    expectedRetainedRunscExecutableIdentity,
+    arm.clockDomainIdentity,
+    arm.linuxBootId,
+    watchdogNullable(base.exitEventObservedBoottimeNs),
+    watchdogNullable(base.liveAtExpiryObservedBoottimeNs),
+    watchdogNullable(base.liveAtExpiryProbeIdentity),
+    watchdogNullable(base.liveAtExpiryProcessSetIdentity),
+    watchdogNullable(base.signalAcknowledgementIdentity),
+    base.terminationAcknowledgementIdentity,
+  ])
+  if (base.registryTerminalRecordIdentity !== expectedRegistryTerminalRecordIdentity) throw new TypeError("R3G-D terminal registry identity mismatch")
   const expected = hash("TERMINAL_RECORD", base)
   if (identity(record.recordIdentity, "recordIdentity") !== expected) throw new TypeError("R3G-D terminal record identity mismatch")
   return Object.freeze({ ...base, recordIdentity: expected })
