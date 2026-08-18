@@ -794,3 +794,53 @@ test("H4-R3G-E durable positive commit has no abort microtask gap before mutatio
     assert.equal(result.record.acceptedAggregateBytes, 5)
   } finally { await fixture.cleanup() }
 })
+
+test("H4-R3G-E caller abort while positive durable commit is pending prevents positive E3 persistence", { skip: process.platform !== "linux", timeout: 5_000 }, async () => {
+  const fixture = await createRuntimeFixture()
+  const controller = new AbortController()
+  const reservations = new Map<string, GvisorOutputPreparedOperation>()
+  let resolvePositiveStarted!: () => void
+  const positiveStarted = new Promise<void>((resolve) => { resolvePositiveStarted = resolve })
+  let positivePersisted = false
+  const baseRuntime = createOutputRuntime(fixture.events, reservations)
+  const outputRuntime: GvisorOutputRuntimeConfig = {
+    ...baseRuntime,
+    async commitOutputEvidence(record, commitOptions) {
+      fixture.events.push("output-positive-start")
+      resolvePositiveStarted()
+      const signal = commitOptions.signal
+      assert.ok(signal, "positive durable callback must receive caller abort signal")
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => signal.removeEventListener("abort", onAbort)
+        const onAbort = () => {
+          clearTimeout(timer)
+          cleanup()
+          fixture.events.push("output-positive-abort-fenced")
+          reject(new Error("R3G-E positive durable commit aborted before completion"))
+        }
+        const timer = setTimeout(() => {
+          cleanup()
+          if (signal.aborted) { reject(new Error("R3G-E positive durable commit observed late abort")); return }
+          positivePersisted = true
+          fixture.events.push("output-positive")
+          resolve()
+        }, 200)
+        signal.addEventListener("abort", onAbort, { once: true })
+        if (signal.aborted) onAbort()
+      })
+      return createGvisorOutputBoundCommit(record)
+    },
+  }
+
+  try {
+    const enforcement = fixture.createGateway(outputRuntime).enforceGvisorOutputBound(fixture.requirement, undefined, { signal: controller.signal })
+    await positiveStarted
+    controller.abort()
+    await assert.rejects(enforcement, /positive durable commit aborted before completion|aborted before durable completion/)
+    assert.equal(positivePersisted, false)
+    assert.equal(fixture.events.includes("output-positive"), false)
+    assert.equal(fixture.events.includes("output-positive-abort-fenced"), true)
+    await delay(250)
+    assert.equal(positivePersisted, false, "aborted positive durable callback must not persist E3 later")
+  } finally { await fixture.cleanup() }
+})
