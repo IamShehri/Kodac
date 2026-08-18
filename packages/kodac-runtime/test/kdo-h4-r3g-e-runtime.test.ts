@@ -1,17 +1,19 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
-import { createServer } from "node:net"
+import { createServer as createHttpServer, type Server as HttpServer } from "node:http"
+import { createServer as createNetServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { Duplex } from "node:stream"
 import test from "node:test"
 
 import { NodeWorkspaceFileSystem } from "../src/edit/filesystem.ts"
 import {
   GvisorOutputExecutionGateway,
   KDO_H4_R3G_E_ATTACH_MEDIA_TYPE,
-  KDO_H4_R3G_E_DOCKER_TRANSPORT_VERSION,
   KDO_H4_R3G_E_RUNTIME_VERSION,
+  createGvisorDockerOutputTransport,
   createGvisorOutputFailureCommit,
   createGvisorOutputReservation,
   type GvisorDockerOutputTransport,
@@ -21,8 +23,11 @@ import {
 } from "../src/execution/gateway-gvisor-output-runtime.ts"
 import { KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION } from "../src/execution/gateway-gvisor-ttl-recovery-runtime.ts"
 import { createConfinementRequest } from "../src/trust/confinement.ts"
-import { createSandboxExecutionRequirement } from "../src/trust/sandbox-backend-evidence.ts"
+import { createSandboxExecutionRequirement, type SandboxExecutionRequirement } from "../src/trust/sandbox-backend-evidence.ts"
 import {
+  KDO_H4_R3F_BINDING_VERSION,
+  KDO_H4_R3F_DOCKER_API_VERSION,
+  KDO_H4_R3F_LABELS,
   KDO_H4_R3F_PROVIDER_ID,
   type DockerControlPlaneBindingProvider,
   type DockerControlPlaneResolution,
@@ -41,7 +46,6 @@ import {
   createGvisorObserverArtifact,
   createGvisorRuntimeLineageRecord,
   type GvisorContainerBinding,
-  type GvisorContainerBindingRequest,
 } from "../src/trust/sandbox-observer-gvisor-runtime.ts"
 import {
   createGvisorObserverPlan,
@@ -50,12 +54,7 @@ import {
   parseGvisorStateOutput,
   parseGvisorStatsOutput,
 } from "../src/trust/sandbox-observer-gvisor.ts"
-import {
-  GvisorDockerMultiplexAccumulator,
-  createGvisorOutputBoundCommit,
-  createGvisorOutputChannelIdentity,
-  type GvisorOutputBoundRecord,
-} from "../src/trust/sandbox-output-gvisor.ts"
+import { createGvisorOutputBoundCommit, type GvisorOutputBoundRecord } from "../src/trust/sandbox-output-gvisor.ts"
 import {
   KDO_H4_R3A_NETWORK_MODE,
   createSandboxEntrypoint,
@@ -69,12 +68,12 @@ import { fixedPolicy } from "../src/trust/policy.ts"
 const CONTAINER_ID = "1".repeat(64)
 const WORKSPACE_ID = "a".repeat(64)
 const EXECUTION_INTENT_ID = "b".repeat(64)
-const PROVIDER_IDENTITY = "5".repeat(64)
-const SOCKET_ENDPOINT_IDENTITY = "6".repeat(64)
+const SOURCE_DIGEST = `sha256:${"2".repeat(64)}`
 
 const PROTOCOL_FIXTURE = String.raw`#!/usr/bin/python3
 import hashlib
 import sys
+import time
 
 argv = sys.argv[1:]
 expected = [
@@ -139,6 +138,10 @@ print(
     + f" owner-instance={owner} terminal-fence-token={fence} owner-updated-boottime-ns={owner_updated} claim-record={claim} physical-ack={physical_ack}",
     flush=True,
 )
+# Give the trusted Docker attach path time to establish and reach EOF before
+# lifecycle terminal evidence is emitted. If lifecycle wins, R3G-E now aborts
+# capture fail-closed instead of accepting late output.
+time.sleep(0.5)
 retained_pidfd = wd("PIDFD_PROCESS", [peer_pid, start_ticks, exe_dev, exe_ino, exe_size, runtime])
 retained_runsc = wd("RUNSC_EXECUTABLE", [runsc_sha, exe_dev, exe_ino, exe_size, runsc_artifact])
 exit_ns = str(int(lease_start) + 2)
@@ -178,11 +181,11 @@ function parseStartTicks(statText: string): bigint {
 async function sha256File(path: string): Promise<string> {
   return createHash("sha256").update(await readFile(path)).digest("hex")
 }
-async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+async function closeNetServer(server: ReturnType<typeof createNetServer>): Promise<void> {
   await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => error ? rejectPromise(error) : resolvePromise()))
 }
 
-function fixtureRequirement(ttlMs = 60_000, maxOutputBytes = 8) {
+function fixtureRequirement(ttlMs = 60_000, maxOutputBytes = 8): SandboxExecutionRequirement {
   const confinement = createConfinementRequest({
     mode: "read-only",
     workspaceIdentity: WORKSPACE_ID,
@@ -190,7 +193,7 @@ function fixtureRequirement(ttlMs = 60_000, maxOutputBytes = 8) {
     scope: { readPaths: ["src"], writePaths: [] },
   })
   const workload = createSandboxWorkloadRequest({
-    source: createSandboxOciImageSource({ repository: "ghcr.io/acme/r3ge-runtime-fixture", digest: `sha256:${"2".repeat(64)}` }),
+    source: createSandboxOciImageSource({ repository: "ghcr.io/acme/r3ge-runtime-fixture", digest: SOURCE_DIGEST }),
     entrypoint: createSandboxEntrypoint({ executable: "/usr/bin/node", args: ["--version"] }),
     resourcePolicy: createSandboxResourcePolicy({ cpuMillis: 1000, memoryBytes: 536_870_912, ttlMs, maxOutputBytes }),
     networkPolicy: createSandboxNetworkPolicy({ mode: KDO_H4_R3A_NETWORK_MODE }),
@@ -208,15 +211,127 @@ function frame(stream: 1 | 2, payload: string): Buffer {
   return Buffer.concat([header, body])
 }
 
-function fakeProvider(requirementIdentity: string, workloadIdentity: string): DockerControlPlaneBindingProvider {
-  const endpoint: DockerSocketEndpointIdentity = Object.freeze({
-    device: "1", inode: "2", uid: "0", gid: "0", mode: "49663", endpointIdentity: SOCKET_ENDPOINT_IDENTITY,
+function listPath(requirement: SandboxExecutionRequirement): string {
+  const filters = JSON.stringify({
+    label: [
+      `${KDO_H4_R3F_LABELS.bindingVersion}=${KDO_H4_R3F_BINDING_VERSION}`,
+      `${KDO_H4_R3F_LABELS.requirementIdentity}=${requirement.requirementIdentity}`,
+      `${KDO_H4_R3F_LABELS.workloadIdentity}=${requirement.workload.workloadIdentity}`,
+    ],
+    status: ["running"],
   })
+  return `/v${KDO_H4_R3F_DOCKER_API_VERSION}/containers/json?all=1&filters=${encodeURIComponent(filters)}`
+}
+
+function dockerInspectValue(requirement: SandboxExecutionRequirement): Record<string, unknown> {
+  return {
+    Id: CONTAINER_ID,
+    Path: requirement.workload.entrypoint.executable,
+    Args: [...requirement.workload.entrypoint.args],
+    State: { Running: true, Paused: false, Restarting: false, Dead: false, Pid: 4321 },
+    RestartCount: 0,
+    Image: requirement.workload.source.digest,
+    HostConfig: {
+      Runtime: "runsc",
+      NetworkMode: "none",
+      NanoCpus: requirement.workload.resourcePolicy.cpuMillis * 1_000_000,
+      Memory: requirement.workload.resourcePolicy.memoryBytes,
+      MemorySwap: requirement.workload.resourcePolicy.memoryBytes,
+      Privileged: false,
+      RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
+    },
+    Config: {
+      Image: requirement.workload.source.digest,
+      AttachStdout: true,
+      AttachStderr: true,
+      AttachStdin: false,
+      OpenStdin: false,
+      Tty: false,
+      Labels: {
+        [KDO_H4_R3F_LABELS.bindingVersion]: KDO_H4_R3F_BINDING_VERSION,
+        [KDO_H4_R3F_LABELS.requirementIdentity]: requirement.requirementIdentity,
+        [KDO_H4_R3F_LABELS.workloadIdentity]: requirement.workload.workloadIdentity,
+      },
+    },
+    NetworkSettings: { Networks: {} },
+    ImageManifestDescriptor: {
+      digest: requirement.workload.source.digest,
+      mediaType: "application/vnd.oci.image.manifest.v1+json",
+      size: 1234,
+    },
+  }
+}
+
+type FakeDocker = {
+  readonly socketPath: string
+  readonly requests: string[]
+  close(): Promise<void>
+}
+
+async function startFakeDocker(root: string, requirement: SandboxExecutionRequirement, events: string[]): Promise<FakeDocker> {
+  const socketPath = join(root, "docker.sock")
+  const requests: string[] = []
+  const sockets = new Set<Duplex>()
+  const expectedList = listPath(requirement)
+  const expectedInspect = `/v1.48/containers/${CONTAINER_ID}/json?size=0`
+  const server: HttpServer = createHttpServer((request, response) => {
+    const method = request.method ?? ""
+    const url = request.url ?? ""
+    requests.push(`${method} ${url}`)
+    if (method !== "GET") { response.statusCode = 405; response.end(); return }
+    if (url === expectedList) {
+      response.statusCode = 200
+      response.setHeader("content-type", "application/json")
+      response.end(JSON.stringify([{ Id: CONTAINER_ID, State: "running" }]))
+      return
+    }
+    if (url === expectedInspect) {
+      response.statusCode = 200
+      response.setHeader("content-type", "application/json")
+      response.end(JSON.stringify(dockerInspectValue(requirement)))
+      return
+    }
+    response.statusCode = 404
+    response.end()
+  })
+  server.on("upgrade", (request, socket) => {
+    sockets.add(socket)
+    socket.once("close", () => sockets.delete(socket))
+    requests.push(`UPGRADE ${request.url ?? ""}`)
+    events.push("output-capture")
+    socket.write([
+      "HTTP/1.1 101 UPGRADED",
+      `Content-Type: ${KDO_H4_R3G_E_ATTACH_MEDIA_TYPE}`,
+      "Connection: Upgrade",
+      "Upgrade: tcp",
+      "",
+      "",
+    ].join("\r\n"))
+    socket.end(Buffer.concat([frame(1, "abc"), frame(2, "de")]))
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(socketPath, () => { server.off("error", reject); resolve() })
+  })
+  return {
+    socketPath,
+    requests,
+    async close() {
+      for (const socket of sockets) socket.destroy()
+      server.closeAllConnections()
+      if (!server.listening) return
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+  }
+}
+
+function fakeProvider(requirementIdentity: string, workloadIdentity: string): DockerControlPlaneBindingProvider {
+  const endpoint: DockerSocketEndpointIdentity = Object.freeze({ device: "1", inode: "2", uid: "0", gid: "0", mode: "49663", endpointIdentity: "6".repeat(64) })
   const unavailable = async (): Promise<DockerControlPlaneResolution> => { throw new Error("fake provider resolution must not be called") }
   const unavailableBinding = async (): Promise<GvisorContainerBinding> => { throw new Error("fake provider binding must not be called") }
   return Object.freeze({
     providerId: KDO_H4_R3F_PROVIDER_ID,
-    providerIdentity: PROVIDER_IDENTITY,
+    providerIdentity: "5".repeat(64),
     socketEndpoint: endpoint,
     requirementIdentity,
     workloadIdentity,
@@ -225,69 +340,25 @@ function fakeProvider(requirementIdentity: string, workloadIdentity: string): Do
   })
 }
 
-function fakeOutputTransport(input: {
-  requirement: ReturnType<typeof fixtureRequirement>
-  binding: GvisorContainerBinding
-  events: string[]
-  captureCounter: { value: number }
-}): GvisorDockerOutputTransport {
-  const provider = fakeProvider(input.requirement.requirementIdentity, input.requirement.workload.workloadIdentity)
-  return Object.freeze({
-    provider,
-    async captureOutput(
-      request: GvisorContainerBindingRequest,
-      options: { readonly signal?: AbortSignal; readonly expectedBinding?: GvisorContainerBinding } = {},
-    ) {
-      input.events.push("output-capture")
-      input.captureCounter.value += 1
-      assert.equal(request.executionAttemptIdentity, input.binding.executionAttemptIdentity)
-      assert.equal(request.requirementIdentity, input.requirement.requirementIdentity)
-      assert.equal(request.workloadIdentity, input.requirement.workload.workloadIdentity)
-      assert.equal(options.expectedBinding?.bindingIdentity, input.binding.bindingIdentity)
-      const accumulator = new GvisorDockerMultiplexAccumulator(input.requirement.workload.resourcePolicy.maxOutputBytes)
-      accumulator.push(Buffer.concat([frame(1, "abc"), frame(2, "de")]))
-      return Object.freeze({
-        version: KDO_H4_R3G_E_DOCKER_TRANSPORT_VERSION,
-        binding: input.binding,
-        executionAttemptIdentity: input.binding.executionAttemptIdentity,
-        requirementIdentity: input.requirement.requirementIdentity,
-        workloadIdentity: input.requirement.workload.workloadIdentity,
-        providerIdentity: provider.providerIdentity,
-        socketEndpointIdentity: provider.socketEndpoint.endpointIdentity,
-        outputChannelIdentity: createGvisorOutputChannelIdentity({
-          executionAttemptIdentity: input.binding.executionAttemptIdentity,
-          requirementIdentity: input.requirement.requirementIdentity,
-          workloadIdentity: input.requirement.workload.workloadIdentity,
-          containerBindingIdentity: input.binding.bindingIdentity,
-          containerId: input.binding.containerId,
-          providerIdentity: provider.providerIdentity,
-          socketEndpointIdentity: provider.socketEndpoint.endpointIdentity,
-        }),
-        mediaType: KDO_H4_R3G_E_ATTACH_MEDIA_TYPE,
-        aggregation: accumulator.finish(),
-      })
-    },
-  })
-}
-
-test("H4-R3G-E K2 gateway orders durable ARM -> output reservation -> capture and commits positive evidence only after terminal", { skip: process.platform !== "linux", timeout: 15_000 }, async () => {
+test("H4-R3G-E K2 gateway orders durable ARM -> reservation -> trusted Docker capture and commits positive evidence only after terminal", { skip: process.platform !== "linux", timeout: 15_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "kodac-r3ge-runtime-"))
   const watchdogPath = join(root, "watchdog-fixture.py")
-  const socketPath = join(root, "control.sock")
+  const controlSocketPath = join(root, "control.sock")
   const events: string[] = []
   const reservations = new Map<string, GvisorOutputPreparedOperation>()
-  const captureCounter = { value: 0 }
-  const server = createServer()
+  const controlServer = createNetServer()
+  let docker: FakeDocker | undefined
   try {
     await writeFile(watchdogPath, PROTOCOL_FIXTURE, { mode: 0o755 })
     await chmod(watchdogPath, 0o755)
     await new Promise<void>((resolvePromise, rejectPromise) => {
-      server.once("error", rejectPromise)
-      server.listen(socketPath, () => { server.off("error", rejectPromise); resolvePromise() })
+      controlServer.once("error", rejectPromise)
+      controlServer.listen(controlSocketPath, () => { controlServer.off("error", rejectPromise); resolvePromise() })
     })
 
     const requirement = fixtureRequirement(60_000, 8)
-    const socketStat = await stat(socketPath, { bigint: true })
+    docker = await startFakeDocker(root, requirement, events)
+    const controlStat = await stat(controlSocketPath, { bigint: true })
     const exeStat = await stat("/proc/self/exe", { bigint: true })
     const startTicks = parseStartTicks(await readFile("/proc/self/stat", "utf8"))
     const runscSha = await sha256File("/proc/self/exe")
@@ -319,12 +390,12 @@ test("H4-R3G-E K2 gateway orders durable ARM -> output reservation -> capture an
     const helper = createGvisorObserverArtifact({ role: "observer-helper", sha256: "d".repeat(64), sizeBytes: 123_456 })
     const lineage = createGvisorRuntimeLineageRecord({ executionAttemptIdentity: attempt, requirement, binding, runsc, helper, plan, state, stats, process: processObservation, candidate })
     const endpointBase = Object.freeze({
-      path: socketPath,
-      device: socketStat.dev.toString(),
-      inode: socketStat.ino.toString(),
-      uid: socketStat.uid.toString(),
-      gid: socketStat.gid.toString(),
-      mode: socketStat.mode.toString(),
+      path: controlSocketPath,
+      device: controlStat.dev.toString(),
+      inode: controlStat.ino.toString(),
+      uid: controlStat.uid.toString(),
+      gid: controlStat.gid.toString(),
+      mode: controlStat.mode.toString(),
       parentAuthorityIdentity: "f".repeat(64),
     })
     const controlEndpoint = Object.freeze({
@@ -347,10 +418,7 @@ test("H4-R3G-E K2 gateway orders durable ARM -> output reservation -> capture an
       watchdogPath,
       expectedWatchdogSha256: watchdogSha,
       registryRoot: root,
-      resolveSubject(value) {
-        assert.equal(value.requirementIdentity, requirement.requirementIdentity)
-        return subject
-      },
+      resolveSubject(value) { assert.equal(value.requirementIdentity, requirement.requirementIdentity); return subject },
       commitPreparedIntent(record) {
         events.push("ttl-prepared")
         return createGvisorTtlEvidenceCommit({ kind: "prepared", armOperationIdentity: record.armOperationIdentity, leaseIdentity: null, recordIdentity: record.intentIdentity, payloadDigest: payloadDigest(record) })
@@ -387,23 +455,22 @@ test("H4-R3G-E K2 gateway orders durable ARM -> output reservation -> capture an
       },
     }
 
-    const createGateway = (transport: GvisorDockerOutputTransport) => new GvisorOutputExecutionGateway({
+    const createGateway = () => new GvisorOutputExecutionGateway({
       filesystem: new NodeWorkspaceFileSystem(root),
       policy: fixedPolicy("allow", "R3G-E fixture allow"),
-      outputTransport: transport,
+      outputTransport: createGvisorDockerOutputTransport({ socketPath: docker?.socketPath, requirement }),
       outputRuntime,
       ttlRuntime,
       recoveryRuntime: { version: KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION, listRecoverySnapshots() { return [] } },
     })
 
-    const first = await createGateway(fakeOutputTransport({ requirement, binding, events, captureCounter })).enforceGvisorOutputBound(requirement)
+    const first = await createGateway().enforceGvisorOutputBound(requirement)
     assert.equal(first.subject.binding.executionAttemptIdentity, attempt)
     assert.equal(first.capture.binding.bindingIdentity, binding.bindingIdentity)
     assert.equal(first.record.executionAttemptIdentity, attempt)
     assert.equal(first.record.runtimeInstanceIdentity, lineage.runtimeInstanceIdentity)
     assert.equal(first.record.terminalEvidenceIdentity, first.terminal.recordIdentity)
     assert.equal(first.record.acceptedAggregateBytes, 5)
-    assert.equal(captureCounter.value, 1)
 
     const preparedIndex = events.indexOf("ttl-prepared")
     const armIndex = events.indexOf("ttl-arm")
@@ -413,31 +480,66 @@ test("H4-R3G-E K2 gateway orders durable ARM -> output reservation -> capture an
     const positiveIndex = events.indexOf("output-positive")
     assert.ok(preparedIndex >= 0 && preparedIndex < armIndex, "TTL PREPARED must precede durable ARM")
     assert.ok(armIndex < reserveIndex, "durable R3G-D ARM must precede R3G-E output reservation")
-    assert.ok(reserveIndex < captureIndex, "durable output reservation must precede any output capture")
+    assert.ok(reserveIndex < captureIndex, "durable output reservation must precede any Docker attach capture")
     assert.ok(terminalIndex >= 0 && terminalIndex < positiveIndex, "positive output evidence must follow durable terminal lifecycle evidence")
+    assert.equal(docker.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, 1)
 
-    const secondCaptureCounter = { value: 0 }
-    const secondTransport = fakeOutputTransport({ requirement, binding, events, captureCounter: secondCaptureCounter })
-    await assert.rejects(
-      createGateway(secondTransport).enforceGvisorOutputBound(requirement),
-      /already exists|cannot be replenished/,
-    )
-    assert.equal(secondCaptureCounter.value, 0, "fresh process-local transport state must not bypass durable reservation replay")
+    await assert.rejects(createGateway().enforceGvisorOutputBound(requirement), /already exists|cannot be replenished/)
+    assert.equal(docker.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, 1, "fresh trusted transport must not bypass durable reservation replay")
     assert.equal(reservations.size, 1)
   } finally {
-    if (server.listening) await closeServer(server).catch(() => {})
+    await docker?.close()
+    if (controlServer.listening) await closeNetServer(controlServer).catch(() => {})
     await rm(root, { recursive: true, force: true })
   }
 })
 
-test("H4-R3G-E blocks ASK before R3G-D subject resolution, reservation, or output capture", async () => {
+test("H4-R3G-E rejects a structurally forged output transport before subject resolution", { skip: process.platform !== "linux" }, async () => {
   const requirement = fixtureRequirement()
   let resolved = false
   let reserved = false
   let captured = false
-  const provider = fakeProvider(requirement.requirementIdentity, requirement.workload.workloadIdentity)
-  const outputTransport: GvisorDockerOutputTransport = Object.freeze({
-    provider,
+  const forgedTransport: GvisorDockerOutputTransport = Object.freeze({
+    provider: fakeProvider(requirement.requirementIdentity, requirement.workload.workloadIdentity),
+    async captureOutput() { captured = true; throw new Error("must not capture") },
+  })
+  const outputRuntime: GvisorOutputRuntimeConfig = {
+    version: KDO_H4_R3G_E_RUNTIME_VERSION,
+    reserveOutputOperation() { reserved = true; throw new Error("must not reserve") },
+    commitOutputEvidence() { throw new Error("must not commit") },
+    commitFailureEvidence() { throw new Error("must not commit") },
+  }
+  const ttlRuntime: GvisorTtlRuntimeConfig = {
+    version: KDO_H4_R3G_D_RUNTIME_CONFIG_VERSION,
+    watchdogPath: "/nonexistent/r3ge-watchdog",
+    expectedWatchdogSha256: "e".repeat(64),
+    registryRoot: "/nonexistent/r3ge-registry",
+    resolveSubject() { resolved = true; throw new Error("must not resolve") },
+    commitPreparedIntent() { throw new Error("must not commit") },
+    commitArmEvidence() { throw new Error("must not commit") },
+    commitTerminalEvidence() { throw new Error("must not commit") },
+  }
+  const gateway = new GvisorOutputExecutionGateway({
+    filesystem: new NodeWorkspaceFileSystem("."),
+    policy: fixedPolicy("allow", "fixture allow"),
+    outputTransport: forgedTransport,
+    outputRuntime,
+    ttlRuntime,
+    recoveryRuntime: { version: KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION, listRecoverySnapshots() { throw new Error("must not recover") } },
+  })
+  await assert.rejects(gateway.enforceGvisorOutputBound(requirement), /not a trusted K2-created transport/)
+  assert.equal(resolved, false)
+  assert.equal(reserved, false)
+  assert.equal(captured, false)
+})
+
+test("H4-R3G-E blocks ASK before transport provenance, R3G-D subject resolution, reservation, or output capture", async () => {
+  const requirement = fixtureRequirement()
+  let resolved = false
+  let reserved = false
+  let captured = false
+  const forgedTransport: GvisorDockerOutputTransport = Object.freeze({
+    provider: fakeProvider(requirement.requirementIdentity, requirement.workload.workloadIdentity),
     async captureOutput() { captured = true; throw new Error("must not capture") },
   })
   const outputRuntime: GvisorOutputRuntimeConfig = {
@@ -459,7 +561,7 @@ test("H4-R3G-E blocks ASK before R3G-D subject resolution, reservation, or outpu
   const gateway = new GvisorOutputExecutionGateway({
     filesystem: new NodeWorkspaceFileSystem("."),
     policy: fixedPolicy("ask", "R3G-E fixture ask"),
-    outputTransport,
+    outputTransport: forgedTransport,
     outputRuntime,
     ttlRuntime,
     recoveryRuntime: { version: KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION, listRecoverySnapshots() { throw new Error("must not recover") } },
