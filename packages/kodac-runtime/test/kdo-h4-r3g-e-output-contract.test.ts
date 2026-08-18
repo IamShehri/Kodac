@@ -210,6 +210,10 @@ test("R3G-E E3 record is deterministic, requirement-bound, and structurally dist
   assert.equal(record.maxOutputBytes, 5)
   assert.equal(record.acceptedAggregateBytes, 5)
   assert.deepEqual(validateGvisorOutputBoundRecord(record, requirement), record)
+  assert.throws(
+    () => validateGvisorOutputBoundRecord({ ...record, outputChannelIdentity: WORKSPACE_IDENTITY }, requirement),
+    /output channel identity mismatch/,
+  )
   assert.equal("observedResourcePolicy" in record, false)
   assert.equal("capabilityIdentity" in record, false)
   assert.equal("evidenceIdentity" in record, false)
