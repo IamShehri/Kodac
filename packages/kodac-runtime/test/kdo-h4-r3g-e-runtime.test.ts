@@ -559,10 +559,14 @@ test("H4-R3G-E abort during durable reservation waits for authoritative mutation
   const controller = new AbortController()
   let mutationSettled = false
   let enforcementSettled = false
+  let resolveReservationStarted!: () => void
+  const reservationStarted = new Promise<void>((resolve) => { resolveReservationStarted = resolve })
   const outputRuntime: GvisorOutputRuntimeConfig = {
     version: KDO_H4_R3G_E_RUNTIME_VERSION,
     async reserveOutputOperation(prepared) {
       fixture.events.push("output-reserve-start")
+      resolveReservationStarted()
+      controller.abort()
       await delay(120)
       mutationSettled = true
       fixture.events.push("output-reserve-settled")
@@ -577,7 +581,7 @@ test("H4-R3G-E abort during durable reservation waits for authoritative mutation
   try {
     const enforcement = fixture.createGateway(outputRuntime).enforceGvisorOutputBound(fixture.requirement, undefined, { signal: controller.signal })
     void enforcement.then(() => { enforcementSettled = true }, () => { enforcementSettled = true })
-    setTimeout(() => controller.abort(), 20)
+    await reservationStarted
     await delay(60)
     assert.equal(mutationSettled, false)
     assert.equal(enforcementSettled, false, "gateway must not detach a still-running durable mutation after abort")
