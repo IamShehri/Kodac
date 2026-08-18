@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { mkdtempSync, renameSync, rmSync } from "node:fs"
 import { createServer, type Server } from "node:http"
-import type { Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { Duplex } from "node:stream"
 import test from "node:test"
 
 import { createConfinementRequest } from "../src/trust/confinement.ts"
@@ -151,7 +151,7 @@ async function startFakeDocker(root: string, requirement: SandboxExecutionRequir
   const socketPath = join(root, "docker.sock")
   const requests: string[] = []
   const upgradeHeaders: Record<string, string | string[] | undefined>[] = []
-  const sockets = new Set<Socket>()
+  const sockets = new Set<Duplex>()
   const expectedList = listPath(requirement)
   const expectedInspect = `/v1.48/containers/${CONTAINER_ID}/json?size=0`
   const inspectBody = options.inspectBody ?? JSON.stringify(inspectValue(requirement))
