@@ -2,19 +2,18 @@ import { createHash } from "node:crypto"
 import { lstatSync } from "node:fs"
 import { request as httpRequest } from "node:http"
 import type { Socket } from "node:net"
+import { posix } from "node:path"
 import { TextDecoder, types as utilTypes } from "node:util"
 
 import type { WorkspaceFileSystem } from "../edit/filesystem.ts"
 import { createReceipt, type ExecutionReceipt } from "../evidence/receipt.ts"
-import type { SandboxExecutionRequirement } from "../trust/sandbox-backend-evidence.ts"
+import { validateSandboxExecutionRequirement, type SandboxExecutionRequirement } from "../trust/sandbox-backend-evidence.ts"
 import {
   KDO_H4_R3F_DOCKER_API_VERSION,
   KDO_H4_R3F_LIMITS,
-  createDockerControlPlaneBindingProvider,
+  KDO_H4_R3F_PROVIDER_ID,
   createDockerSocketEndpointIdentity,
-  validateDockerControlPlaneProviderConfig,
   type DockerControlPlaneBindingProvider,
-  type DockerControlPlaneProviderConfig,
   type DockerSocketEndpointIdentity,
 } from "../trust/sandbox-observer-docker-control-plane.ts"
 import {
@@ -96,6 +95,12 @@ export interface GvisorDockerOutputTransport {
   ) => Promise<GvisorDockerOutputCapture>
 }
 
+export interface GvisorDockerOutputTransportConfig {
+  readonly provider: DockerControlPlaneBindingProvider
+  readonly socketPath: string
+  readonly requirement: SandboxExecutionRequirement
+}
+
 export interface GvisorOutputPreparedOperation {
   readonly version: typeof KDO_H4_R3G_E_PREPARED_VERSION
   readonly executionAttemptIdentity: string
@@ -158,7 +163,10 @@ export interface GvisorOutputRuntimeConfig {
 export interface GvisorOutputExecutionGatewayConfig {
   readonly filesystem: WorkspaceFileSystem
   readonly policy: PolicyEngine
-  readonly outputTransport: GvisorDockerOutputTransport
+  /** Pre-existing canonical R3F provider supplied by the trusted K2 composition root. */
+  readonly dockerControlPlane: DockerControlPlaneBindingProvider
+  /** Trusted composition-time path; execution callers cannot provide or replace it. */
+  readonly dockerSocketPath: string
   readonly outputRuntime: GvisorOutputRuntimeConfig
   readonly ttlRuntime: GvisorTtlRuntimeConfig
   readonly recoveryRuntime: GvisorTtlRecoveryRuntimeConfig
@@ -180,7 +188,6 @@ const MAX_INSPECT_BYTES = KDO_H4_R3F_LIMITS.maxInspectResponseBytes
 const MAX_JSON_DEPTH = KDO_H4_R3F_LIMITS.maxJsonDepth
 const SHA256 = /^[0-9a-f]{64}$/
 const FULL_CONTAINER_ID = /^[0-9a-f]{64}$/
-const trustedOutputTransports = new WeakSet<GvisorDockerOutputTransport>()
 
 function domainHash(domain: string, parts: readonly (string | number)[]): string {
   return createHash("sha256")
@@ -227,6 +234,11 @@ function validatePolicyResult(value: unknown): PolicyResult {
   if (typeof record.reason !== "string" || record.reason.length === 0) throw new TypeError("R3G-E policy reason must be non-empty")
   return Object.freeze({ decision: record.decision, reason: record.reason })
 }
+function canonicalSocketPath(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.includes("\0") || byteLength(value) > KDO_H4_R3F_LIMITS.maxSocketPathBytes) throw new TypeError("R3G-E Docker socket path must be bounded non-empty POSIX text")
+  if (!posix.isAbsolute(value) || posix.normalize(value) !== value || (value.length > 1 && value.endsWith("/"))) throw new TypeError("R3G-E Docker socket path must be canonical absolute POSIX path")
+  return value
+}
 function currentSocketEndpoint(socketPath: string): DockerSocketEndpointIdentity {
   const stats = lstatSync(socketPath, { bigint: true })
   if (!stats.isSocket()) throw new TypeError("R3G-E Docker endpoint must remain a real Unix socket")
@@ -236,6 +248,19 @@ function currentSocketEndpoint(socketPath: string): DockerSocketEndpointIdentity
 }
 function requireSameSocketEndpoint(socketPath: string, expected: DockerSocketEndpointIdentity): void {
   if (currentSocketEndpoint(socketPath).endpointIdentity !== expected.endpointIdentity) throw new Error("R3G-E Docker Unix socket endpoint identity changed")
+}
+function validateCanonicalDockerProvider(providerValue: unknown, requirement: SandboxExecutionRequirement, socketPathValue: unknown): { provider: DockerControlPlaneBindingProvider; socketPath: string } {
+  if (providerValue === null || typeof providerValue !== "object" || utilTypes.isProxy(providerValue)) throw new TypeError("R3G-E requires a canonical R3F Docker provider object")
+  const provider = providerValue as DockerControlPlaneBindingProvider
+  if (provider.providerId !== KDO_H4_R3F_PROVIDER_ID) throw new TypeError("R3G-E Docker provider id mismatch")
+  identity(provider.providerIdentity, "R3G-E Docker providerIdentity")
+  if (provider.requirementIdentity !== requirement.requirementIdentity || provider.workloadIdentity !== requirement.workload.workloadIdentity) throw new TypeError("R3G-E canonical R3F provider is bound to a different requirement/workload")
+  if (typeof provider.resolveDockerControlPlaneBinding !== "function" || typeof provider.resolveContainerBinding !== "function") throw new TypeError("R3G-E canonical R3F provider lacks trusted resolver closures")
+  const socketPath = canonicalSocketPath(socketPathValue)
+  if (provider.socketEndpoint === null || typeof provider.socketEndpoint !== "object") throw new TypeError("R3G-E canonical R3F provider lacks socket endpoint identity")
+  identity(provider.socketEndpoint.endpointIdentity, "R3G-E Docker socket endpointIdentity")
+  requireSameSocketEndpoint(socketPath, provider.socketEndpoint)
+  return Object.freeze({ provider, socketPath })
 }
 
 function validateJsonSyntaxNoDuplicateKeys(text: string): void {
@@ -404,9 +429,13 @@ function sameBinding(left: GvisorContainerBinding, right: GvisorContainerBinding
 }
 
 export function createGvisorDockerOutputTransport(value: unknown): GvisorDockerOutputTransport {
-  const config: DockerControlPlaneProviderConfig = validateDockerControlPlaneProviderConfig(value)
+  const record = asRecord(value, "R3G-E Docker output transport config")
+  exactKeys(record, ["provider", "socketPath", "requirement"], "R3G-E Docker output transport config")
+  const requirement = validateSandboxExecutionRequirement(record.requirement)
   if (KDO_H4_R3F_DOCKER_API_VERSION !== KDO_H4_R3G_E_DOCKER_API_VERSION) throw new Error("R3G-E/R3F Docker API version mismatch")
-  const provider = createDockerControlPlaneBindingProvider(config)
+  const canonical = validateCanonicalDockerProvider(record.provider, requirement, record.socketPath)
+  const provider = canonical.provider
+  const socketPath = canonical.socketPath
   const consumedAttempts = new Set<string>()
   const captureOutput: GvisorDockerOutputTransport["captureOutput"] = async (requestValue, options = {}) => {
     const request = validateGvisorContainerBindingRequest(requestValue)
@@ -417,20 +446,20 @@ export function createGvisorDockerOutputTransport(value: unknown): GvisorDockerO
     const resolution = await provider.resolveDockerControlPlaneBinding(request, { signal: options.signal })
     const binding = resolution.binding
     if (expectedBinding !== undefined && !sameBinding(binding, expectedBinding)) throw new Error("R3G-E Docker output binding does not match the exact lifecycle subject")
-    const inspect = await boundedInspect({ socketPath: config.socketPath, endpoint: provider.socketEndpoint, containerId: binding.containerId, signal: options.signal })
+    const inspect = await boundedInspect({ socketPath, endpoint: provider.socketEndpoint, containerId: binding.containerId, signal: options.signal })
     parseInspectBody(inspect, binding.containerId)
     const outputChannelIdentity = createGvisorOutputChannelIdentity({
       executionAttemptIdentity: request.executionAttemptIdentity, requirementIdentity: request.requirementIdentity, workloadIdentity: request.workloadIdentity,
       containerBindingIdentity: binding.bindingIdentity, containerId: binding.containerId,
       providerIdentity: provider.providerIdentity, socketEndpointIdentity: provider.socketEndpoint.endpointIdentity,
     })
-    const { socket, head } = await openAttach({ socketPath: config.socketPath, endpoint: provider.socketEndpoint, containerId: binding.containerId, signal: options.signal })
-    const accumulator = new GvisorDockerMultiplexAccumulator(config.requirement.workload.resourcePolicy.maxOutputBytes)
+    const { socket, head } = await openAttach({ socketPath, endpoint: provider.socketEndpoint, containerId: binding.containerId, signal: options.signal })
+    const accumulator = new GvisorDockerMultiplexAccumulator(requirement.workload.resourcePolicy.maxOutputBytes)
     let abortListener: (() => void) | undefined
     let absoluteTimer: NodeJS.Timeout | undefined
     try {
       socket.setTimeout(KDO_H4_R3G_E_RUNTIME_LIMITS.outputInactivityTimeoutMs, () => socket.destroy(new Error("R3G-E Docker output stream exceeded inactivity deadline")))
-      const absoluteLifetimeMs = Math.min(2_147_483_647, config.requirement.workload.resourcePolicy.ttlMs + KDO_H4_R3G_E_RUNTIME_LIMITS.outputAbsoluteSlackMs)
+      const absoluteLifetimeMs = Math.min(2_147_483_647, requirement.workload.resourcePolicy.ttlMs + KDO_H4_R3G_E_RUNTIME_LIMITS.outputAbsoluteSlackMs)
       absoluteTimer = setTimeout(() => socket.destroy(new Error("R3G-E Docker output stream exceeded absolute capture lifetime")), absoluteLifetimeMs)
       if (options.signal !== undefined) {
         abortListener = () => socket.destroy(new Error("R3G-E Docker output capture aborted"))
@@ -440,7 +469,7 @@ export function createGvisorDockerOutputTransport(value: unknown): GvisorDockerO
       if (head.byteLength !== 0) accumulator.push(head)
       for await (const chunk of socket) accumulator.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
       const aggregation = accumulator.finish()
-      requireSameSocketEndpoint(config.socketPath, provider.socketEndpoint)
+      requireSameSocketEndpoint(socketPath, provider.socketEndpoint)
       return Object.freeze({
         version: KDO_H4_R3G_E_DOCKER_TRANSPORT_VERSION, binding,
         executionAttemptIdentity: request.executionAttemptIdentity,
@@ -455,9 +484,7 @@ export function createGvisorDockerOutputTransport(value: unknown): GvisorDockerO
       socket.destroy()
     }
   }
-  const transport: GvisorDockerOutputTransport = Object.freeze({ provider, captureOutput })
-  trustedOutputTransports.add(transport)
-  return transport
+  return Object.freeze({ provider, captureOutput })
 }
 
 function preparedPreimage(input: Omit<GvisorOutputPreparedOperation, "preparedIdentity">): readonly (string | number)[] {
@@ -568,7 +595,8 @@ function aggregationForRecord(value: GvisorOutputAggregationResult): Omit<Gvisor
 export class GvisorOutputExecutionGateway extends ExecutionGateway {
   private readonly outputPolicy: PolicyEngine
   private readonly filesystem: WorkspaceFileSystem
-  private readonly outputTransport: GvisorDockerOutputTransport
+  private readonly dockerControlPlane: DockerControlPlaneBindingProvider
+  private readonly dockerSocketPath: string
   private readonly outputRuntime: GvisorOutputRuntimeConfig
   private readonly ttlRuntime: GvisorTtlRuntimeConfig
   private readonly recoveryRuntime: GvisorTtlRecoveryRuntimeConfig
@@ -576,7 +604,8 @@ export class GvisorOutputExecutionGateway extends ExecutionGateway {
     super(config.filesystem, config.policy)
     this.filesystem = config.filesystem
     this.outputPolicy = config.policy
-    this.outputTransport = config.outputTransport
+    this.dockerControlPlane = config.dockerControlPlane
+    this.dockerSocketPath = canonicalSocketPath(config.dockerSocketPath)
     this.outputRuntime = validateGvisorOutputRuntimeConfig(config.outputRuntime)
     this.ttlRuntime = validateGvisorTtlRuntimeConfig(config.ttlRuntime)
     this.recoveryRuntime = validateGvisorTtlRecoveryRuntimeConfig(config.recoveryRuntime)
@@ -588,7 +617,8 @@ export class GvisorOutputExecutionGateway extends ExecutionGateway {
     return receipt
   }
 
-  async enforceGvisorOutputBound(requirement: SandboxExecutionRequirement, observer?: ExecutionObserver, options: { readonly signal?: AbortSignal } = {}): Promise<GvisorOutputEnforcementResult> {
+  async enforceGvisorOutputBound(requirementValue: SandboxExecutionRequirement, observer?: ExecutionObserver, options: { readonly signal?: AbortSignal } = {}): Promise<GvisorOutputEnforcementResult> {
+    const requirement = validateSandboxExecutionRequirement(requirementValue)
     const startedAt = new Date().toISOString()
     const intent = outputIntent(requirement)
     await observer?.onIntent?.(intent)
@@ -604,15 +634,14 @@ export class GvisorOutputExecutionGateway extends ExecutionGateway {
     try {
       if (process.platform !== "linux") throw new Error("R3G-E physical output enforcement requires Linux")
       if (requirement.requiredSemanticRuntimeClass !== "gvisor") throw new Error("R3G-E requires requiredSemanticRuntimeClass=gvisor")
-      if (!trustedOutputTransports.has(this.outputTransport)) throw new Error("R3G-E output transport is not a trusted K2-created transport")
-      if (this.outputTransport.provider.requirementIdentity !== requirement.requirementIdentity || this.outputTransport.provider.workloadIdentity !== requirement.workload.workloadIdentity) throw new Error("R3G-E output transport is bound to a different requirement/workload")
       if (options.signal?.aborted) throw new Error("R3G-E output enforcement aborted before lifecycle start")
+      const outputTransport = createGvisorDockerOutputTransport({ provider: this.dockerControlPlane, socketPath: this.dockerSocketPath, requirement })
 
       const subjectReady = deferred<GvisorTtlSubjectBinding>()
       const armReady = deferred<GvisorTtlArmRecord>()
       const originalRuntime = this.ttlRuntime
-      const wrappedResolveSubject: GvisorTtlRuntimeConfig["resolveSubject"] = async (requirementValue, runtimeOptions) => {
-        const subject = validateGvisorTtlSubjectBinding(await originalRuntime.resolveSubject(requirementValue, runtimeOptions), requirementValue)
+      const wrappedResolveSubject: GvisorTtlRuntimeConfig["resolveSubject"] = async (requirementValueInner, runtimeOptions) => {
+        const subject = validateGvisorTtlSubjectBinding(await originalRuntime.resolveSubject(requirementValueInner, runtimeOptions), requirementValueInner)
         subjectReady.resolve(subject)
         return subject
       }
@@ -665,8 +694,8 @@ export class GvisorOutputExecutionGateway extends ExecutionGateway {
         const outputChannelIdentity = createGvisorOutputChannelIdentity({
           executionAttemptIdentity: subject.binding.executionAttemptIdentity, requirementIdentity: requirement.requirementIdentity,
           workloadIdentity: requirement.workload.workloadIdentity, containerBindingIdentity: subject.binding.bindingIdentity,
-          containerId: subject.binding.containerId, providerIdentity: this.outputTransport.provider.providerIdentity,
-          socketEndpointIdentity: this.outputTransport.provider.socketEndpoint.endpointIdentity,
+          containerId: subject.binding.containerId, providerIdentity: outputTransport.provider.providerIdentity,
+          socketEndpointIdentity: outputTransport.provider.socketEndpoint.endpointIdentity,
         })
         const outputOperationIdentity = createGvisorOutputOperationIdentity({
           outputChannelIdentity, executionAttemptIdentity: subject.binding.executionAttemptIdentity,
@@ -677,7 +706,7 @@ export class GvisorOutputExecutionGateway extends ExecutionGateway {
           executionAttemptIdentity: subject.binding.executionAttemptIdentity, requirementIdentity: requirement.requirementIdentity,
           workloadIdentity: requirement.workload.workloadIdentity, containerBindingIdentity: subject.binding.bindingIdentity,
           containerId: subject.binding.containerId, runtimeInstanceIdentity: subject.lineage.runtimeInstanceIdentity,
-          providerIdentity: this.outputTransport.provider.providerIdentity, socketEndpointIdentity: this.outputTransport.provider.socketEndpoint.endpointIdentity,
+          providerIdentity: outputTransport.provider.providerIdentity, socketEndpointIdentity: outputTransport.provider.socketEndpoint.endpointIdentity,
           outputChannelIdentity, outputOperationIdentity, armRecordIdentity: arm.recordIdentity,
           maxOutputBytes: requirement.workload.resourcePolicy.maxOutputBytes,
         })
@@ -689,7 +718,7 @@ export class GvisorOutputExecutionGateway extends ExecutionGateway {
         const bindingRequest = createGvisorContainerBindingRequest({ executionAttemptIdentity: subject.binding.executionAttemptIdentity, requirement })
         let capture: GvisorDockerOutputCapture
         try {
-          capture = await this.outputTransport.captureOutput(bindingRequest, { signal: outputAbort.signal, expectedBinding: subject.binding })
+          capture = await outputTransport.captureOutput(bindingRequest, { signal: outputAbort.signal, expectedBinding: subject.binding })
           captureSettled = true
         } catch (error) {
           captureSettled = true
@@ -727,8 +756,8 @@ export class GvisorOutputExecutionGateway extends ExecutionGateway {
         const record = createGvisorOutputBoundRecord({
           executionAttemptIdentity: subject.binding.executionAttemptIdentity, requirement,
           containerBindingIdentity: subject.binding.bindingIdentity, containerId: subject.binding.containerId,
-          runtimeInstanceIdentity: subject.lineage.runtimeInstanceIdentity, providerIdentity: this.outputTransport.provider.providerIdentity,
-          socketEndpointIdentity: this.outputTransport.provider.socketEndpoint.endpointIdentity, outputChannelIdentity: prepared.outputChannelIdentity,
+          runtimeInstanceIdentity: subject.lineage.runtimeInstanceIdentity, providerIdentity: outputTransport.provider.providerIdentity,
+          socketEndpointIdentity: outputTransport.provider.socketEndpoint.endpointIdentity, outputChannelIdentity: prepared.outputChannelIdentity,
           aggregation: aggregationForRecord(capture.aggregation), terminalEvidenceIdentity: terminal.recordIdentity,
         })
         if (record.outputOperationIdentity !== prepared.outputOperationIdentity) throw new Error("R3G-E final record operation identity does not match durable PREPARED operation")
