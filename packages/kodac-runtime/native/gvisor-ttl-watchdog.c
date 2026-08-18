@@ -826,16 +826,20 @@ static int run_lease(const arm_request *request, lease_registry *registry, retai
   if (durable_create_claim(request, registry, lease) != 0) return fail("cannot durably claim watchdog owner/fence generation");
   if (durable_create_lease(request, registry, lease) != 0) return fail("cannot durably commit watchdog lease registry entry");
 
+  int timer_fd = create_absolute_timer(lease->deadline_boottime_ns);
+  if (timer_fd < 0) return indeterminate("cannot arm CLOCK_BOOTTIME timerfd before positive arm acknowledgement");
+
   uint64_t arm_dispatch_deadline_ns = 0;
-  if (boottime_deadline_after_ms(KODAC_ARM_DISPATCH_TIMEOUT_MS, &arm_dispatch_deadline_ns) != 0) return indeterminate("cannot establish bounded retained Wait dispatch deadline");
+  if (boottime_deadline_after_ms(KODAC_ARM_DISPATCH_TIMEOUT_MS, &arm_dispatch_deadline_ns) != 0) { close(timer_fd); return indeterminate("cannot establish bounded retained Wait dispatch deadline"); }
   if (arm_dispatch_deadline_ns > lease->deadline_boottime_ns) arm_dispatch_deadline_ns = lease->deadline_boottime_ns;
   int wait_dispatch = send_rpc(subject->wait_fd, "containerManager.Wait", request->container_id, 0, arm_dispatch_deadline_ns);
-  if (wait_dispatch == KODAC_RESPONSE_TIMEOUT) return indeterminate("retained Wait request dispatch timed out before positive arm acknowledgement");
-  if (wait_dispatch != 0) return indeterminate("retained Wait request failed before positive arm acknowledgement");
-  if (emit_arm_ack(request, subject, lease) != 0) return fail("cannot emit physical arm acknowledgement");
+  if (wait_dispatch == KODAC_RESPONSE_TIMEOUT) { close(timer_fd); return indeterminate("retained Wait request dispatch timed out before positive arm acknowledgement"); }
+  if (wait_dispatch != 0) { close(timer_fd); return indeterminate("retained Wait request failed before positive arm acknowledgement"); }
+  int before_ack = boottime_before_io(lease->deadline_boottime_ns);
+  if (before_ack == KODAC_RESPONSE_TIMEOUT) { close(timer_fd); return indeterminate("lease expired before positive arm acknowledgement"); }
+  if (before_ack != 0) { close(timer_fd); return indeterminate("cannot verify lease deadline before positive arm acknowledgement"); }
+  if (emit_arm_ack(request, subject, lease) != 0) { close(timer_fd); return fail("cannot emit physical arm acknowledgement"); }
 
-  int timer_fd = create_absolute_timer(lease->deadline_boottime_ns);
-  if (timer_fd < 0) return indeterminate("cannot arm CLOCK_BOOTTIME timerfd after durable lease");
   struct pollfd events[2] = {
     { .fd = subject->wait_fd, .events = POLLIN, .revents = 0 },
     { .fd = timer_fd, .events = POLLIN, .revents = 0 },
