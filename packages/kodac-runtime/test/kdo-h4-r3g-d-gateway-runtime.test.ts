@@ -8,6 +8,7 @@ import test from "node:test"
 
 import { NodeWorkspaceFileSystem } from "../src/edit/filesystem.ts"
 import { GvisorTtlExecutionGateway } from "../src/execution/gateway-gvisor-ttl-runtime.ts"
+import { KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION } from "../src/execution/gateway-gvisor-ttl-recovery-runtime.ts"
 import { createConfinementRequest } from "../src/trust/confinement.ts"
 import { createSandboxExecutionRequirement } from "../src/trust/sandbox-backend-evidence.ts"
 import {
@@ -164,6 +165,7 @@ test("H4-R3G-D K2 gateway durably orders PREPARED -> physical arm -> arm evidenc
   const root = await mkdtemp(join(tmpdir(), "kodac-r3gd-gateway-")); await chmod(root, 0o700)
   const watchdogPath = join(root, "watchdog-fixture.py"); const socketPath = join(root, "control.sock")
   const commits: string[] = []
+  let recoveryReads = 0
   const server = createServer()
   try {
     await writeFile(watchdogPath, PROTOCOL_FIXTURE, { mode: 0o755 }); await chmod(watchdogPath, 0o755)
@@ -211,9 +213,15 @@ test("H4-R3G-D K2 gateway durably orders PREPARED -> physical arm -> arm evidenc
         return createGvisorTtlEvidenceCommit({ kind: "terminal", armOperationIdentity: record.armOperationIdentity, leaseIdentity: record.leaseIdentity, recordIdentity: record.recordIdentity, payloadDigest: payloadDigest(record) })
       },
     }
-    const gateway = new GvisorTtlExecutionGateway({ filesystem: new NodeWorkspaceFileSystem(root), policy: fixedPolicy("allow", "R3G-D fixture allow"), ttlRuntime: runtime })
+    const gateway = new GvisorTtlExecutionGateway({
+      filesystem: new NodeWorkspaceFileSystem(root),
+      policy: fixedPolicy("allow", "R3G-D fixture allow"),
+      ttlRuntime: runtime,
+      recoveryRuntime: { version: KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION, listRecoverySnapshots() { recoveryReads += 1; return [] } },
+    })
     const result = await gateway.enforceGvisorTtl(requirement)
 
+    assert.equal(recoveryReads, 1, "startup recovery must run exactly once before new arm work")
     assert.deepEqual(commits, ["prepared", "arm", "terminal"])
     assert.equal(result.arm.executionAttemptIdentity, attempt)
     assert.equal(result.arm.containerId, CONTAINER_ID)
@@ -228,8 +236,8 @@ test("H4-R3G-D K2 gateway durably orders PREPARED -> physical arm -> arm evidenc
   }
 })
 
-test("H4-R3G-D K2 gateway blocks ASK before trusted subject resolution or watchdog execution", async () => {
-  const requirement = fixtureRequirement(60_000); let resolved = false
+test("H4-R3G-D K2 gateway blocks ASK before startup recovery, trusted subject resolution, or watchdog execution", async () => {
+  const requirement = fixtureRequirement(60_000); let resolved = false; let recoveryReads = 0
   const runtime: GvisorTtlRuntimeConfig = {
     version: KDO_H4_R3G_D_RUNTIME_CONFIG_VERSION,
     watchdogPath: "/nonexistent/kodac-r3gd-watchdog",
@@ -240,7 +248,13 @@ test("H4-R3G-D K2 gateway blocks ASK before trusted subject resolution or watchd
     commitArmEvidence() { throw new Error("must not run") },
     commitTerminalEvidence() { throw new Error("must not run") },
   }
-  const gateway = new GvisorTtlExecutionGateway({ filesystem: new NodeWorkspaceFileSystem("."), policy: fixedPolicy("ask", "fixture ask"), ttlRuntime: runtime })
+  const gateway = new GvisorTtlExecutionGateway({
+    filesystem: new NodeWorkspaceFileSystem("."),
+    policy: fixedPolicy("ask", "fixture ask"),
+    ttlRuntime: runtime,
+    recoveryRuntime: { version: KDO_H4_R3G_D_RECOVERY_RUNTIME_VERSION, listRecoverySnapshots() { recoveryReads += 1; return [] } },
+  })
   await assert.rejects(gateway.enforceGvisorTtl(requirement), /does not authorize ask/)
+  assert.equal(recoveryReads, 0, "ASK must fail before startup recovery I/O")
   assert.equal(resolved, false)
 })
