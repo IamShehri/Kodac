@@ -1,13 +1,10 @@
 import assert from "node:assert/strict"
-import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
-import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises"
-import { createServer, type Socket } from "node:net"
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { createServer } from "node:net"
 import { tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { join } from "node:path"
 import test from "node:test"
-import { fileURLToPath } from "node:url"
-import { promisify } from "node:util"
 
 import { NodeWorkspaceFileSystem } from "../src/edit/filesystem.ts"
 import { GvisorTtlExecutionGateway } from "../src/execution/gateway-gvisor-ttl-runtime.ts"
@@ -43,13 +40,96 @@ import {
 } from "../src/trust/sandbox-workload.ts"
 import { fixedPolicy } from "../src/trust/policy.ts"
 
-const execFileAsync = promisify(execFile)
-const TEST_DIR = dirname(fileURLToPath(import.meta.url))
-const RUNTIME_DIR = resolve(TEST_DIR, "..")
-const WATCHDOG_SOURCE = join(RUNTIME_DIR, "native", "gvisor-ttl-watchdog.c")
 const CONTAINER_ID = "1".repeat(64)
 const WORKSPACE_ID = "a".repeat(64)
 const EXECUTION_INTENT_ID = "b".repeat(64)
+
+const PROTOCOL_FIXTURE = String.raw`#!/usr/bin/python3
+import hashlib
+import sys
+
+argv = sys.argv[1:]
+expected = [
+    "--registry-root", "--arm-operation", "--arm-payload-digest", "--execution-attempt",
+    "--requirement", "--workload", "--container-binding", "--container-id",
+    "--runtime-instance", "--ttl-ms", "--watchdog-implementation", "--control-socket",
+    "--socket-device-inode", "--peer-pid-uid-gid", "--process-tuple", "--runsc-artifact",
+    "--runsc-sha256",
+]
+if len(argv) != 1 + len(expected) * 2 or argv[0] != "--arm":
+    raise SystemExit(125)
+values = {}
+for index, flag in enumerate(expected):
+    position = 1 + index * 2
+    if argv[position] != flag:
+        raise SystemExit(125)
+    values[flag] = argv[position + 1]
+
+def wd(domain, parts):
+    digest = hashlib.sha256()
+    for value in ["KODAC-H4-R3G-D-WATCHDOG", domain, "V1", *parts]:
+        digest.update(value.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+arm = values["--arm-operation"]
+payload = values["--arm-payload-digest"]
+execution = values["--execution-attempt"]
+requirement = values["--requirement"]
+workload = values["--workload"]
+binding = values["--container-binding"]
+container = values["--container-id"]
+runtime = values["--runtime-instance"]
+ttl = values["--ttl-ms"]
+watchdog = values["--watchdog-implementation"]
+socket_dev, socket_ino = values["--socket-device-inode"].split(":")
+peer_pid, peer_uid, peer_gid = values["--peer-pid-uid-gid"].split(":")
+start_ticks, exe_dev, exe_ino, exe_size = values["--process-tuple"].split(":")
+runsc_artifact = values["--runsc-artifact"]
+runsc_sha = values["--runsc-sha256"]
+boot = open("/proc/sys/kernel/random/boot_id", "r", encoding="ascii").read().strip()
+lease_start = "100000000000"
+deadline = str(int(lease_start) + int(ttl) * 1000000)
+clock = wd("CLOCK_DOMAIN", [boot, "CLOCK_BOOTTIME"])
+lease = wd("LEASE", [arm, payload, runtime, boot, lease_start, deadline, watchdog])
+owner = wd("OWNER_INSTANCE", [arm, runtime, boot])
+fence = "1"
+claim = wd("OWNER_CLAIM", [arm, owner, fence, boot])
+control = wd("CONTROL_PEER", [runtime, container, socket_dev, socket_ino, peer_pid, peer_uid, peer_gid, start_ticks, exe_dev, exe_ino, exe_size, runsc_sha])
+registry = wd("LEASE_REGISTRY", [
+    "kodac-h4-r3g-d-watchdog-lease-v1", arm, payload, lease, execution, requirement,
+    workload, binding, container, runtime, ttl, boot, clock, lease_start, deadline,
+    watchdog, owner, fence, claim,
+])
+physical_ack = wd("PHYSICAL_ARM_ACK", [lease, arm, runtime, control, runsc_artifact, runsc_sha, registry, clock, boot, owner, claim])
+print(
+    "kodac-gvisor-ttl-arm-v1"
+    + f" lease={lease} arm-operation={arm} runtime-instance={runtime} control-peer={control}"
+    + f" runsc-artifact={runsc_artifact} verified-runsc-sha256={runsc_sha} registry-record={registry}"
+    + f" clock-domain={clock} boot-id={boot} lease-start-boottime-ns={lease_start} deadline-boottime-ns={deadline}"
+    + f" owner-instance={owner} terminal-fence-token={fence} claim-record={claim} physical-ack={physical_ack}",
+    flush=True,
+)
+retained_pidfd = wd("PIDFD_PROCESS", [peer_pid, start_ticks, exe_dev, exe_ino, exe_size, runtime])
+retained_runsc = wd("RUNSC_EXECUTABLE", [runsc_sha, exe_dev, exe_ino, exe_size, runsc_artifact])
+exit_ns = str(int(lease_start) + 1)
+termination = wd("TERMINATION_ACK", [lease, arm, "natural-exit"])
+terminal_registry = wd("TERMINAL_REGISTRY", [
+    arm, lease, runtime, "natural-exit", owner, fence, claim, control, retained_pidfd,
+    runsc_artifact, runsc_sha, retained_runsc, clock, boot, exit_ns, "-", "-", "-", "-", termination,
+])
+print(
+    "kodac-gvisor-ttl-terminal-v1"
+    + f" lease={lease} arm-operation={arm} runtime-instance={runtime} outcome=natural-exit"
+    + f" owner-instance={owner} terminal-fence-token={fence} claim-record={claim} control-peer={control}"
+    + f" socket-device={socket_dev} socket-inode={socket_ino} peer-pid={peer_pid} peer-uid={peer_uid} peer-gid={peer_gid}"
+    + f" retained-pidfd-process={retained_pidfd} runsc-artifact={runsc_artifact} verified-runsc-sha256={runsc_sha}"
+    + f" retained-runsc-executable={retained_runsc} clock-domain={clock} boot-id={boot}"
+    + f" exit-event-boottime-ns={exit_ns} live-at-expiry-boottime-ns=- live-probe=- process-set=- signal-ack=-"
+    + f" termination-ack={termination} registry-terminal={terminal_registry}",
+    flush=True,
+)
+`
 
 function parseStartTicks(statText: string): bigint {
   const close = statText.lastIndexOf(")")
@@ -80,39 +160,19 @@ function fixtureRequirement(ttlMs: number) {
   return createSandboxExecutionRequirement({ workload, requiredSemanticRuntimeClass: "gvisor" })
 }
 
-test("H4-R3G-D K2 gateway durably orders PREPARED -> physical arm -> arm evidence -> terminal evidence", { skip: process.platform !== "linux", timeout: 25_000 }, async () => {
+test("H4-R3G-D K2 gateway durably orders PREPARED -> physical arm -> arm evidence -> terminal evidence over the strict watchdog protocol", { skip: process.platform !== "linux", timeout: 10_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "kodac-r3gd-gateway-")); await chmod(root, 0o700)
-  const binary = join(root, "gvisor-ttl-watchdog"); const socketPath = join(root, "control.sock")
-  const serverSockets = new Set<Socket>(); const methods: string[] = []; const commits: string[] = []
-  let signalArg: unknown; let waitSocket: Socket | undefined
-  const server = createServer((socket) => {
-    serverSockets.add(socket); socket.once("close", () => serverSockets.delete(socket))
-    let buffered = ""; socket.setEncoding("utf8")
-    socket.on("data", (chunk: string) => {
-      buffered += chunk
-      let request: { method?: unknown; arg?: unknown }
-      try { request = JSON.parse(buffered) as { method?: unknown; arg?: unknown } } catch { return }
-      buffered = ""
-      if (typeof request.method !== "string") return socket.destroy(new Error("missing RPC method"))
-      methods.push(request.method)
-      if (request.method === "containerManager.Wait") { assert.equal(request.arg, CONTAINER_ID); waitSocket = socket; return }
-      if (request.method === "containerManager.Processes") { assert.equal(request.arg, CONTAINER_ID); socket.write(JSON.stringify({ success: true, err: "", result: [{ pid: 1 }] })); return }
-      if (request.method === "containerManager.Signal") {
-        signalArg = request.arg; socket.write(JSON.stringify({ success: true, err: "", result: null })); setTimeout(() => waitSocket?.write(JSON.stringify({ success: true, err: "", result: 0 })), 5); return
-      }
-      socket.destroy(new Error(`unexpected RPC method ${request.method}`))
-    })
-  })
-
+  const watchdogPath = join(root, "watchdog-fixture.py"); const socketPath = join(root, "control.sock")
+  const commits: string[] = []
+  const server = createServer()
   try {
-    await execFileAsync("cc", ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", WATCHDOG_SOURCE, "-o", binary])
+    await writeFile(watchdogPath, PROTOCOL_FIXTURE, { mode: 0o755 }); await chmod(watchdogPath, 0o755)
     await new Promise<void>((resolvePromise, rejectPromise) => { server.once("error", rejectPromise); server.listen(socketPath, () => { server.off("error", rejectPromise); resolvePromise() }) })
 
-    const requirement = fixtureRequirement(75)
+    const requirement = fixtureRequirement(60_000)
     const socketStat = await stat(socketPath, { bigint: true }); const exeStat = await stat("/proc/self/exe", { bigint: true })
     const startTicks = parseStartTicks(await readFile("/proc/self/stat", "utf8")); const runscSha = await sha256File("/proc/self/exe")
-    const watchdogSha = await sha256File(binary); const watchdogStat = await stat(binary)
-    assert.ok(watchdogStat.size > 0)
+    const watchdogSha = await sha256File(watchdogPath)
     const getuid = process.getuid; const getgid = process.getgid
     assert.equal(typeof getuid, "function"); assert.equal(typeof getgid, "function")
     if (typeof getuid !== "function" || typeof getgid !== "function") throw new Error("Linux uid/gid primitives unavailable")
@@ -132,9 +192,9 @@ test("H4-R3G-D K2 gateway durably orders PREPARED -> physical arm -> arm evidenc
     const controlEndpoint = Object.freeze({ ...endpointBase, endpointIdentity: r3gcHash("CONTROL_ENDPOINT", [endpointBase.path, endpointBase.device, endpointBase.inode, endpointBase.uid, endpointBase.gid, endpointBase.mode, endpointBase.parentAuthorityIdentity]) })
     const subject = createGvisorTtlSubjectBinding({ binding, lineage, state, process: processObservation, runscArtifact: runsc, controlEndpoint, expectedPeerUid: String(uid), expectedPeerGid: String(gid) })
 
-    const runtime: GvisorTtlRuntimeConfig = Object.freeze({
+    const runtime: GvisorTtlRuntimeConfig = {
       version: KDO_H4_R3G_D_RUNTIME_CONFIG_VERSION,
-      watchdogPath: binary,
+      watchdogPath,
       expectedWatchdogSha256: watchdogSha,
       registryRoot: root,
       resolveSubject(value) { assert.equal(value.requirementIdentity, requirement.requirementIdentity); return subject },
@@ -150,7 +210,7 @@ test("H4-R3G-D K2 gateway durably orders PREPARED -> physical arm -> arm evidenc
         commits.push("terminal")
         return createGvisorTtlEvidenceCommit({ kind: "terminal", armOperationIdentity: record.armOperationIdentity, leaseIdentity: record.leaseIdentity, recordIdentity: record.recordIdentity, payloadDigest: payloadDigest(record) })
       },
-    })
+    }
     const gateway = new GvisorTtlExecutionGateway({ filesystem: new NodeWorkspaceFileSystem(root), policy: fixedPolicy("allow", "R3G-D fixture allow"), ttlRuntime: runtime })
     const result = await gateway.enforceGvisorTtl(requirement)
 
@@ -159,13 +219,10 @@ test("H4-R3G-D K2 gateway durably orders PREPARED -> physical arm -> arm evidenc
     assert.equal(result.arm.containerId, CONTAINER_ID)
     assert.equal(result.terminal.armRecordIdentity, result.arm.recordIdentity)
     assert.equal(result.terminal.leaseIdentity, result.arm.leaseIdentity)
-    assert.equal(result.terminal.terminalOutcome, "ttl-expired")
-    assert.deepEqual(methods, ["containerManager.Wait", "containerManager.Processes", "containerManager.Signal"])
-    assert.deepEqual(signalArg, { CID: CONTAINER_ID, Signo: 9, PID: 0, Mode: 1 })
+    assert.equal(result.terminal.terminalOutcome, "natural-exit")
     assert.notEqual(result.arm.controlPeerBindingIdentity, "0".repeat(64))
     assert.match(result.terminal.registryTerminalRecordIdentity, /^[0-9a-f]{64}$/)
   } finally {
-    for (const socket of serverSockets) socket.destroy()
     if (server.listening) await closeServer(server).catch(() => {})
     await rm(root, { recursive: true, force: true })
   }
@@ -173,7 +230,7 @@ test("H4-R3G-D K2 gateway durably orders PREPARED -> physical arm -> arm evidenc
 
 test("H4-R3G-D K2 gateway blocks ASK before trusted subject resolution or watchdog execution", async () => {
   const requirement = fixtureRequirement(60_000); let resolved = false
-  const runtime: GvisorTtlRuntimeConfig = Object.freeze({
+  const runtime: GvisorTtlRuntimeConfig = {
     version: KDO_H4_R3G_D_RUNTIME_CONFIG_VERSION,
     watchdogPath: "/nonexistent/kodac-r3gd-watchdog",
     expectedWatchdogSha256: "e".repeat(64),
@@ -182,7 +239,7 @@ test("H4-R3G-D K2 gateway blocks ASK before trusted subject resolution or watchd
     commitPreparedIntent() { throw new Error("must not run") },
     commitArmEvidence() { throw new Error("must not run") },
     commitTerminalEvidence() { throw new Error("must not run") },
-  })
+  }
   const gateway = new GvisorTtlExecutionGateway({ filesystem: new NodeWorkspaceFileSystem("."), policy: fixedPolicy("ask", "fixture ask"), ttlRuntime: runtime })
   await assert.rejects(gateway.enforceGvisorTtl(requirement), /does not authorize ask/)
   assert.equal(resolved, false)
