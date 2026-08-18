@@ -25,6 +25,7 @@ const ID = Object.freeze({
 })
 const BOOT = "123e4567-e89b-42d3-a456-426614174000"
 const START = "1000000000"
+const OWNER_UPDATED = "1000000001"
 const DEADLINE = "2000000000"
 const TTL_MS = 1000
 const SOCKET_DEV = "41"
@@ -64,12 +65,12 @@ function preparedFixture(): GvisorTtlPreparedIntent {
 
 function fixtures() {
   const prepared = preparedFixture()
-  const claimRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", [prepared.armOperationIdentity, ID.owner, FENCE, BOOT])
+  const physicalLeaseIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE", [prepared.armOperationIdentity, prepared.canonicalArmPayloadDigest, prepared.runtimeInstanceIdentity, BOOT, START, DEADLINE, prepared.watchdogImplementationIdentity])
+  const claimRecordIdentity = createGvisorTtlWatchdogProtocolIdentity("OWNER_CLAIM", ["kodac-h4-r3g-d-owner-claim-v1", physicalLeaseIdentity, prepared.armOperationIdentity, ID.owner, FENCE, "ACTIVE", OWNER_UPDATED, BOOT])
   const claim = parseGvisorTtlPhysicalOwnerClaimRecord([
-    "version=kodac-h4-r3g-d-owner-claim-v1", `armOperationIdentity=${prepared.armOperationIdentity}`, `ownerInstanceIdentity=${ID.owner}`, `terminalFenceToken=${FENCE}`, `linuxBootId=${BOOT}`, `claimRecordIdentity=${claimRecordIdentity}`, "",
+    "version=kodac-h4-r3g-d-owner-claim-v1", `leaseIdentity=${physicalLeaseIdentity}`, `armOperationIdentity=${prepared.armOperationIdentity}`, `ownerInstanceIdentity=${ID.owner}`, `terminalFenceToken=${FENCE}`, "ownerState=ACTIVE", `updatedBoottimeNs=${OWNER_UPDATED}`, `linuxBootId=${BOOT}`, `claimRecordIdentity=${claimRecordIdentity}`, "",
   ].join("\n"))
   const clock = createGvisorTtlWatchdogProtocolIdentity("CLOCK_DOMAIN", [BOOT, "CLOCK_BOOTTIME"])
-  const physicalLeaseIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE", [prepared.armOperationIdentity, prepared.canonicalArmPayloadDigest, prepared.runtimeInstanceIdentity, BOOT, START, DEADLINE, prepared.watchdogImplementationIdentity])
   const physicalRegistryIdentity = createGvisorTtlWatchdogProtocolIdentity("LEASE_REGISTRY", [
     "kodac-h4-r3g-d-watchdog-lease-v1", prepared.armOperationIdentity, prepared.canonicalArmPayloadDigest, physicalLeaseIdentity, prepared.executionAttemptIdentity, prepared.requirementIdentity, prepared.workloadIdentity, prepared.containerBindingIdentity, prepared.containerId, prepared.runtimeInstanceIdentity, String(TTL_MS), BOOT, clock, START, DEADLINE, prepared.watchdogImplementationIdentity, ID.owner, FENCE, claimRecordIdentity,
   ])
