@@ -587,38 +587,54 @@ async function settleDurableMutation<T>(label: string, signal: AbortSignal | und
   }
 }
 
+class GvisorOutputPositiveAbortError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "GvisorOutputPositiveAbortError"
+  }
+}
+
 /**
  * Positive evidence has a stronger cancellation contract than other durable
  * callbacks. The trusted callback receives the caller signal and must abort its
  * transaction without persisting E3 if cancellation wins before durable
- * completion. K2 still waits for the started callback to settle and never
- * returns positive success if cancellation is observed before that settlement.
+ * completion. K2 races only the authoritative mutation settlement against the
+ * caller abort event, then waits for a started mutation to settle before return.
  */
 async function settleAbortFencedPositiveMutation<T>(
   label: string,
   signal: AbortSignal | undefined,
   operation: () => Promise<T> | T,
 ): Promise<T> {
-  if (signal?.aborted) throw new Error(`${label} aborted before start`)
-  let settled = false
-  let abortedBeforeSettlement = false
-  const onAbort = () => { if (!settled) abortedBeforeSettlement = true }
+  if (signal?.aborted) throw new GvisorOutputPositiveAbortError(`${label} aborted before start`)
+  let resolveAbort!: () => void
+  const abortOutcome = new Promise<{ readonly kind: "aborted" }>((resolve) => {
+    resolveAbort = () => resolve({ kind: "aborted" })
+  })
+  const onAbort = () => resolveAbort()
   signal?.addEventListener("abort", onAbort, { once: true })
   try {
-    if (signal?.aborted) throw new Error(`${label} aborted before start`)
-    const mutation = operation()
-    if (!(mutation instanceof Promise)) {
-      settled = true
-      if (abortedBeforeSettlement || signal?.aborted) throw new Error(`${label} aborted before durable completion`)
-      return mutation
+    if (signal?.aborted) throw new GvisorOutputPositiveAbortError(`${label} aborted before start`)
+    let mutation: Promise<T>
+    try { mutation = Promise.resolve(operation()) }
+    catch (error) {
+      if (signal?.aborted) throw new GvisorOutputPositiveAbortError(`${label} aborted before durable completion`)
+      if (error instanceof Error) throw error
+      throw new Error(`${label} failed: ${String(error)}`)
     }
-    const result = await mutation
-    settled = true
-    if (abortedBeforeSettlement || signal?.aborted) throw new Error(`${label} aborted before durable completion`)
-    return result
-  } catch (error) {
-    if (error instanceof Error) throw error
-    throw new Error(`${label} failed: ${String(error)}`)
+    const mutationOutcome = mutation.then(
+      (value) => ({ kind: "fulfilled" as const, value }),
+      (error: unknown) => ({ kind: "rejected" as const, error }),
+    )
+    const first = await Promise.race([mutationOutcome, abortOutcome])
+    if (first.kind === "fulfilled") return first.value
+    if (first.kind === "rejected") {
+      if (first.error instanceof Error) throw first.error
+      throw new Error(`${label} failed: ${String(first.error)}`)
+    }
+    const final = await mutationOutcome
+    if (final.kind === "rejected") throw new GvisorOutputPositiveAbortError(`${label} aborted before durable completion`)
+    throw new Error(`${label} trusted positive callback settled successfully after caller abort`)
   } finally {
     signal?.removeEventListener("abort", onAbort)
   }
@@ -809,14 +825,24 @@ export class GvisorOutputExecutionGateway extends ExecutionGateway {
           aggregation: aggregationForRecord(capture.aggregation), terminalEvidenceIdentity: terminal.recordIdentity,
         })
         if (record.outputOperationIdentity !== prepared.outputOperationIdentity) throw new Error("R3G-E final record operation identity does not match durable PREPARED operation")
-        const commit = validateGvisorOutputBoundCommit(
-          await settleAbortFencedPositiveMutation(
+        let commitRaw: unknown
+        try {
+          commitRaw = await settleAbortFencedPositiveMutation(
             "R3G-E durable positive output evidence",
             options.signal,
             () => this.outputRuntime.commitOutputEvidence(record, { signal: options.signal }),
-          ),
-          record,
-        )
+          )
+        } catch (error) {
+          if (error instanceof GvisorOutputPositiveAbortError) {
+            const failure = createGvisorOutputFailureRecord(prepared, "aborted", error)
+            validateGvisorOutputFailureCommit(
+              await settleDurableMutation("R3G-E durable positive-abort failure", undefined, () => this.outputRuntime.commitFailureEvidence(failure)),
+              failure,
+            )
+          }
+          throw error
+        }
+        const commit = validateGvisorOutputBoundCommit(commitRaw, record)
         const receipt = createReceipt({ capability: intent.capability, inputDigest: intent.inputDigest, paths: intent.paths, policy, startedAt, completedAt: new Date().toISOString(), result: { status: "success", outputDigest: record.recordIdentity, outputBytes: record.acceptedAggregateBytes, exitCode: 0 } })
         await observer?.onReceipt?.(receipt)
         return Object.freeze({ subject, arm, terminal, capture, prepared, reservation, record, commit })
