@@ -840,6 +840,10 @@ test("H4-R3G-E caller abort while positive durable commit is pending prevents po
     assert.equal(positivePersisted, false)
     assert.equal(fixture.events.includes("output-positive"), false)
     assert.equal(fixture.events.includes("output-positive-abort-fenced"), true)
+    assert.equal(fixture.events.includes("output-failure:aborted"), true)
+    const abortFenceIndex = fixture.events.indexOf("output-positive-abort-fenced")
+    const failureIndex = fixture.events.indexOf("output-failure:aborted")
+    assert.ok(abortFenceIndex >= 0 && failureIndex > abortFenceIndex, "durable aborted failure must commit after positive callback abort-fences and before propagation")
     await delay(250)
     assert.equal(positivePersisted, false, "aborted positive durable callback must not persist E3 later")
   } finally { await fixture.cleanup() }
