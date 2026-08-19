@@ -41,6 +41,11 @@ export {
   type GvisorOutputReservation,
   type GvisorOutputRuntimeConfig,
 } from "./execution/gateway-gvisor-output-runtime.ts"
+export {
+  GvisorPhysicalProofExecutionGateway,
+  KDO_H4_R3G_F_RUNTIME_VERSION,
+  type GvisorPhysicalProofExecutionResult,
+} from "./execution/gateway-gvisor-physical-proof-runtime.ts"
 export * from "./execution/gateway-gvisor-ttl-runtime.ts"
 export * from "./extensions/contracts.ts"
 export * from "./extensions/registry.ts"
@@ -81,6 +86,12 @@ export * from "./trust/sandbox-observer-gvisor-network.ts"
 export * from "./trust/sandbox-observer-gvisor-network-runtime.ts"
 export * from "./trust/sandbox-observer-gvisor-runtime.ts"
 export * from "./trust/sandbox-observer-gvisor.ts"
+export {
+  KDO_H4_R3G_F_CAPABILITY,
+  KDO_H4_R3G_F_EVIDENCE_CLASS,
+  KDO_H4_R3G_F_PROVIDER_ID,
+  KDO_H4_R3G_F_VERSION,
+} from "./trust/sandbox-physical-conjunction-gvisor.ts"
 export * from "./trust/sandbox-workload.ts"
 export * from "./trust/policy.ts"
 export * from "./verification/commands.ts"
