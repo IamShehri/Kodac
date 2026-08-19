@@ -538,7 +538,33 @@ export function createGvisorPhysicalConjunctionObserverIdentity(): string {
 }
 
 export function createGvisorPhysicalExecutionInstanceIdentity(coherenceValue: GvisorPhysicalSubjectCoherence): string {
-  const coherence = createGvisorPhysicalSubjectCoherence(coherenceValue)
+  const record = asPlainRecord(coherenceValue, "R3G-F subject coherence for execution instance")
+  exactKeys(record, [
+    "version", "executionAttemptIdentity", "requirementIdentity", "workloadIdentity", "containerBindingIdentity", "containerId", "runtimeInstanceIdentity",
+    "resourceRuntimeLineageIdentity", "sourceRuntimeLineageIdentity", "networkBeforeRuntimeLineageIdentity", "networkAfterRuntimeLineageIdentity",
+    "resourceRecordIdentity", "sourceRecordIdentity", "networkRecordIdentity", "ttlArmRecordIdentity", "ttlTerminalRecordIdentity", "outputRecordIdentity",
+    "subjectCoherenceIdentity",
+  ], "R3G-F subject coherence for execution instance")
+  if (record.version !== KDO_H4_R3G_F_COHERENCE_VERSION) throw new TypeError("R3G-F subject coherence version mismatch")
+  const coherence = createGvisorPhysicalSubjectCoherence({
+    executionAttemptIdentity: record.executionAttemptIdentity as string,
+    requirementIdentity: record.requirementIdentity as string,
+    workloadIdentity: record.workloadIdentity as string,
+    containerBindingIdentity: record.containerBindingIdentity as string,
+    containerId: record.containerId as string,
+    runtimeInstanceIdentity: record.runtimeInstanceIdentity as string,
+    resourceRuntimeLineageIdentity: record.resourceRuntimeLineageIdentity as string,
+    sourceRuntimeLineageIdentity: record.sourceRuntimeLineageIdentity as string,
+    networkBeforeRuntimeLineageIdentity: record.networkBeforeRuntimeLineageIdentity as string,
+    networkAfterRuntimeLineageIdentity: record.networkAfterRuntimeLineageIdentity as string,
+    resourceRecordIdentity: record.resourceRecordIdentity as string,
+    sourceRecordIdentity: record.sourceRecordIdentity as string,
+    networkRecordIdentity: record.networkRecordIdentity as string,
+    ttlArmRecordIdentity: record.ttlArmRecordIdentity as string,
+    ttlTerminalRecordIdentity: record.ttlTerminalRecordIdentity as string,
+    outputRecordIdentity: record.outputRecordIdentity as string,
+  })
+  if (identity(record.subjectCoherenceIdentity, "subjectCoherenceIdentity") !== coherence.subjectCoherenceIdentity) throw new TypeError("R3G-F subject coherence identity mismatch")
   return hash("EXECUTION_INSTANCE", [
     coherence.executionAttemptIdentity,
     coherence.containerBindingIdentity,
