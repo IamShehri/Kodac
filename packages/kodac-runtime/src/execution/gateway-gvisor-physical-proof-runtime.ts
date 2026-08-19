@@ -115,6 +115,8 @@ function proofIntent(requirement: SandboxExecutionRequirement): ExecutionIntent 
   })
 }
 
+export function createGvisorPhysicalConjunctionRuntime(value: GvisorPhysicalConjunctionRuntimeConfig): GvisorPhysicalConjunctionRuntime
+export function createGvisorPhysicalConjunctionRuntime(value: unknown): GvisorPhysicalConjunctionRuntime
 export function createGvisorPhysicalConjunctionRuntime(value: unknown): GvisorPhysicalConjunctionRuntime {
   const record = asPlainRecord(value, "R3G-F conjunction runtime config")
   exactKeys(record, ["resolveEvidence", "revalidateSubject", "commitConjunctionEvidence"], "R3G-F conjunction runtime config")
