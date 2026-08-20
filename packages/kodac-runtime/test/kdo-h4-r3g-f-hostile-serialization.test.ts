@@ -146,3 +146,14 @@ test("H4-R3G-F conjunction commit identity uses an explicit ordered preimage", (
   assert.match(block, /hash\("CONJUNCTION_COMMIT", \[\s*base\.version,\s*base\.executionAttemptIdentity,\s*base\.evidenceBundleIdentity,\s*base\.recordIdentity,\s*\]\)/)
   assert.doesNotMatch(block, /hash\("CONJUNCTION_COMMIT", base\)/)
 })
+
+test("H4-R3G-F durable commit rechecks abort after a fulfilled race winner", () => {
+  const source = readFileSync(new URL("../src/execution/gateway-gvisor-physical-proof-runtime.ts", import.meta.url), "utf8")
+  const start = source.indexOf("async function boundedDurableCommit")
+  const end = source.indexOf("export class GvisorPhysicalProofExecutionGateway", start)
+  assert.ok(start >= 0 && end > start, "bounded durable commit block must exist")
+  const block = source.slice(start, end)
+  assert.match(block, /if \(first\.kind === "fulfilled"\) \{\s*if \(controller\.signal\.aborted\) throw new GvisorPhysicalCommitAbortError\(`\$\{label\} trusted callback settled successfully after abort`\)\s*return first\.value\s*\}/)
+  assert.match(block, /if \(controller\.signal\.aborted\) throw new GvisorPhysicalCommitAbortError\(`\$\{label\} trusted callback returned success after abort`\)/)
+  assert.match(block, /throw new GvisorPhysicalCommitAbortError\(`\$\{label\} trusted callback settled successfully after abort`\)/)
+})
