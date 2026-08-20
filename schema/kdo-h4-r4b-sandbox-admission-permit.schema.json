@@ -82,8 +82,8 @@
     "requestInstanceId": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 128,
-      "pattern": "^[^\\u0000]+$"
+      "pattern": "^[^\\u0000]+$",
+      "description": "Exact H4-R1 one-shot request occurrence identifier. Runtime validation additionally enforces <=128 UTF-8 bytes; JSON Schema maxLength is intentionally omitted because it counts characters rather than UTF-8 bytes."
     },
     "approvalIntent": {
       "type": "object",
