@@ -225,6 +225,8 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
 
 interface FakeDockerOptions {
   readonly abortController?: AbortController
+  readonly abortOnImageInspect?: AbortController
+  readonly abortOnContainerInspect?: AbortController
   readonly loseCreateResponse?: boolean
   readonly persistOnLostResponse?: boolean
   readonly createStatusCode?: number
@@ -250,10 +252,17 @@ async function withFakeDocker<T>(
   const createBodies: string[] = []
   let created = false
   let creates = 0
+  let imageInspectAbortTriggered = false
+  let containerInspectAbortTriggered = false
   const imageInspectPath = `/v${KDO_H4_R4B_B1_DOCKER_API_VERSION}/images/${encodeURIComponent(prepared.sourceReference)}/json`
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
     if (request.method === "GET" && request.url === imageInspectPath) {
       events.push("docker:image-inspect")
+      if (options.abortOnImageInspect && !imageInspectAbortTriggered) {
+        imageInspectAbortTriggered = true
+        options.abortOnImageInspect.abort()
+        return
+      }
       const body: Record<string, unknown> = {
         Id: IMAGE_ID,
         Config: {
@@ -293,6 +302,11 @@ async function withFakeDocker<T>(
     }
     if (request.method === "GET" && request.url === `/v${KDO_H4_R4B_B1_DOCKER_API_VERSION}/containers/${prepared.containerName}/json`) {
       events.push("docker:inspect")
+      if (options.abortOnContainerInspect && !containerInspectAbortTriggered) {
+        containerInspectAbortTriggered = true
+        options.abortOnContainerInspect.abort()
+        return
+      }
       if (!created) {
         response.writeHead(404)
         response.end("{}")
@@ -414,6 +428,23 @@ test("H4-R4B-B1 exact image preflight is required before dispatch authority", { 
       assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:image-inspect"])
     })
   }
+})
+
+test("H4-R4B-B1 cancellation closes an in-flight image preflight before dispatch authority", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+  const controller = new AbortController()
+  await withFakeDocker(prepared, args, { abortOnImageInspect: controller }, async ({ socketPath, events, createCount }) => {
+    const runtime = createGvisorDockerDormantCreateRuntime({ socketPath, ...durableHarness(permit, events) })
+    await assert.rejects(
+      new GvisorDockerDormantCreateGateway(runtime).createDormantAdmission(permit, permitCommit, { signal: controller.signal }),
+      SandboxDormantCreateBlockedError,
+    )
+    assert.equal(createCount(), 0)
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:image-inspect"])
+  })
 })
 
 test("H4-R4B-B1 exact create orders image proof and durable dispatch claim before one Docker mutation", { skip: process.platform !== "linux" }, async () => {
@@ -692,6 +723,30 @@ test("H4-R4B-B1 caller cancellation after Docker dispatch withholds authority wh
     const recovered = await gateway.createDormantAdmission(permit, permitCommit)
     assert.equal(recovered.recovered, true)
     assert.equal(createCount(), 1)
+  })
+})
+
+test("H4-R4B-B1 cancellation closes in-flight reconciliation and recovery remains inspect-only", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+  const controller = new AbortController()
+  await withFakeDocker(prepared, args, { abortOnContainerInspect: controller }, async ({ socketPath, events, createCount }) => {
+    const stores = durableHarness(permit, events)
+    const gateway = new GvisorDockerDormantCreateGateway(createGvisorDockerDormantCreateRuntime({ socketPath, ...stores }))
+    await assert.rejects(
+      gateway.createDormantAdmission(permit, permitCommit, { signal: controller.signal }),
+      SandboxDormantCreateBlockedError,
+    )
+    assert.equal(createCount(), 1)
+    assert.equal(events.includes("store:created"), false)
+
+    events.length = 0
+    const recovered = await gateway.createDormantAdmission(permit, permitCommit)
+    assert.equal(recovered.recovered, true)
+    assert.equal(createCount(), 1)
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:image-inspect", "store:dispatch", "docker:inspect", "store:created"])
   })
 })
 
