@@ -61,8 +61,6 @@ function sha256(value: string): string {
 }
 
 function gitBlobSha1(value: string): string {
-  // GitHub's canonical repository blobs are LF-delimited. Windows checkout may
-  // materialize CRLF, so normalize working-tree transport before pinning blob bytes.
   const canonical = value.replace(/\r\n/g, "\n")
   const bytes = Buffer.from(canonical, "utf8")
   return createHash("sha1").update(`blob ${bytes.byteLength}\0`, "utf8").update(bytes).digest("hex")
@@ -240,7 +238,6 @@ test("H4-R4B-A exact allowed-once flow persists asked and decided evidence befor
   const events: string[] = []
   const gateway = gatewayFixture(events)
   const result = await gateway.authorizeSandboxAdmission(fixtureRequirement())
-
   assert.deepEqual(events, ["policy", "asked-commit", "decide", "decided-commit", "permit-commit"])
   assert.equal(result.permit.outcome, "allowed-once")
   assert.equal(result.permit.admissionAttemptLimit, 1)
@@ -262,6 +259,19 @@ test("H4-R4B-A policy deny and allow never invoke approval or fabricate a one-sh
   }
 })
 
+test("H4-R4B-A pre-aborted ASK blocks before approval evidence or service activity", async () => {
+  const events: string[] = []
+  const controller = new AbortController()
+  controller.abort()
+  const gateway = gatewayFixture(events)
+  await assert.rejects(() => gateway.authorizeSandboxAdmission(fixtureRequirement(), { signal: controller.signal }), (error: unknown) => {
+    assert.equal(error instanceof SandboxAdmissionApprovalBlockedError, true)
+    assert.equal((error as SandboxAdmissionApprovalBlockedError).outcome, "cancelled")
+    return true
+  })
+  assert.deepEqual(events, ["policy"])
+})
+
 test("H4-R4B-A asked persistence failure prevents approval service invocation", async () => {
   const events: string[] = []
   const gateway = gatewayFixture(events, {
@@ -272,6 +282,39 @@ test("H4-R4B-A asked persistence failure prevents approval service invocation", 
   })
   await assert.rejects(() => gateway.authorizeSandboxAdmission(fixtureRequirement()), SandboxAdmissionApprovalUnprovenError)
   assert.deepEqual(events, ["policy", "asked-commit"])
+})
+
+test("H4-R4B-A cancellation during pending approval converts late allowed-once to durable cancelled evidence", async () => {
+  const events: string[] = []
+  const controller = new AbortController()
+  let resolveDecision: ((value: unknown) => void) | undefined
+  let capturedRequest: ApprovalRequest | undefined
+  const gateway = gatewayFixture(events, {
+    decisionMutator(request) {
+      capturedRequest = request
+      return new Promise<unknown>((resolve) => {
+        resolveDecision = resolve
+      })
+    },
+  })
+
+  const pending = gateway.authorizeSandboxAdmission(fixtureRequirement(), { signal: controller.signal })
+  while (resolveDecision === undefined || capturedRequest === undefined) {
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  controller.abort()
+  resolveDecision({
+    version: KDO_H4_R1_APPROVAL_VERSION,
+    requestIdentity: capturedRequest.requestIdentity,
+    requestInstanceId: capturedRequest.requestInstanceId,
+    outcome: "allowed-once",
+  })
+  await assert.rejects(() => pending, (error: unknown) => {
+    assert.equal(error instanceof SandboxAdmissionApprovalBlockedError, true)
+    assert.equal((error as SandboxAdmissionApprovalBlockedError).outcome, "cancelled")
+    return true
+  })
+  assert.deepEqual(events, ["policy", "asked-commit", "decide", "decided-commit"])
 })
 
 test("H4-R4B-A decision request identity and occurrence mismatch fail closed and never commit a permit", async () => {
@@ -356,7 +399,6 @@ test("H4-R4B-A permit identity is deterministic for one exact occurrence and cha
   const replay = fixedPermit(baseRequirement, REQUEST_INSTANCE_A)
   const nextOccurrence = fixedPermit(baseRequirement, REQUEST_INSTANCE_B)
   const repositoryDrift = fixedPermit(fixtureRequirement({ repository: "ghcr.io/acme/kodac-fixture-alt" }), REQUEST_INSTANCE_A)
-
   assert.equal(first.permitIdentity, replay.permitIdentity)
   assert.notEqual(first.permitIdentity, nextOccurrence.permitIdentity)
   assert.notEqual(first.permitIdentity, repositoryDrift.permitIdentity)
@@ -365,7 +407,6 @@ test("H4-R4B-A permit identity is deterministic for one exact occurrence and cha
 
 test("H4-R4B-A permit validation rejects outer and nested binding substitution", () => {
   const permit = fixedPermit(fixtureRequirement())
-
   const outer = clone(permit) as unknown as Record<string, unknown>
   outer.bindingIdentity = "f".repeat(64)
   assert.throws(() => validateSandboxAdmissionPermit(outer), /bindingIdentity mismatch/)
@@ -382,7 +423,6 @@ test("H4-R4B-A permit validation rejects outer and nested binding substitution",
 test("H4-R4B-A hostile serialized permit structures fail closed without executing caller hooks", () => {
   const permit = fixedPermit(fixtureRequirement())
   let touched = false
-
   const accessor: Record<string, unknown> = { ...permit }
   Object.defineProperty(accessor, "permitIdentity", {
     enumerable: true,
@@ -411,7 +451,6 @@ test("H4-R4B-A future consumption reservation binds exactly one permit and one e
   const first = createSandboxAdmissionConsumptionReservation(permit, attemptA)
   const replay = createSandboxAdmissionConsumptionReservation(permit, attemptA)
   const other = createSandboxAdmissionConsumptionReservation(permit, attemptB)
-
   assert.equal(first.reservationIdentity, replay.reservationIdentity)
   assert.notEqual(first.reservationIdentity, other.reservationIdentity)
   assert.deepEqual(validateSandboxAdmissionConsumptionReservation(first, permit), first)
@@ -420,7 +459,6 @@ test("H4-R4B-A future consumption reservation binds exactly one permit and one e
 test("H4-R4B-A schema is closed and positive permit can represent only allowed-once with one attempt", () => {
   const schema = JSON.parse(source("../../../schema/kdo-h4-r4b-sandbox-admission-permit.schema.json")) as {
     additionalProperties: boolean
-    required: string[]
     properties: Record<string, unknown>
     $defs: {
       requestInstanceId: { minLength: number; pattern: string; description: string; maxLength?: number }
