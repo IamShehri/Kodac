@@ -183,6 +183,8 @@ function inspectBody(
       Env: [...IMAGE_ENV],
       WorkingDir: IMAGE_WORKING_DIR,
       AttachStdin: false,
+      AttachStdout: true,
+      AttachStderr: true,
       Tty: false,
       OpenStdin: false,
       StdinOnce: false,
@@ -494,6 +496,8 @@ test("H4-R4B-B1 exact create orders image proof and durable dispatch claim befor
       Entrypoint: [prepared.entrypointExecutable],
       Cmd: [...args],
       AttachStdin: false,
+      AttachStdout: true,
+      AttachStderr: true,
       Tty: false,
       OpenStdin: false,
       StdinOnce: false,
@@ -510,6 +514,38 @@ test("H4-R4B-B1 exact create orders image proof and durable dispatch claim befor
       },
     })
   })
+})
+
+test("H4-R4B-B1 attach stream compatibility is exact and fail-closed", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+  const hostile: readonly FakeDockerOptions[] = [
+    { inspectConfigOverrides: { AttachStdout: undefined } },
+    { inspectConfigOverrides: { AttachStdout: false } },
+    { inspectConfigOverrides: { AttachStdout: "true" } },
+    { inspectConfigOverrides: { AttachStderr: undefined } },
+    { inspectConfigOverrides: { AttachStderr: false } },
+    { inspectConfigOverrides: { AttachStderr: "true" } },
+    { inspectConfigOverrides: { AttachStdin: undefined } },
+    { inspectConfigOverrides: { AttachStdin: true } },
+    { inspectConfigOverrides: { AttachStdin: "false" } },
+    { inspectConfigOverrides: { OpenStdin: undefined } },
+    { inspectConfigOverrides: { OpenStdin: true } },
+    { inspectConfigOverrides: { OpenStdin: "false" } },
+  ]
+  for (const options of hostile) {
+    await withFakeDocker(prepared, args, options, async ({ socketPath, events, createCount }) => {
+      const runtime = createGvisorDockerDormantCreateRuntime({ socketPath, ...durableHarness(permit, events) })
+      await assert.rejects(
+        new GvisorDockerDormantCreateGateway(runtime).createDormantAdmission(permit, permitCommit),
+        SandboxDormantCreateIndeterminateError,
+      )
+      assert.equal(createCount(), 1)
+      assert.equal(events.includes("store:created"), false)
+    })
+  }
 })
 
 test("H4-R4B-B1 prepared-only recovery may acquire the first dispatch claim and issue the first POST", { skip: process.platform !== "linux" }, async () => {
