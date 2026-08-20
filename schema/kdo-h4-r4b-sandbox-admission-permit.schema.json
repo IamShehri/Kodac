@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kodac.dev/schema/kdo-h4-r4b-sandbox-admission-permit.schema.json",
+  "title": "Kodac H4-R4B-A Sandbox Admission Permit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "binding",
+    "askedEvidence",
+    "askedEvidenceCommit",
+    "decidedEvidence",
+    "decidedEvidenceCommit",
+    "bindingIdentity",
+    "requirementIdentity",
+    "workloadIdentity",
+    "sourceIdentity",
+    "sourceDigest",
+    "entrypointIdentity",
+    "resourcePolicyIdentity",
+    "networkPolicyIdentity",
+    "confinementRequestIdentity",
+    "workspaceIdentity",
+    "executionIntentIdentity",
+    "requiredSemanticRuntimeClass",
+    "downgradePolicy",
+    "credentialBindingIdentity",
+    "approvalCapability",
+    "approvalInputDigest",
+    "approvalRequestIdentity",
+    "approvalRequestInstanceId",
+    "askedEvidenceIdentity",
+    "askedEvidenceCommitIdentity",
+    "decidedEvidenceIdentity",
+    "decidedEvidenceCommitIdentity",
+    "outcome",
+    "admissionAttemptLimit",
+    "permitIdentity"
+  ],
+  "properties": {
+    "version": { "const": "kodac-h4-r4b-a-sandbox-admission-permit-v1" },
+    "binding": { "$ref": "./kdo-h4-r4a-sandbox-execution-approval-binding.schema.json" },
+    "askedEvidence": { "$ref": "#/$defs/askedEvidence" },
+    "askedEvidenceCommit": { "$ref": "#/$defs/approvalEvidenceCommit" },
+    "decidedEvidence": { "$ref": "#/$defs/decidedEvidence" },
+    "decidedEvidenceCommit": { "$ref": "#/$defs/approvalEvidenceCommit" },
+    "bindingIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "requirementIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "workloadIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "sourceIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "sourceDigest": { "$ref": "#/$defs/sha256Digest" },
+    "entrypointIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "resourcePolicyIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "networkPolicyIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "confinementRequestIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "workspaceIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "executionIntentIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "requiredSemanticRuntimeClass": { "enum": ["gvisor", "kata-firecracker", "kata-qemu"] },
+    "downgradePolicy": { "const": "forbid" },
+    "credentialBindingIdentity": { "type": "null" },
+    "approvalCapability": { "const": "runtime.execute.sandbox" },
+    "approvalInputDigest": { "$ref": "#/$defs/sha256Identity" },
+    "approvalRequestIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "approvalRequestInstanceId": { "$ref": "#/$defs/requestInstanceId" },
+    "askedEvidenceIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "askedEvidenceCommitIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "decidedEvidenceIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "decidedEvidenceCommitIdentity": { "$ref": "#/$defs/sha256Identity" },
+    "outcome": { "const": "allowed-once" },
+    "admissionAttemptLimit": { "const": 1 },
+    "permitIdentity": { "$ref": "#/$defs/sha256Identity" }
+  },
+  "$defs": {
+    "sha256Identity": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sha256Digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "requestInstanceId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000]+$",
+      "description": "Exact H4-R1 one-shot request occurrence identifier. Runtime validation additionally enforces <=128 UTF-8 bytes; JSON Schema maxLength is intentionally omitted because it counts characters rather than UTF-8 bytes."
+    },
+    "approvalIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "paths", "inputDigest"],
+      "properties": {
+        "capability": { "const": "runtime.execute.sandbox" },
+        "paths": {
+          "type": "array",
+          "maxItems": 0,
+          "items": false
+        },
+        "inputDigest": { "$ref": "#/$defs/sha256Identity" }
+      }
+    },
+    "askedEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "evidenceIdentity", "phase", "requestIdentity", "requestInstanceId", "intent"],
+      "properties": {
+        "version": { "const": "kodac-h4-r1-one-shot-approval-v1" },
+        "evidenceIdentity": { "$ref": "#/$defs/sha256Identity" },
+        "phase": { "const": "asked" },
+        "requestIdentity": { "$ref": "#/$defs/sha256Identity" },
+        "requestInstanceId": { "$ref": "#/$defs/requestInstanceId" },
+        "intent": { "$ref": "#/$defs/approvalIntent" }
+      }
+    },
+    "decidedEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "evidenceIdentity", "phase", "requestIdentity", "requestInstanceId", "intent", "outcome"],
+      "properties": {
+        "version": { "const": "kodac-h4-r1-one-shot-approval-v1" },
+        "evidenceIdentity": { "$ref": "#/$defs/sha256Identity" },
+        "phase": { "const": "decided" },
+        "requestIdentity": { "$ref": "#/$defs/sha256Identity" },
+        "requestInstanceId": { "$ref": "#/$defs/requestInstanceId" },
+        "intent": { "$ref": "#/$defs/approvalIntent" },
+        "outcome": { "const": "allowed-once" }
+      }
+    },
+    "approvalEvidenceCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "evidenceIdentity", "durability"],
+      "properties": {
+        "version": { "const": "kodac-h4-r1-approval-evidence-commit-v1" },
+        "evidenceIdentity": { "$ref": "#/$defs/sha256Identity" },
+        "durability": { "const": "durable" }
+      }
+    }
+  }
+}
