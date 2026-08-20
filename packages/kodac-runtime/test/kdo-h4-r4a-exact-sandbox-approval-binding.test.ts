@@ -56,6 +56,7 @@ const REQUEST_INSTANCE_A = "123e4567-e89b-42d3-a456-426614174000"
 const REQUEST_INSTANCE_B = "123e4567-e89b-42d3-a456-426614174001"
 
 type FixtureOverrides = {
+  repository?: string
   digest?: string
   executable?: string
   args?: readonly string[]
@@ -78,7 +79,7 @@ function fixtureWorkload(overrides: FixtureOverrides = {}) {
   })
   return createSandboxWorkloadRequest({
     source: createSandboxOciImageSource({
-      repository: "ghcr.io/acme/kodac-fixture",
+      repository: overrides.repository ?? "ghcr.io/acme/kodac-fixture",
       digest: overrides.digest ?? FIXTURE_DIGEST,
     }),
     entrypoint: createSandboxEntrypoint({
@@ -188,6 +189,7 @@ test("H4-R4A approval intent is fixed namespace empty paths and changes across e
   assert.equal(Object.isFrozen(base.paths), true)
 
   for (const requirement of [
+    fixtureRequirement({ repository: "ghcr.io/acme/kodac-fixture-alt" }),
     fixtureRequirement({ digest: OTHER_DIGEST }),
     fixtureRequirement({ executable: "/usr/bin/python3" }),
     fixtureRequirement({ args: ["--version", "different"] }),
@@ -230,6 +232,10 @@ test("H4-R4A rejects capability paths digest request identity and request-instan
   const emptyInstance = clone(request)
   emptyInstance.requestInstanceId = ""
   assert.throws(() => createSandboxExecutionApprovalBinding(requirement, emptyInstance), /requestInstanceId/)
+
+  const nulInstance = clone(request)
+  nulInstance.requestInstanceId = "before\u0000after"
+  assert.throws(() => createSandboxExecutionApprovalBinding(requirement, nulInstance), /NUL-free/)
 
   const oversizedInstance = clone(request)
   oversizedInstance.requestInstanceId = "é".repeat(65)
@@ -344,6 +350,16 @@ test("H4-R4A schema is closed and cannot represent approval outcome", () => {
   assert.equal(schema.$defs.approvalIntent.properties.paths.maxItems, 0)
   assert.equal(Object.hasOwn(schema.properties, "outcome"), false)
   assert.equal(Object.hasOwn(schema.$defs.approvalRequest.properties, "outcome"), false)
+
+  const outerInstance = schema.properties.approvalRequestInstanceId as { pattern: string }
+  const nestedInstance = schema.$defs.approvalRequest.properties.requestInstanceId as { pattern: string }
+  assert.equal(outerInstance.pattern, "^[^\\u0000]+$")
+  assert.equal(nestedInstance.pattern, "^[^\\u0000]+$")
+  assert.equal(new RegExp(outerInstance.pattern).test("request-instance"), true)
+  assert.equal(new RegExp(outerInstance.pattern).test("bad\u0000instance"), false)
+  assert.equal(new RegExp(nestedInstance.pattern).test("request-instance"), true)
+  assert.equal(new RegExp(nestedInstance.pattern).test("bad\u0000instance"), false)
+
   assert.deepEqual(new Set(schema.required), new Set([
     "version", "requirement", "approvalRequest", "requirementIdentity", "workloadIdentity", "sourceIdentity",
     "sourceDigest", "entrypointIdentity", "resourcePolicyIdentity", "networkPolicyIdentity",
