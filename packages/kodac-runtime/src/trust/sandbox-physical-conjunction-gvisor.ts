@@ -100,6 +100,8 @@ export interface GvisorPhysicalEvidenceResolution {
   readonly version: typeof KDO_H4_R3G_F_RESOLUTION_VERSION
   readonly trustedProvenanceIdentity: string
   readonly bundle: GvisorPhysicalEvidenceBundle
+  /** Trusted lookup result for bundle.sourceRecord.runtimeLineageIdentity. */
+  readonly sourceRuntimeInstanceIdentity: string
   readonly evidenceBundleIdentity: string
 }
 
@@ -228,7 +230,7 @@ function requireSame(label: string, values: readonly string[]): string {
   return first
 }
 
-function bundleIdentity(bundle: GvisorPhysicalEvidenceBundle): string {
+function bundleIdentity(bundle: GvisorPhysicalEvidenceBundle, sourceRuntimeInstanceIdentity: string): string {
   return hash("EVIDENCE_BUNDLE", [
     bundle.resourceRecord.resourceCandidateIdentity,
     bundle.resourceCommit.commitIdentity,
@@ -242,7 +244,38 @@ function bundleIdentity(bundle: GvisorPhysicalEvidenceBundle): string {
     bundle.ttlTerminalCommit.commitIdentity,
     bundle.outputRecord.recordIdentity,
     bundle.outputCommit.commitIdentity,
+    sourceRuntimeInstanceIdentity,
   ])
+}
+
+export function resolveGvisorSourceRuntimeInstanceIdentity(input: {
+  sourceRuntimeLineageIdentity: string
+  resourceRuntimeLineageIdentity: string
+  resourceRuntimeInstanceIdentity: string
+  trustedResolvedSourceRuntimeInstanceIdentity?: string
+}): string {
+  const record = asPlainRecord(input, "R3G-F source runtime resolution input")
+  const hasTrustedResolution = Object.prototype.hasOwnProperty.call(record, "trustedResolvedSourceRuntimeInstanceIdentity")
+  exactKeys(
+    record,
+    hasTrustedResolution
+      ? ["sourceRuntimeLineageIdentity", "resourceRuntimeLineageIdentity", "resourceRuntimeInstanceIdentity", "trustedResolvedSourceRuntimeInstanceIdentity"]
+      : ["sourceRuntimeLineageIdentity", "resourceRuntimeLineageIdentity", "resourceRuntimeInstanceIdentity"],
+    "R3G-F source runtime resolution input",
+  )
+  const sourceRuntimeLineageIdentity = identity(record.sourceRuntimeLineageIdentity, "sourceRuntimeLineageIdentity")
+  const resourceRuntimeLineageIdentity = identity(record.resourceRuntimeLineageIdentity, "resourceRuntimeLineageIdentity")
+  const resourceRuntimeInstanceIdentity = identity(record.resourceRuntimeInstanceIdentity, "resourceRuntimeInstanceIdentity")
+  if (sourceRuntimeLineageIdentity === resourceRuntimeLineageIdentity) {
+    if (!hasTrustedResolution) return resourceRuntimeInstanceIdentity
+    const resolved = identity(record.trustedResolvedSourceRuntimeInstanceIdentity, "trustedResolvedSourceRuntimeInstanceIdentity")
+    if (resolved !== resourceRuntimeInstanceIdentity) throw new TypeError("R3G-F trusted source runtime resolution does not match the exact runtime instance")
+    return resolved
+  }
+  if (!hasTrustedResolution) throw new TypeError("R3G-F distinct source runtime lineage requires trusted runtime-instance resolution")
+  const resolved = identity(record.trustedResolvedSourceRuntimeInstanceIdentity, "trustedResolvedSourceRuntimeInstanceIdentity")
+  if (resolved !== resourceRuntimeInstanceIdentity) throw new TypeError("R3G-F source lineage resolves to a different runtime instance")
+  return resolved
 }
 
 export function validateGvisorPhysicalEvidenceBundle(value: unknown, requirementValue: SandboxExecutionRequirement): GvisorPhysicalEvidenceBundle {
@@ -358,29 +391,49 @@ export function createGvisorPhysicalEvidenceResolution(input: {
   trustedProvenanceIdentity: string
   bundle: GvisorPhysicalEvidenceBundle
   requirement: SandboxExecutionRequirement
+  /** Required when R3G-B was minted from a different R3E record identity. */
+  trustedResolvedSourceRuntimeInstanceIdentity?: string
 }): GvisorPhysicalEvidenceResolution {
   const record = asPlainRecord(input, "R3G-F evidence resolution input")
-  exactKeys(record, ["trustedProvenanceIdentity", "bundle", "requirement"], "R3G-F evidence resolution input")
+  const hasTrustedResolution = Object.prototype.hasOwnProperty.call(record, "trustedResolvedSourceRuntimeInstanceIdentity")
+  exactKeys(
+    record,
+    hasTrustedResolution
+      ? ["trustedProvenanceIdentity", "bundle", "requirement", "trustedResolvedSourceRuntimeInstanceIdentity"]
+      : ["trustedProvenanceIdentity", "bundle", "requirement"],
+    "R3G-F evidence resolution input",
+  )
   const requirement = validateSandboxExecutionRequirement(record.requirement)
   const bundle = validateGvisorPhysicalEvidenceBundle(record.bundle, requirement)
+  const sourceRuntimeInstanceIdentity = resolveGvisorSourceRuntimeInstanceIdentity({
+    sourceRuntimeLineageIdentity: bundle.sourceRecord.runtimeLineageIdentity,
+    resourceRuntimeLineageIdentity: bundle.resourceRecord.r3eRecordIdentity,
+    resourceRuntimeInstanceIdentity: bundle.resourceRecord.runtimeInstanceIdentity,
+    ...(hasTrustedResolution
+      ? { trustedResolvedSourceRuntimeInstanceIdentity: record.trustedResolvedSourceRuntimeInstanceIdentity as string }
+      : {}),
+  })
   const base = Object.freeze({
     version: KDO_H4_R3G_F_RESOLUTION_VERSION,
     trustedProvenanceIdentity: identity(record.trustedProvenanceIdentity, "trustedProvenanceIdentity"),
     bundle,
+    sourceRuntimeInstanceIdentity,
   })
-  return Object.freeze({ ...base, evidenceBundleIdentity: bundleIdentity(bundle) })
+  return Object.freeze({ ...base, evidenceBundleIdentity: bundleIdentity(bundle, sourceRuntimeInstanceIdentity) })
 }
 
 export function validateGvisorPhysicalEvidenceResolution(value: unknown, requirementValue: SandboxExecutionRequirement): GvisorPhysicalEvidenceResolution {
   const requirement = validateSandboxExecutionRequirement(requirementValue)
   const record = asPlainRecord(value, "R3G-F evidence resolution")
-  exactKeys(record, ["version", "trustedProvenanceIdentity", "bundle", "evidenceBundleIdentity"], "R3G-F evidence resolution")
+  exactKeys(record, ["version", "trustedProvenanceIdentity", "bundle", "sourceRuntimeInstanceIdentity", "evidenceBundleIdentity"], "R3G-F evidence resolution")
   if (record.version !== KDO_H4_R3G_F_RESOLUTION_VERSION) throw new TypeError("R3G-F evidence resolution version mismatch")
   const rebuilt = createGvisorPhysicalEvidenceResolution({
     trustedProvenanceIdentity: record.trustedProvenanceIdentity as string,
     bundle: record.bundle as GvisorPhysicalEvidenceBundle,
     requirement,
+    trustedResolvedSourceRuntimeInstanceIdentity: record.sourceRuntimeInstanceIdentity as string,
   })
+  if (identity(record.sourceRuntimeInstanceIdentity, "sourceRuntimeInstanceIdentity") !== rebuilt.sourceRuntimeInstanceIdentity) throw new TypeError("R3G-F source runtime instance identity mismatch")
   if (identity(record.evidenceBundleIdentity, "evidenceBundleIdentity") !== rebuilt.evidenceBundleIdentity) throw new TypeError("R3G-F evidence bundle identity mismatch")
   return rebuilt
 }
@@ -487,6 +540,7 @@ export function validateGvisorPhysicalSubjectCoherence(
     outputRecordIdentity: record.outputRecordIdentity as string,
   })
   if (identity(record.subjectCoherenceIdentity, "subjectCoherenceIdentity") !== rebuilt.subjectCoherenceIdentity) throw new TypeError("R3G-F subject coherence identity mismatch")
+  if (resolution.sourceRuntimeInstanceIdentity !== rebuilt.runtimeInstanceIdentity) throw new TypeError("R3G-F source runtime lineage is not bound to the exact runtime instance")
 
   const bundle = resolution.bundle
   const expected = {
@@ -530,6 +584,10 @@ function theoremVersions(): readonly string[] {
     KDO_H4_R3G_E_OUTPUT_VERSION,
     KDO_H4_R3G_E_COMMIT_VERSION,
     KDO_H4_R3G_F_VERSION,
+    KDO_H4_R3G_F_RESOLUTION_VERSION,
+    KDO_H4_R3G_F_COHERENCE_VERSION,
+    KDO_H4_R3G_F_RECORD_VERSION,
+    KDO_H4_R3G_F_COMMIT_VERSION,
   ]
 }
 
