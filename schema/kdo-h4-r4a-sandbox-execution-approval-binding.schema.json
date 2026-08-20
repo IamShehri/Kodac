@@ -53,7 +53,8 @@
     "approvalRequestInstanceId": {
       "type": "string",
       "minLength": 1,
-      "description": "Exact H4-R1 one-shot request occurrence identifier. Runtime validation additionally enforces NUL-free <=128 UTF-8 bytes."
+      "pattern": "^[^\\u0000]+$",
+      "description": "Exact H4-R1 one-shot request occurrence identifier. Runtime validation additionally enforces <=128 UTF-8 bytes."
     },
     "bindingIdentity": { "$ref": "#/$defs/identity" }
   },
@@ -90,7 +91,8 @@
         "requestInstanceId": {
           "type": "string",
           "minLength": 1,
-          "description": "Exact one-shot request occurrence identifier; runtime validation enforces NUL-free <=128 UTF-8 bytes."
+          "pattern": "^[^\\u0000]+$",
+          "description": "Exact one-shot request occurrence identifier; runtime validation enforces <=128 UTF-8 bytes."
         },
         "intent": { "$ref": "#/$defs/approvalIntent" }
       }
