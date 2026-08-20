@@ -75,6 +75,7 @@ function referenceRequestIdentity(intent: ApprovalRequest["intent"]): string {
 }
 
 const FIXTURE_DIGEST = `sha256:${"1".repeat(64)}`
+const IMAGE_ID = `sha256:${"d".repeat(64)}`
 const WORKSPACE_IDENTITY = "a".repeat(64)
 const EXECUTION_INTENT_IDENTITY = "b".repeat(64)
 const REQUEST_INSTANCE_A = "123e4567-e89b-42d3-a456-426614174000"
@@ -136,18 +137,33 @@ function fixedPermit(requestInstanceId = REQUEST_INSTANCE_A): SandboxAdmissionPe
 function inspectBody(
   prepared: SandboxDormantCreatePrepared,
   args: readonly string[],
-  extraLabels: Readonly<Record<string, string>> = {},
-  extraNetworks: Readonly<Record<string, unknown>> = {},
+  options: {
+    readonly extraLabels?: Readonly<Record<string, string>>
+    readonly extraNetworks?: Readonly<Record<string, unknown>>
+    readonly hostConfigOverrides?: Readonly<Record<string, unknown>>
+    readonly mounts?: readonly unknown[]
+    readonly containerImageId?: string
+  } = {},
 ) {
   return {
     Id: CONTAINER_ID,
     Name: `/${prepared.containerName}`,
+    Image: options.containerImageId ?? IMAGE_ID,
     Path: prepared.entrypointExecutable,
     Args: [...args],
     State: { Status: "created", Running: false, Paused: false, Restarting: false, Dead: false, Pid: 0 },
     RestartCount: 0,
-    Config: { Tty: false, Labels: { ...prepared.labels, ...extraLabels } },
-    ImageManifestDescriptor: { digest: prepared.sourceDigest },
+    Config: {
+      Image: prepared.sourceReference,
+      AttachStdin: false,
+      Tty: false,
+      OpenStdin: false,
+      StdinOnce: false,
+      NetworkDisabled: false,
+      Volumes: {},
+      Healthcheck: { Test: ["NONE"] },
+      Labels: { ...prepared.labels, ...options.extraLabels },
+    },
     HostConfig: {
       Runtime: "runsc",
       NetworkMode: "none",
@@ -156,8 +172,40 @@ function inspectBody(
       Memory: prepared.memoryBytes,
       MemorySwap: prepared.memorySwapBytes,
       RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
+      Binds: null,
+      Links: null,
+      Dns: [],
+      DnsOptions: [],
+      DnsSearch: [],
+      ExtraHosts: [],
+      VolumesFrom: null,
+      CapAdd: null,
+      CapDrop: null,
+      GroupAdd: null,
+      Devices: [],
+      DeviceCgroupRules: null,
+      DeviceRequests: null,
+      Ulimits: null,
+      SecurityOpt: null,
+      Mounts: [],
+      PortBindings: {},
+      StorageOpt: {},
+      Tmpfs: {},
+      Sysctls: {},
+      PublishAllPorts: false,
+      AutoRemove: false,
+      ReadonlyRootfs: false,
+      PidMode: "",
+      IpcMode: "private",
+      UTSMode: "",
+      UsernsMode: "",
+      CgroupnsMode: "private",
+      CgroupParent: "",
+      VolumeDriver: "",
+      ...options.hostConfigOverrides,
     },
-    NetworkSettings: { Networks: { none: {}, ...extraNetworks } },
+    NetworkSettings: { Networks: { none: {}, ...options.extraNetworks } },
+    Mounts: [...(options.mounts ?? [])],
   }
 }
 
@@ -172,8 +220,13 @@ interface FakeDockerOptions {
   readonly loseCreateResponse?: boolean
   readonly persistOnLostResponse?: boolean
   readonly createStatusCode?: number
+  readonly omitImageDescriptor?: boolean
+  readonly wrongImageDigest?: boolean
   readonly extraInspectLabels?: Readonly<Record<string, string>>
   readonly extraInspectNetworks?: Readonly<Record<string, unknown>>
+  readonly hostConfigOverrides?: Readonly<Record<string, unknown>>
+  readonly mounts?: readonly unknown[]
+  readonly containerImageId?: string
 }
 
 async function withFakeDocker<T>(
@@ -188,7 +241,21 @@ async function withFakeDocker<T>(
   const createBodies: string[] = []
   let created = false
   let creates = 0
+  const imageInspectPath = `/v${KDO_H4_R4B_B1_DOCKER_API_VERSION}/images/${encodeURIComponent(prepared.sourceReference)}/json`
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
+    if (request.method === "GET" && request.url === imageInspectPath) {
+      events.push("docker:image-inspect")
+      const body: Record<string, unknown> = {
+        Id: IMAGE_ID,
+        Config: { Volumes: {} },
+      }
+      if (!options.omitImageDescriptor) {
+        body.Descriptor = { digest: options.wrongImageDigest ? `sha256:${"e".repeat(64)}` : prepared.sourceDigest }
+      }
+      response.writeHead(200, { "Content-Type": "application/json" })
+      response.end(JSON.stringify(body))
+      return
+    }
     if (request.method === "POST" && request.url === `/v${KDO_H4_R4B_B1_DOCKER_API_VERSION}/containers/create?name=${prepared.containerName}`) {
       creates += 1
       events.push("docker:create")
@@ -218,7 +285,13 @@ async function withFakeDocker<T>(
         return
       }
       response.writeHead(200, { "Content-Type": "application/json" })
-      response.end(JSON.stringify(inspectBody(prepared, args, options.extraInspectLabels, options.extraInspectNetworks)))
+      response.end(JSON.stringify(inspectBody(prepared, args, {
+        extraLabels: options.extraInspectLabels,
+        extraNetworks: options.extraInspectNetworks,
+        hostConfigOverrides: options.hostConfigOverrides,
+        mounts: options.mounts,
+        containerImageId: options.containerImageId,
+      })))
       return
     }
     response.writeHead(500)
@@ -313,7 +386,22 @@ test("H4-R4B-B1 prepared theorem fails closed on serialized substitution", () =>
   }
 })
 
-test("H4-R4B-B1 exact create orders durable reservation, preparation, and dispatch claim before one Docker mutation", { skip: process.platform !== "linux" }, async () => {
+test("H4-R4B-B1 exact image preflight is required before dispatch authority", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+  for (const options of [{ omitImageDescriptor: true }, { wrongImageDigest: true }] as const) {
+    await withFakeDocker(prepared, args, options, async ({ socketPath, events, createCount }) => {
+      const runtime = createGvisorDockerDormantCreateRuntime({ socketPath, ...durableHarness(permit, events) })
+      await assert.rejects(new GvisorDockerDormantCreateGateway(runtime).createDormantAdmission(permit, permitCommit), SandboxDormantCreateIndeterminateError)
+      assert.equal(createCount(), 0)
+      assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:image-inspect"])
+    })
+  }
+})
+
+test("H4-R4B-B1 exact create orders image proof and durable dispatch claim before one Docker mutation", { skip: process.platform !== "linux" }, async () => {
   const permit = fixedPermit()
   const permitCommit = createSandboxAdmissionPermitCommit(permit)
   const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
@@ -325,7 +413,7 @@ test("H4-R4B-B1 exact create orders durable reservation, preparation, and dispat
     const result = await gateway.createDormantAdmission(permit, permitCommit)
 
     assert.equal(createCount(), 1)
-    assert.deepEqual(events, ["store:reservation", "store:prepared", "store:dispatch", "docker:create", "docker:inspect", "store:created"])
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:image-inspect", "store:dispatch", "docker:create", "docker:inspect", "store:created"])
     assert.equal(result.recovered, false)
     assert.equal(result.createdAdmission.containerId, CONTAINER_ID)
     assert.equal(result.observation.running, false)
@@ -337,7 +425,11 @@ test("H4-R4B-B1 exact create orders durable reservation, preparation, and dispat
       Image: prepared.sourceReference,
       Entrypoint: [prepared.entrypointExecutable],
       Cmd: [...args],
+      AttachStdin: false,
       Tty: false,
+      OpenStdin: false,
+      StdinOnce: false,
+      Healthcheck: { Test: ["NONE"] },
       Labels: prepared.labels,
       HostConfig: {
         Runtime: "runsc",
@@ -379,7 +471,7 @@ test("H4-R4B-B1 prepared-only recovery may acquire the first dispatch claim and 
     ).createDormantAdmission(permit, permitCommit)
     assert.equal(recovered.recovered, true)
     assert.equal(createCount(), 1)
-    assert.deepEqual(events, ["store:reservation", "store:prepared", "store:dispatch", "docker:create", "docker:inspect", "store:created"])
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:image-inspect", "store:dispatch", "docker:create", "docker:inspect", "store:created"])
   })
 })
 
@@ -397,7 +489,7 @@ test("H4-R4B-B1 retry after durable dispatch claim reconciles and never sends a 
     const recovered = await gateway.createDormantAdmission(permit, permitCommit)
     assert.equal(recovered.recovered, true)
     assert.equal(createCount(), 1)
-    assert.deepEqual(events, ["store:reservation", "store:prepared", "store:dispatch", "docker:inspect", "store:created"])
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:image-inspect", "store:dispatch", "docker:inspect", "store:created"])
   })
 })
 
@@ -457,7 +549,7 @@ test("H4-R4B-B1 non-201 create response still reconciles one exact dormant side 
     assert.equal(result.recovered, true)
     assert.equal(createCount(), 1)
     assert.equal(result.createdAdmission.containerId, CONTAINER_ID)
-    assert.deepEqual(events, ["store:reservation", "store:prepared", "store:dispatch", "docker:create", "docker:inspect", "store:created"])
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:image-inspect", "store:dispatch", "docker:create", "docker:inspect", "store:created"])
   })
 })
 
@@ -473,7 +565,42 @@ test("H4-R4B-B1 observed Docker labels must contain exactly the canonical reconc
       SandboxDormantCreateIndeterminateError,
     )
     assert.equal(createCount(), 1)
-    assert.deepEqual(events, ["store:reservation", "store:prepared", "store:dispatch", "docker:create", "docker:inspect"])
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:image-inspect", "store:dispatch", "docker:create", "docker:inspect"])
+  })
+})
+
+test("H4-R4B-B1 rejects unadmitted host authority during Docker reconciliation", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+  const hostile = [
+    { hostConfigOverrides: { Binds: ["/host:/host"] } },
+    { hostConfigOverrides: { CapAdd: ["SYS_ADMIN"] } },
+    { hostConfigOverrides: { Devices: [{ PathOnHost: "/dev/kvm" }] } },
+    { hostConfigOverrides: { SecurityOpt: ["apparmor=unconfined"] } },
+    { hostConfigOverrides: { PidMode: "host" } },
+    { mounts: [{ Type: "bind", Source: "/host", Destination: "/host" }] },
+  ] as const
+  for (const options of hostile) {
+    await withFakeDocker(prepared, args, options, async ({ socketPath, events, createCount }) => {
+      const runtime = createGvisorDockerDormantCreateRuntime({ socketPath, ...durableHarness(permit, events) })
+      await assert.rejects(new GvisorDockerDormantCreateGateway(runtime).createDormantAdmission(permit, permitCommit), SandboxDormantCreateIndeterminateError)
+      assert.equal(createCount(), 1)
+      assert.equal(events.includes("store:created"), false)
+    })
+  }
+})
+
+test("H4-R4B-B1 container image ID must match the exact preflight image", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+  await withFakeDocker(prepared, args, { containerImageId: `sha256:${"f".repeat(64)}` }, async ({ socketPath, events }) => {
+    const runtime = createGvisorDockerDormantCreateRuntime({ socketPath, ...durableHarness(permit, events) })
+    await assert.rejects(new GvisorDockerDormantCreateGateway(runtime).createDormantAdmission(permit, permitCommit), SandboxDormantCreateIndeterminateError)
+    assert.equal(events.includes("store:created"), false)
   })
 })
 
