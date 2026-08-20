@@ -47,6 +47,13 @@ export {
   type GvisorPhysicalProofExecutionResult,
 } from "./execution/gateway-gvisor-physical-proof-runtime.ts"
 export * from "./execution/gateway-gvisor-ttl-runtime.ts"
+export {
+  KDO_H4_R4B_A_RUNTIME_VERSION,
+  SandboxAdmissionApprovalBlockedError,
+  SandboxAdmissionApprovalGateway,
+  SandboxAdmissionApprovalUnprovenError,
+  type SandboxAdmissionApprovalResult,
+} from "./execution/sandbox-admission-approval-runtime.ts"
 export * from "./extensions/contracts.ts"
 export * from "./extensions/registry.ts"
 export * from "./model/capabilities.ts"
@@ -77,6 +84,17 @@ export * from "./trust/approval.ts"
 export * from "./trust/confinement-linux-landlock.ts"
 export * from "./trust/confinement-runtime.ts"
 export * from "./trust/confinement.ts"
+export {
+  KDO_H4_R4B_A_ADMISSION_ATTEMPT_LIMIT,
+  KDO_H4_R4B_A_CONSUMPTION_RESERVATION_VERSION,
+  KDO_H4_R4B_A_PERMIT_COMMIT_VERSION,
+  KDO_H4_R4B_A_VERSION,
+  validateSandboxAdmissionPermit,
+  validateSandboxAdmissionPermitCommit,
+  type SandboxAdmissionConsumptionReservation,
+  type SandboxAdmissionPermit,
+  type SandboxAdmissionPermitCommit,
+} from "./trust/sandbox-admission-permit.ts"
 export * from "./trust/sandbox-backend-evidence.ts"
 export * from "./trust/sandbox-execution-approval-binding.ts"
 export * from "./trust/sandbox-lifecycle-gvisor-ttl.ts"
