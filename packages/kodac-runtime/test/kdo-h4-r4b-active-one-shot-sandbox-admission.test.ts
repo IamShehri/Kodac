@@ -52,6 +52,28 @@ import type { PolicyDecision } from "../src/trust/policy.ts"
 
 const source = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf8")
 
+async function waitFor(ready: () => boolean, label: string, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!ready()) {
+    if (Date.now() >= deadline) assert.fail(`${label} was never reached`)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+}
+
+async function withWatchdog<T>(promise: Promise<T>, label: string, timeoutMs = 2000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
@@ -299,9 +321,9 @@ test("H4-R4B-A cancellation during pending approval converts late allowed-once t
   })
 
   const pending = gateway.authorizeSandboxAdmission(fixtureRequirement(), { signal: controller.signal })
-  while (resolveDecision === undefined || capturedRequest === undefined) {
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  }
+  await waitFor(() => resolveDecision !== undefined && capturedRequest !== undefined, "approval decision pending")
+  assert.ok(resolveDecision !== undefined)
+  assert.ok(capturedRequest !== undefined)
   controller.abort()
   resolveDecision({
     version: KDO_H4_R1_APPROVAL_VERSION,
@@ -329,19 +351,16 @@ test("H4-R4B-A cancellation does not wait for a non-cooperative approval service
   })
 
   const pending = gateway.authorizeSandboxAdmission(fixtureRequirement(), { signal: controller.signal })
-  while (!decisionStarted) {
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  }
+  await waitFor(() => decisionStarted, "approval decision start")
   controller.abort()
 
-  const outcome = await Promise.race([
+  const outcome = await withWatchdog(
     pending.then(
       () => ({ kind: "fulfilled" as const }),
       (error: unknown) => ({ kind: "rejected" as const, error }),
     ),
-    new Promise<{ readonly kind: "timeout" }>((resolve) => setTimeout(() => resolve({ kind: "timeout" }), 2000)),
-  ])
-  assert.notEqual(outcome.kind, "timeout")
+    "cancelled approval settlement",
+  )
   assert.equal(outcome.kind, "rejected")
   if (outcome.kind === "rejected") {
     assert.equal(outcome.error instanceof SandboxAdmissionApprovalBlockedError, true)
@@ -417,9 +436,9 @@ test("H4-R4B-A abort after permit mutation starts waits for settlement and withh
   })
 
   const pending = gateway.authorizeSandboxAdmission(fixtureRequirement(), { signal: controller.signal })
-  while (resolveCommit === undefined || committedPermit === undefined) {
-    await new Promise<void>((resolve) => setImmediate(resolve))
-  }
+  await waitFor(() => resolveCommit !== undefined && committedPermit !== undefined, "admission permit commit pending")
+  assert.ok(resolveCommit !== undefined)
+  assert.ok(committedPermit !== undefined)
   controller.abort()
   resolveCommit(createSandboxAdmissionPermitCommit(committedPermit))
   await assert.rejects(() => pending, /positive permit is withheld/)
