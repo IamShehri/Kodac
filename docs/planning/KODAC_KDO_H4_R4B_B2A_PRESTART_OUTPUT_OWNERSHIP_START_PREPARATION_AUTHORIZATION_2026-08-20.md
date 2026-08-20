@@ -55,15 +55,15 @@ NO
 
 R4B-B2A is the smallest safe bridge between canonical R4B-B1 dormant-created admission and a future separately authorized live-start controller.
 
-It may establish and own a bounded output channel while the exact container remains pristine and never started. It may return only a live process-local `PRESTART_READY` capability.
+It may establish and own a bounded output channel while the exact container remains pristine and never started. It may return only one live process-local `PRESTART_READY` capability.
 
-It does **not** authorize any start mutation, live workload occurrence, TTL arming, terminal lifecycle claim, positive R3G-E E3 evidence, R3G-F E4, cleanup mutation, or successful execution settlement.
+It does **not** authorize any start mutation, workload occurrence, TTL arming, terminal lifecycle claim, positive R3G-E E3 evidence, R3G-F E4, cleanup mutation, successful execution settlement, owner takeover, or recovery.
 
 ---
 
 ## 2. Canonical predecessor truth
 
-Canonical readiness PR #132 established:
+Canonical PR #132 established:
 
 ```text
 MONOLITHIC_R4B_B2_AUTHORIZATION=REJECT
@@ -80,7 +80,7 @@ Relevant merge identity:
 PR #132 reviewed head:
 f3c0a00eb5f3afb0c0150773c9b4477c2f5306bd
 
-merge commit / canonical base for this authorization:
+merge commit / canonical base:
 b4c660801133055db1371651c8956d6d64058925
 
 merge tree:
@@ -94,7 +94,7 @@ verified=true
 reason=valid
 ```
 
-This document converts only the B2A readiness result into a bounded future implementation authorization.
+This document converts only that B2A readiness result into bounded future implementation authority.
 
 ---
 
@@ -126,37 +126,13 @@ packages/kodac-runtime/src/index.ts
 90ee90846abc3780bfbc4cd398269201f9babe41
 ```
 
-Docs-only merges after B1 did not change these runtime identities.
+Docs-only merges after B1 did not change those runtime identities.
 
 ---
 
-## 4. Why B2A requires a bounded R3G-E factorization
+## 4. Bounded R3G-E internal factorization
 
-Canonical R3G-E currently performs a purpose-equivalent sequence:
-
-```text
-validate provider/socket/request
--> inspect exact container
--> derive channel identity
--> open fixed Docker attach
--> validate HTTP 101 upgrade
--> construct bounded multiplex accumulator
--> read until stream termination
--> finish terminal aggregation
--> return capture
-```
-
-That theorem is correct for R3G-E but has no pre-start readiness boundary. B2A therefore may factor internal attach/provenance/reader machinery so a trusted controller can prove:
-
-```text
-fixed attach established
-AND exactly one bounded reader active
-AND zero payload bytes accepted
-AND exact container still pristine dormant
-AND same live reader can later be consumed by separately authorized B2B
-```
-
-The factorization is authorized only if:
+Canonical R3G-E currently owns the fixed Docker attach stream until terminal aggregation. B2A needs an earlier internal readiness boundary, so it may factor internal attach/provenance/reader machinery only if all of these remain true:
 
 ```text
 R3G_E_EXTERNAL_BEHAVIOR=UNCHANGED
@@ -169,7 +145,17 @@ CALLER_SELECTED_HTTP_METHOD=NO
 CALLER_SELECTED_DOCKER_PATH=NO
 ```
 
-If the canonical R3G-E theorem cannot be preserved exactly, implementation must stop and return to authorization.
+The factored primitive must support one trusted controller proving:
+
+```text
+fixed attach established
+AND one bounded reader active
+AND zero payload bytes accepted
+AND exact container still pristine dormant
+AND the same live reader can later be consumed by separately authorized B2B
+```
+
+If that cannot be achieved without changing the canonical R3G-E theorem, implementation must stop and return to authorization.
 
 ---
 
@@ -178,17 +164,18 @@ If the canonical R3G-E theorem cannot be preserved exactly, implementation must 
 A positive B2A result may claim only:
 
 ```text
-One exact canonical B1 CREATED admission and durable reservation lineage were
-validated. The exact Docker container was independently re-observed as the same
-pristine never-started runsc subject. Kodac proved a rootful non-replaceable
-Docker socket namespace, durably prepared one pre-start output operation, won
-one atomic non-transferable ownership claim for that exact operation, entered
-one process-local ATTACHING state, established exactly one fixed non-TTY Docker
-attach with logs=0 while the container remained dormant, activated one trusted
-bounded multiplex reader and one shared output accumulator, accepted zero raw
-payload bytes, re-proved the container remained pristine dormant, and created
-one module-sealed non-serializable PRESTART_READY capability. No Docker start
-request was issued and no workload process was permitted to execute.
+One exact canonical B1 CREATED admission and its durable lineage were validated.
+The exact Docker container was independently re-observed as the same pristine
+never-started runsc subject. Kodac proved the B2A v1 protected rootful Docker
+socket namespace, durably prepared one pre-start output operation, won exactly
+one atomic non-transferable ownership claim for that operation from an
+unforgeable process-local trusted owner capability, entered one local ATTACHING
+state, established exactly one fixed non-TTY Docker attach with logs=0 while the
+container remained dormant, activated exactly one trusted bounded multiplex
+reader and one shared accumulator, accepted zero raw payload bytes, re-proved
+the container remained pristine dormant, and created one module-sealed
+non-serializable PRESTART_READY capability. No Docker start request was issued
+and no workload process was permitted to execute.
 ```
 
 B2A may not claim:
@@ -204,6 +191,7 @@ positive R3G-E E3 committed
 R3G-F E4 produced
 permit consumed by successful execution
 container cleanup/removal performed
+owner recovered after process loss
 H4 complete
 H6 ready
 ```
@@ -221,7 +209,7 @@ RUNNING_SUBJECTS_CREATED_BY_B2A = 0
 TTL_ARM_ATTEMPTS = 0
 ```
 
-No reachable B2A production path may issue or wrap a purpose-equivalent form of:
+No reachable B2A production path may issue or wrap any purpose-equivalent form of:
 
 ```text
 POST /v1.48/containers/{id}/start
@@ -238,7 +226,7 @@ Any need for one of those operations invalidates this authorization.
 
 ---
 
-## 7. Exact B1 predecessor required
+## 7. Exact B1 predecessor and pristine dormant revalidation
 
 B2A accepts only one exact canonical B1 result whose validated durable lineage includes:
 
@@ -254,29 +242,7 @@ SandboxDormantCreatedAdmission
 SandboxDormantCreatedAdmissionCommit
 ```
 
-The lineage must bind one exact:
-
-```text
-permitIdentity
-reservationIdentity
-executionAttemptIdentity
-requirementIdentity
-workloadIdentity
-createOperationIdentity
-createdAdmissionIdentity
-container occurrence/name
-container ID
-```
-
-B2A rejects structural lookalikes, missing durable commits, wrong lineage, caller-selected container IDs, synthetic observations, reconstructed partial evidence, or any identity mismatch.
-
----
-
-## 8. Pristine dormant revalidation
-
-Before pre-start preparation and again after attach/reader activation, B2A must independently re-observe the exact B1 container and preserve the canonical B1 negative-space theorem.
-
-At minimum:
+Before durable pre-start preparation and again after attach/reader activation, B2A must independently prove at minimum:
 
 ```text
 container ID = exact B1 ID
@@ -303,37 +269,31 @@ exact canonical labels
 no new host authority
 ```
 
-Any ambiguity or mismatch fails closed. B2A may not stop, kill, remove, recreate, or otherwise repair the subject.
+Any ambiguity or mismatch fails closed. B2A may not stop, kill, remove, recreate, or repair the subject.
 
 ---
 
-## 9. Rootful non-replaceable Docker socket namespace theorem
+## 8. Rootful protected Docker socket namespace theorem
 
-### 9.1 Review finding resolved by narrowing B2A v1
+Canonical R3F/R3G-E freeze the final Unix-socket endpoint identity and re-`lstat` before/after requests. That alone does not bind the pathname during the check-to-connect interval.
 
-Canonical R3F/R3G-E currently freeze the final Unix-socket endpoint identity and re-`lstat` it before and after requests. That does not, by itself, prevent a pathname replacement between validation and `connect(2)`.
+B2A v1 therefore does **not** claim a nonexistent pinned socket-file-descriptor or undocumented Node peer-credential primitive. It instead narrows the authorized namespace.
 
-Node.js 24 documents `http.request({ createConnection })` and Unix-domain `net.createConnection({ path })`, but exposes no stable public API in `node:net` for Linux `SO_PEERCRED` or for connecting through a previously opened filesystem socket inode. B2A must not depend on undocumented Node internals merely to claim a stronger theorem.
-
-Therefore B2A v1 closes the race by narrowing the trusted-host namespace rather than pretending to pin an unavailable socket-file descriptor.
-
-### 9.2 B2A v1 supports only a rootful protected pathname
-
-Before B2A may prepare or claim ownership, the configured Docker socket path must satisfy all of these conditions:
+The configured Docker socket path must satisfy all of:
 
 ```text
 absolute canonical POSIX pathname
 no abstract Unix socket
 no symlink component
-no `.` or `..` component
+no . or .. component
 final entry is a Unix socket
 final socket uid = 0
-all ancestor components from `/` through the immediate parent are directories
+all ancestor components from / through immediate parent are directories
 all ancestor directory uid = 0
 all ancestor directory mode & 0o022 = 0
 ```
 
-For each ancestor and the final socket, the trusted snapshot must freeze canonical:
+For every ancestor and the final socket, freeze:
 
 ```text
 device
@@ -344,87 +304,66 @@ mode
 file type
 ```
 
-The immediate parent directory is the authority boundary for rename/unlink/create of the socket pathname. Because B2A requires that directory and every ancestor be root-owned and not group/other-writable, an untrusted non-root principal cannot replace the socket pathname between validation and connect.
-
-Host root is explicitly inside the trusted host boundary for B2A v1. A host-root actor that can rename trusted `/run`-style entries can already replace or control the Docker daemon and is outside B2A's adversary theorem.
-
-### 9.3 Rootless Docker is not authorized for B2A v1
+The complete namespace chain must be revalidated:
 
 ```text
-ROOTLESS_DOCKER_B2A_V1=NOT_AUTHORIZED
-USER_OWNED_SOCKET_PARENT=REJECT
-GROUP_WRITABLE_SOCKET_PARENT=REJECT
-OTHER_WRITABLE_SOCKET_PARENT=REJECT
-SYMLINK_ANCESTOR=REJECT
-ABSTRACT_UNIX_SOCKET=REJECT
+A. before PRESTART_OUTPUT_PREPARED
+B. immediately before ATTACHING
+C. after HTTP upgrade and before reader activation
+D. during final pre-PRESTART_READY revalidation
 ```
 
-This restriction applies only to the new live pre-start attach authority. It does not retroactively change historical R3F/B1 claims.
-
-### 9.4 Validation ordering
-
-The complete namespace chain and final endpoint must be revalidated:
+The theorem is explicitly:
 
 ```text
-A. before durable PRESTART_OUTPUT_PREPARED
-B. immediately before the local ATTACHING transition
-C. after the HTTP upgrade succeeds and before reader activation
-D. during final pre-PRESTART_READY dormant revalidation
+UNTRUSTED_NON_ROOT_PATH_REPLACEMENT=PREVENTED_BY_NAMESPACE_PERMISSIONS
+HOST_ROOT=TRUSTED_HOST_BOUNDARY
+TRANSIENT_HOST_ROOT_REPLACE_AND_RESTORE=OUT_OF_SCOPE
 ```
 
-Any persistent identity or metadata change fails closed.
+B2A v1 rejects:
 
-The implementation must not claim protection against transient mutation by trusted host root. It instead proves that an untrusted principal lacks filesystem authority to perform the replacement in the first place.
+```text
+rootless Docker socket
+user-owned socket or parent
+writable parent or ancestor
+symlink ancestor/final entry
+abstract Unix socket
+```
+
+This restriction is specific to the new B2A live attach authority and does not retroactively rewrite historical R3F/B1 claims.
 
 ---
 
-## 10. Exact Docker attach surface
+## 9. Exact Docker attach surface
 
-The only new Docker operation authorized by B2A is:
+The only new Docker operation authorized is:
 
 ```text
 POST /v1.48/containers/{exact-container-id}/attach
+?logs=0&stream=1&stdin=0&stdout=1&stderr=1
+```
 
-query:
-logs=0
-stream=1
-stdin=0
-stdout=1
-stderr=1
+Required result:
 
-required result:
+```text
 HTTP 101
 Connection: Upgrade
 Upgrade: tcp
 Content-Type: application/vnd.docker.multiplexed-stream
 ```
 
-The target ID comes only from validated B1 lineage. Docker API remains pinned to `1.48`.
+The target container ID comes only from validated B1 lineage. Docker API remains pinned to `1.48`.
 
-B2A may not expose or accept:
-
-```text
-generic Docker request(method,path,body)
-caller-selected method
-caller-selected API path
-caller-selected socket path
-TCP/TLS/SSH Docker endpoint
-Windows named pipe
-rootless Docker socket
-Docker CLI fallback
-shell fallback
-PATH lookup
-```
+B2A may not expose or accept generic Docker methods/paths, caller-selected socket paths, TCP/TLS/SSH endpoints, rootless sockets, Docker CLI fallback, shell fallback, or PATH lookup.
 
 ---
 
-## 11. Durable record contracts
+## 10. Durable prepared contract
 
-All durable records are immutable plain canonical records, reject proxies/accessors/extra fields, use deterministic SHA-256 identities, and require exact schema validation before positive use.
+All durable records must be immutable canonical non-proxy plain records, reject accessors and extra fields, use deterministic SHA-256 identities, and pass closed schema validation.
 
-One unified schema may define the record family with closed `$defs`/`oneOf` and `additionalProperties: false` throughout.
-
-### 11.1 `SandboxPrestartOutputPrepared`
+### 10.1 `SandboxPrestartOutputPrepared`
 
 Required fields:
 
@@ -449,9 +388,9 @@ attachProtocolIdentity
 preparedIdentity
 ```
 
-`preparedIdentity` is a deterministic identity over every preceding field.
+`preparedIdentity` hashes every preceding field.
 
-### 11.2 `SandboxPrestartOutputPreparedCommit`
+### 10.2 `SandboxPrestartOutputPreparedCommit`
 
 Required fields:
 
@@ -465,9 +404,33 @@ durability = durable
 commitIdentity
 ```
 
-A positive new operation may continue only from a validated durable `created` disposition. `existing` never creates live readiness by itself.
+Only a validated durable `created` prepared commit may advance to owner-claim creation. An `existing` prepared commit must be byte/identity-equivalent to the same canonical prepared operation; otherwise the result is `INDETERMINATE` and no ownership claim may be attempted.
 
-### 11.3 `SandboxPrestartOwnershipClaim`
+---
+
+## 11. Unforgeable owner-instance capability and durable ownership claim
+
+### 11.1 Owner identity source
+
+`ownerInstanceIdentity` is not a caller argument, serialized capability, environment value, process ID, hostname, timestamp, or caller-supplied string.
+
+Trusted K2 composition must create one **process-local owner-instance capability** using public Node 24 cryptographic randomness (at least 256 bits) inside the trusted module. The capability must be module-sealed by private nominal identity, `WeakSet`/`WeakMap`, private class state, or stronger equivalent.
+
+The durable `ownerInstanceIdentity` is derived only inside the trusted module from that sealed capability using a domain-separated SHA-256 identity.
+
+Required invariants:
+
+```text
+CALLER_CAN_SUPPLY_OWNER_INSTANCE_IDENTITY=NO
+CALLER_CAN_DESERIALIZE_OWNER_CAPABILITY=NO
+CALLER_CAN_VALIDATE_OWNER_BY_STRUCTURE=NO
+SERIALIZED_OWNER_IDENTITY_GRANTS_AUTHORITY=NO
+PID_OR_HOSTNAME_ALONE_GRANTS_AUTHORITY=NO
+```
+
+A process that merely knows a persisted `ownerInstanceIdentity` cannot recreate the corresponding process-local owner capability.
+
+### 11.2 `SandboxPrestartOwnershipClaim`
 
 Required fields:
 
@@ -477,11 +440,32 @@ preparedIdentity
 prestartOutputOperationIdentity
 executionAttemptIdentity
 createdAdmissionIdentity
-trusted ownerInstanceIdentity
+ownerInstanceIdentity
 ownershipClaimIdentity
 ```
 
-The claim is not a start-dispatch claim and grants only the right to attempt the fixed pre-start attach.
+The claim builder is trusted/internal only and accepts the sealed owner capability, not an owner identity string.
+
+`ownershipClaimIdentity` deterministically binds every preceding field.
+
+### 11.3 Atomic owner-claim uniqueness
+
+The durable owner-claim store must provide one atomic create-once operation keyed exactly by:
+
+```text
+prestartOutputOperationIdentity
+```
+
+At the persistence linearization point, the candidate must bind exactly:
+
+```text
+preparedIdentity
+executionAttemptIdentity
+createdAdmissionIdentity
+ownerInstanceIdentity
+```
+
+Read-then-write application logic is not sufficient proof of uniqueness.
 
 ### 11.4 `SandboxPrestartOwnershipClaimCommit`
 
@@ -499,22 +483,33 @@ durability = durable
 commitIdentity
 ```
 
-Only `disposition = created` may proceed toward `ATTACHING`.
+Only `disposition = created` grants the current sealed owner capability the right to attempt the local `ATTACHING` transition.
 
-`disposition = existing` always returns a bounded typed non-capability failure and must perform:
+`disposition = existing` is **not a terminal operation failure**. It produces only a bounded non-durable replay response:
 
 ```text
+response = OWNER_ALREADY_CLAIMED
+response durability = none
 ATTACH_CALLS=0
 NEW_READER_COUNT=0
 PRESTART_READY_COUNT=0
 OWNER_TAKEOVER=NO
+DURABLE_FAILURE_SETTLEMENT=NO
 ```
 
-This remains true even when the replay supplies the same visible `ownerInstanceIdentity`.
+This is true even if the replaying process presents the same visible persisted `ownerInstanceIdentity`. There is no same-owner idempotent reattach exception.
 
-### 11.5 `SandboxPrestartFailure`
+The existing replay response must not mutate, invalidate, fail, or otherwise interfere with the already-created owner claim or any live controller owned by the process that won it.
 
-One terminal failure record binds the exact B2A operation.
+---
+
+## 12. Durable failure contract
+
+Durable failure settlement is permitted only for an actor that already holds the fresh `created` owner claim or for a pre-owner failure on the current operation while the responsible process is alive and can authoritatively settle it.
+
+It is **not** used for existing-claim replay and is **not** required after an unobservable hard process crash.
+
+### 12.1 `SandboxPrestartFailure`
 
 Required fields:
 
@@ -542,11 +537,10 @@ post-attach-revalidation
 ready-invalidation
 ```
 
-Allowed `failureCode` values are exactly:
+Allowed durable `failureCode` values are exactly:
 
 ```text
 aborted
-owner-already-claimed
 socket-namespace-untrusted
 socket-identity-changed
 attach-failed
@@ -554,15 +548,17 @@ attach-protocol-invalid
 reader-failed
 payload-before-start
 dormant-revalidation-failed
-owner-lost
+owner-lost-graceful
 indeterminate
 ```
 
-`ownerInstanceIdentity` is `null` only when failure occurs before an owner claim exists. From owner-claim onward it is mandatory and must equal the exact claimed owner.
+`owner-already-claimed` is deliberately absent because replay rejection is non-durable and must not race the active owner into a conflicting terminal settlement.
 
-`failureIdentity` deterministically hashes every preceding failure field. B1 lineage is validated transitively through the exact `preparedIdentity` and directly through `createdAdmissionIdentity`.
+`ownerInstanceIdentity` is null only for failures before a durable owner claim exists. From a fresh owner claim onward it must equal the exact claimed owner.
 
-### 11.6 `SandboxPrestartFailureCommit`
+`failureIdentity` deterministically hashes every preceding failure field.
+
+### 12.2 `SandboxPrestartFailureCommit`
 
 Required fields:
 
@@ -577,68 +573,40 @@ durability = durable
 commitIdentity
 ```
 
-The first terminal failure settlement for a `prestartOutputOperationIdentity` is atomic/create-once. A validated `existing` terminal failure is accepted only when it is byte/identity-equivalent to the same canonical terminal settlement; conflicting settlement is `INDETERMINATE` and cannot yield readiness.
+The first terminal failure settlement is atomic/create-once by `prestartOutputOperationIdentity`. A validated `existing` failure commit is acceptable only when it is exactly identity-equivalent to the same canonical terminal settlement. Conflicting terminal settlement is `INDETERMINATE` and cannot yield readiness.
 
-After a prepared record exists, any terminal failure before `PRESTART_READY` must durably settle or return `INDETERMINATE`. Failure-commit uncertainty never permits attach retry, owner takeover, or capability creation.
+### 12.3 Hard process loss is not a fabricated durable failure
+
+If the owner process disappears without executing a trusted settlement path, B2A v1 has no authorized post-crash actor that may invent `ready-invalidation` or `owner-lost` evidence.
+
+Instead, the surviving durable `created` owner claim is itself the fail-closed recovery fence.
+
+Any later process observing:
+
+```text
+created owner claim exists
+AND no valid in-process sealed owner capability/controller exists
+```
+
+must classify the operation locally as:
+
+```text
+OWNER_LOST_INDETERMINATE
+NON_REUSABLE
+NO_REATTACH
+NO_TAKEOVER
+NO_START
+```
+
+This derived recovery classification is not a new durable B2A record and grants no cleanup or recovery authority. A later recovery theorem must be separately authorized if durable post-crash settlement or cleanup is desired.
+
+Graceful owner teardown while the current trusted actor is still alive may settle `owner-lost-graceful` before destroying its controller. Hard crash may not be retroactively rewritten as graceful evidence.
 
 ---
 
-## 12. Atomic owner-claim uniqueness and replay linearization
+## 13. Process-local state machine and attach linearization
 
-### 12.1 Uniqueness key
-
-The durable owner-claim store must provide one atomic create-once operation keyed by exactly:
-
-```text
-prestartOutputOperationIdentity
-```
-
-At its linearization point, the candidate claim must be validated against the exact:
-
-```text
-preparedIdentity
-executionAttemptIdentity
-createdAdmissionIdentity
-ownerInstanceIdentity
-```
-
-The store must not implement uniqueness as read-then-write in application code.
-
-### 12.2 Only a fresh claim creates attach authority
-
-```text
-claim commit disposition = created
--> this exact process-local owner may continue
-
-claim commit disposition = existing
--> typed OWNER_ALREADY_CLAIMED failure
--> no attach
--> no reader
--> no PRESTART_READY
-```
-
-There is no same-owner idempotent reattach exception in B2A v1.
-
-### 12.3 Crash behavior
-
-After a durable owner claim exists, loss of the live owner means:
-
-```text
-AUTOMATIC_OWNER_TAKEOVER=NO
-AUTOMATIC_REATTACH=NO
-AUTOMATIC_RETRY_WITH_NEW_OWNER=NO
-DOCKER_START=NO
-```
-
-The container may remain safely dormant and stranded until a separately authorized recovery/cleanup theorem exists.
-
-A durable owner claim never proves that a live stream or reader survived process restart.
-
----
-
-## 13. Process-local state machine and cancellation linearization
-
-B2A must implement one module-private state machine per freshly claimed operation:
+For a fresh `created` owner claim, the sealed controller uses exactly:
 
 ```text
 OWNER_CLAIMED
@@ -658,78 +626,85 @@ No transition leaves `FAILED` or `INVALIDATED`.
 
 ### 13.1 Abort registration
 
-The trusted runtime installs its abort handler before any attach-capable local transition.
+The trusted runtime installs its abort/invalidation handler before any attach-capable local transition.
 
-### 13.2 `ATTACHING` is the attach linearization point
+### 13.2 `ATTACHING` is the linearization point
 
-Only the process that received the durable ownership-claim commit with `disposition = created` may attempt the synchronous local transition:
+Only the process holding both:
+
+```text
+fresh durable owner claim disposition = created
+AND matching sealed process-local owner capability
+```
+
+may synchronously attempt:
 
 ```text
 OWNER_CLAIMED -> ATTACHING
 ```
 
-Immediately before that transition it must prove:
+Immediately before the transition it must prove:
 
 ```text
 signal.aborted = false
-owner claim still fresh/created
 state = OWNER_CLAIMED
-trusted socket namespace still exact
-container still eligible for attach
+owner capability valid and matches durable claim
+protected socket namespace exact
+container still eligible and dormant
 ```
 
-The transition itself is synchronous/module-private and must occur with no `await` between the final abort check and ownership of `ATTACHING`.
+There must be no `await` between the final abort/owner checks and ownership of `ATTACHING`.
 
-Cancellation that wins **before** `ATTACHING` must produce:
+Cancellation that wins before `ATTACHING` must produce:
 
 ```text
 POST /attach count = 0
-state = FAILED or INVALIDATED
 PRESTART_READY count = 0
 ```
 
-Only the current `ATTACHING` owner may create the fixed HTTP request.
-
-Immediately before calling `http.request`, production code must confirm the local state is still `ATTACHING`; there must be no asynchronous gap between that confirmation and request creation.
+Only the current `ATTACHING` owner may construct the fixed HTTP request. Immediately before request construction, production code must synchronously confirm `state === ATTACHING`, with no asynchronous gap before creating the request.
 
 ### 13.3 Cancellation after `ATTACHING`
 
-Once `ATTACHING` owns a request/session, later cancellation must synchronously mark the local controller invalidated and destroy/close every owned request/socket/stream handle as they become available.
+Once `ATTACHING` owns a request/session, later cancellation must synchronously mark the controller invalidated and destroy/close every owned request/socket/stream handle as available.
 
-A late HTTP 101, late socket event, late reader activation, or late dormant revalidation after cancellation must not transition to `READER_ACTIVE` or `PRESTART_READY`.
+Late HTTP 101, socket events, reader activation, revalidation, or capability construction after invalidation cannot become success.
 
-### 13.4 `READER_ACTIVE` and `PRESTART_READY` linearization
+### 13.4 `READER_ACTIVE` and `PRESTART_READY`
 
-After exact upgrade validation and socket-namespace revalidation, one bounded reader/accumulator may transition:
+After exact upgrade and namespace validation:
 
 ```text
 ATTACHING -> READER_ACTIVE
 ```
 
-Before the final capability creation, the runtime must synchronously prove:
+Before capability creation, synchronously prove:
 
 ```text
 state = READER_ACTIVE
 signal.aborted = false
+owner capability still valid
 reader live
-accepted payload bytes = 0
+accepted raw payload bytes = 0
 post-attach dormant revalidation = PASS
-socket namespace = exact
+socket namespace exact
 ```
 
-Only then may it transition synchronously:
+Only then may the module transition:
 
 ```text
 READER_ACTIVE -> PRESTART_READY
 ```
 
-and create the module-sealed capability. Abort/invalidation that wins first blocks the capability permanently.
+and create one sealed capability.
 
 ---
 
 ## 14. `PRESTART_READY` capability theorem
 
-`PRESTART_READY` is not a durable record. It is a live process-local capability:
+`PRESTART_READY` is process-local and never durable.
+
+It must be:
 
 ```text
 non-serializable
@@ -742,19 +717,12 @@ bound to prestartOutputOperationIdentity
 bound to exact container ID
 bound to exact live reader/controller
 bound to exact shared output accumulator
+bound to exact sealed owner-instance capability
 ```
 
-A module-private `WeakSet`, `WeakMap`, private nominal identity, or stronger equivalent must reject plain-object lookalikes, Proxies, JSON round-trips, structured clones, copied visible fields, stale handles, and invalidated handles.
+Plain-object lookalikes, Proxies, JSON round-trips, structured clones, copied fields, stale handles, invalidated handles, and handles from another process must fail validation.
 
-No durable record may assert:
-
-```text
-hijacked stream is live
-reader is active
-PRESTART_READY survived process restart
-```
-
-No root-exported creator or structural validator is authorized.
+No durable record may assert that the stream/reader/capability survived process restart.
 
 ---
 
@@ -763,23 +731,21 @@ No root-exported creator or structural validator is authorized.
 HTTP 101 alone is insufficient. Before readiness, exactly one trusted reader/controller must own:
 
 ```text
-exact live upgraded session
+exact upgraded session
 exact provider/socket/namespace provenance
 exact executionAttemptIdentity
 exact container ID
 exact prestartOutputChannelIdentity
 exact prestartOutputOperationIdentity
 one shared stdout+stderr raw-payload accumulator
-canonical Docker 8-byte multiplex framing parser
+canonical Docker 8-byte multiplex parser
 maxOutputBytes from exact requirement
 abort/transport-loss invalidation
 ```
 
-The same logical reader and accumulator must remain continuous for future B2B consumption; B2A does not authorize B2B consumption itself.
+The same logical reader and accumulator must remain continuous for future B2B consumption. B2A does not authorize B2B consumption.
 
-The reader may not expose raw socket/writable stream/stdin/per-stream budgets/unbounded buffering/TTY mode.
-
-Any raw payload byte before a separately authorized start is an invariant violation. It must invalidate readiness, close the channel, durably settle terminal failure when a prepared record exists, and never start the container.
+Any raw payload byte before a separately authorized start is an invariant violation. The current owner must invalidate readiness, close the channel, settle durable failure if it remains alive and authoritative, and never start the container.
 
 ---
 
@@ -794,56 +760,54 @@ Any raw payload byte before a separately authorized start is an invariant violat
 6. derive deterministic channel and operation identities
 7. construct canonical PRESTART_OUTPUT_PREPARED
 8. atomically create/validate durable prepared commit
-9. derive trusted ownerInstanceIdentity
-10. atomically create-once owner claim keyed by prestartOutputOperationIdentity
-11. require owner-claim disposition = created
-12. install/confirm abort invalidation handler
-13. revalidate protected socket namespace and dormant subject
-14. synchronously win OWNER_CLAIMED -> ATTACHING
-15. issue exactly one fixed POST /attach from the ATTACHING owner
-16. validate HTTP 101, headers, media type, and protected namespace
-17. activate exactly one bounded reader/accumulator
-18. transition ATTACHING -> READER_ACTIVE
-19. prove zero accepted raw payload bytes
-20. independently reobserve pristine dormant container
-21. revalidate protected socket namespace
-22. atomically prove no abort/invalidation won
-23. transition READER_ACTIVE -> PRESTART_READY
-24. create one sealed live capability and return bounded result
+9. create sealed process-local owner-instance capability internally
+10. derive ownerInstanceIdentity internally; accept no caller identity
+11. atomically create-once owner claim keyed by prestartOutputOperationIdentity
+12. require owner-claim disposition = created
+13. install/confirm abort invalidation handler
+14. revalidate protected namespace and dormant subject
+15. synchronously win OWNER_CLAIMED -> ATTACHING
+16. issue exactly one fixed POST /attach from ATTACHING owner
+17. validate HTTP 101, headers, media type, and namespace
+18. activate exactly one bounded reader/accumulator
+19. transition ATTACHING -> READER_ACTIVE
+20. prove zero accepted raw payload bytes
+21. independently reobserve pristine dormant container
+22. revalidate protected namespace
+23. atomically prove no abort/invalidation won
+24. transition READER_ACTIVE -> PRESTART_READY
+25. create one sealed live capability and return bounded result
 ```
 
 No start-dispatch claim exists in B2A. Docker start count remains zero.
 
 ---
 
-## 17. Cancellation, failure, and owner-loss outcomes
+## 17. Replay, cancellation, failure, and process-loss outcomes
 
-### Before prepared commit
+### Prepared replay before owner claim
 
 ```text
-failure/abort
+exact prepared `existing`
+-> validate exact equivalence
+-> may continue to owner-claim attempt only if no owner claim exists
+
+conflicting prepared `existing`
+-> INDETERMINATE
 -> no owner claim
 -> no attach
--> no start
 ```
 
-### After prepared commit but before fresh owner claim
-
-```text
-terminal failure
--> durable SandboxPrestartFailure settlement required or INDETERMINATE
--> no attach
--> no start
-```
-
-### Existing owner claim
+### Existing owner claim replay
 
 ```text
 disposition = existing
--> OWNER_ALREADY_CLAIMED
--> durable terminal failure settlement where canonical
--> no attach
--> no capability
+-> non-durable OWNER_ALREADY_CLAIMED response only
+-> no failure commit
+-> no mutation of active owner's state
+-> no attach by replaying process
+-> no reader by replaying process
+-> no readiness by replaying process
 -> no takeover
 -> no start
 ```
@@ -852,7 +816,7 @@ disposition = existing
 
 ```text
 -> POST /attach count = 0
--> terminal failure settlement
+-> current authoritative actor may settle `aborted`
 -> no capability
 -> no start
 ```
@@ -863,19 +827,33 @@ disposition = existing
 -> invalidate local state
 -> destroy owned request/socket/stream
 -> ignore late success events
--> durable terminal failure settlement or INDETERMINATE
+-> current authoritative actor durably settles terminal failure or returns INDETERMINATE
 -> no retry/reattach/takeover
 -> no PRESTART_READY
 -> no start
 ```
 
-### Failure after `PRESTART_READY` but before future B2B consumption
+### Graceful failure after `PRESTART_READY`
+
+While the owner process is still alive:
 
 ```text
 -> atomically invalidate capability
 -> close reader/session
--> durably settle ready-invalidation failure
+-> settle ready-invalidation / owner-lost-graceful as applicable
 -> stale handle rejected
+-> no start
+```
+
+### Hard process loss after owner claim or readiness
+
+```text
+-> no actor is assumed available to write a failure record
+-> durable owner claim survives
+-> future local classification = OWNER_LOST_INDETERMINATE
+-> operation remains non-reusable
+-> no takeover
+-> no reattach
 -> no start
 ```
 
@@ -883,64 +861,55 @@ Caller cancellation must never detach a live reader into an ownerless background
 
 ---
 
-## 18. Concurrency and replay theorem
+## 18. Concurrency, spoofing, and replay theorem
 
-B2A must prove:
+B2A implementation must prove:
 
 ```text
-concurrent prepare calls for one operation
--> exactly one or zero `created` owner-claim disposition
+concurrent owner-claim attempts
+-> at most one disposition = created
 -> at most one ATTACHING owner
 -> at most one attach session
 -> at most one live reader
 -> at most one PRESTART_READY capability
 
-replay after any owner claim exists
--> existing disposition
--> bounded typed non-capability failure
--> no attach
--> no readiness
+same-owner visible identity replay
+-> disposition = existing
+-> non-durable rejection
+-> no attach/readiness/failure settlement
 
-even same-owner replay
--> no attach
--> no readiness
+other-owner replay
+-> disposition = existing
+-> non-durable rejection
+-> no attach/readiness/failure settlement
 
-structural clone / JSON round-trip / Proxy / stale capability
+persisted ownerInstanceIdentity copied into another process
+-> cannot create valid owner capability
+-> cannot enter ATTACHING
+
+structural owner capability clone / JSON / Proxy
 -> rejected
+
+structural PRESTART_READY clone / JSON / Proxy / stale handle
+-> rejected
+
+hard process loss
+-> surviving durable claim fences all later takeover/reattach/start
 ```
 
-No API may reset or replenish the output byte budget after live ownership is established.
+No API may reset or replenish output byte budget after live ownership is established.
 
 ---
 
-## 19. Relationship to R3G-E
+## 19. Relationship to R3G-E, R3G-D, and future B2B
 
 R3G-E remains canonical. B2A may reuse only exact parser/identity/provenance/attach constants and a factored internal opener/reader primitive.
 
-The factorized path must preserve:
+The factorized path must preserve R3G-E's fixed request, Docker API 1.48, non-TTY framing, shared stdout+stderr raw-payload byte budget, exact N acceptance, N+1 fail-closed behavior, malformed-frame rejection, abort/transport-loss behavior, no-budget-reset rule, and package-root restrictions.
 
-```text
-same fixed attach request
-same Docker API 1.48
-same non-TTY multiplex framing
-same shared stdout+stderr raw-payload byte budget
-same exact N acceptance
-same N+1 fail-closed behavior
-same malformed-frame rejection
-same abort/transport-loss semantics or stricter fail-closed semantics
-same no-budget-reset rule
-same root-export restrictions
-```
+B2A commits no positive R3G-E E3 evidence.
 
-The new B2A rootful protected-namespace check is a **narrower trust prerequisite** for B2A. It need not retroactively rewrite R3G-E's historical evidence claim, but any shared newly factored attach primitive used by B2A must expose enough internal control to enforce the stronger B2A namespace theorem.
-
-B2A does not commit positive `GvisorOutputBoundRecord`/E3 evidence because no workload execution or terminal lifecycle exists.
-
----
-
-## 20. Relationship to R3G-D and future B2B
-
-B2A TTL arm attempts must equal zero. No R3G-D production file may change.
+B2A TTL arm attempts must equal zero; R3G-D production files may not change.
 
 Future B2B remains separately unauthorized and must still pin:
 
@@ -951,7 +920,7 @@ MAX_START_TO_ARM_INTERVAL_MS
 trusted clock and deadline owner
 deadline-miss exact-subject containment
 unknown-start reconciliation
-same-reader continuity across dormant -> running
+same-reader continuity dormant -> running
 running-subject R3G-D ARM
 terminal lifecycle evidence
 terminal output evidence
@@ -963,9 +932,9 @@ B2A success does not imply B2B readiness.
 
 ---
 
-## 21. Package-root authority boundary
+## 20. Package-root authority boundary
 
-A later implementation may root-export only one bounded B2A gateway/result plus immutable validated metadata needed by trusted composition.
+A later implementation may root-export only one bounded B2A gateway/result plus immutable validated metadata required by trusted composition.
 
 It must not root-export:
 
@@ -975,20 +944,23 @@ raw Socket or hijacked stream
 raw transport
 caller-selected Docker path/method/socket
 owner-claim creator
+ownerInstanceIdentity creator
+owner-instance capability creator
 PRESTART_READY creator
 structural PRESTART_READY validator
 reader reopen/reset
 byte-budget reset
 socket namespace bypass
+post-crash takeover/recovery primitive
 ```
 
-Deep-module helpers remain internal and are not product authority.
+Deep-module helpers remain internal and do not become product authority.
 
 ---
 
-## 22. Authorized implementation surface
+## 21. Authorized implementation surface
 
-After this authorization is canonical, one B2A implementation PR may change only purpose-equivalent paths in this set:
+After this authorization is canonical, one B2A implementation PR may change only purpose-equivalent paths in this exact set:
 
 ```text
 A packages/kodac-runtime/src/trust/sandbox-admission-prestart-output.ts
@@ -1001,17 +973,17 @@ A packages/kodac-runtime/test/kdo-h4-r4b-b2a-prestart-output-readiness.test.ts
 M packages/kodac-runtime/test/kdo-h4-r3g-e-docker-stream.test.ts
 ```
 
-The R3G-E changes are allowed only for internal factorization and regression proof.
+R3G-E changes are allowed only for internal factorization and regression proof.
 
 No changes are authorized to R3G-D, R3G-F, B1, permit/policy, workflows, dependencies, package manifests, native helpers, Docker CLI integration, or external services.
 
-If the theorem cannot be satisfied with public Node 24 APIs and this path set, implementation must stop and return to authorization rather than use undocumented internals or widen scope.
+If the theorem cannot be satisfied with public Node 24 APIs and this path set, implementation must stop and return to authorization.
 
 ---
 
-## 23. Required implementation proofs
+## 22. Required implementation proofs
 
-### 23.1 Zero-start / zero-TTL
+### 22.1 Zero-start / zero-TTL
 
 ```text
 positive path -> Docker start calls = 0
@@ -1021,111 +993,93 @@ all replay/concurrency -> Docker start calls = 0
 TTL ARM attempts = 0
 ```
 
-### 23.2 Protected socket namespace
+### 22.2 Protected socket namespace
 
-Reject before durable attach ownership when any condition holds:
+Reject rootless/user-owned/abstract/symlink/writable-parent configurations and every device/inode/uid/gid/mode/type drift. Linux physical evidence must prove the accepted path is inside a real root-owned protected namespace.
 
-```text
-rootless/user-owned socket
-abstract socket
-symlink final entry
-symlink ancestor
-non-directory ancestor
-ancestor uid != 0
-ancestor mode group-writable
-ancestor mode other-writable
-final socket uid != 0
-namespace device/inode/uid/gid/mode change
-```
-
-Linux physical/integration evidence must prove the accepted B2A v1 path is rooted in a real protected root-owned namespace. Fixture-only success is insufficient for this trust theorem.
-
-A hostile race test must exercise a test-only mutation hook between namespace validation and connect. Two outcomes are acceptable and must be distinguished:
+A hostile mutation-hook test must distinguish:
 
 ```text
-untrusted namespace / writable parent
--> validation rejects before ATTACHING
-
-trusted protected rootful namespace
--> the threat model proves the test principal lacks rename/unlink/create authority;
-   host-root mutation is explicitly outside the adversary theorem
+writable/untrusted namespace -> reject before ATTACHING
+protected rootful namespace -> modeled untrusted non-root principal lacks rename/unlink/create authority
 ```
 
-No test may claim that pre/post `lstat` alone detects a transient host-root replace-and-restore race.
+No test may claim pre/post `lstat` alone detects transient host-root replacement.
 
-### 23.3 Exact B1 predecessor and dormant state
+### 22.3 Exact B1 and dormant state
 
-Reject forged/mismatched B1 lineage and every protected dormant-state deviation, including running/pid/restart/runtime/network/image/command/resource/privilege/TTY/stdin/stdout/stderr/host-authority drift.
+Reject forged/mismatched B1 lineage and every running/pid/restart/runtime/network/image/command/resource/privilege/TTY/stdin/stdout/stderr/host-authority drift.
 
-### 23.4 Fixed attach protocol
+### 22.4 Fixed attach protocol
 
-Prove exactly:
+Prove exactly the authorized POST/1.48/query/HTTP-101/headers/media-type contract and reject all deviations.
+
+### 22.5 Prepared/failure schema
+
+Round-trip validators must prove deterministic identities, durability, exact key sets, closed enums, owner-nullability rules, conflicting settlement behavior, Proxy/accessor/extra-field rejection, and malformed identity rejection.
+
+Explicitly prove that `owner-already-claimed` cannot appear as a durable failure code.
+
+### 22.6 Unforgeable owner capability
+
+Prove:
 
 ```text
-POST /v1.48/containers/{exact-id}/attach?logs=0&stream=1&stdin=0&stdout=1&stderr=1
-HTTP 101
-Connection: Upgrade
-Upgrade: tcp
-application/vnd.docker.multiplexed-stream
+caller-provided ownerInstanceIdentity -> rejected/ignored as authority
+serialized persisted owner identity in another process -> no capability
+plain-object owner-capability lookalike -> rejected
+Proxy owner-capability lookalike -> rejected
+JSON/structured clone -> rejected
+two fresh owner capabilities -> distinct ownerInstanceIdentity values
 ```
 
-Reject wrong status/headers/media type/container/path/method/timeout/abort/namespace drift.
+### 22.7 Atomic owner claim and replay
 
-### 23.5 Failure-record contract
-
-Round-trip schema/validator tests must cover every exact failure phase and code, owner nullability rule, deterministic identity, durable commit binding, conflicting existing settlement, extra fields, proxies, accessors, and malformed identities.
-
-### 23.6 Atomic owner claim and replay
-
-Concurrency tests must prove one atomic key:
+Prove the one atomic uniqueness key `prestartOutputOperationIdentity`, at most one `created`, and:
 
 ```text
-prestartOutputOperationIdentity
+same-owner replay -> existing -> non-durable OWNER_ALREADY_CLAIMED -> no attach/no failure commit
+other-owner replay -> existing -> non-durable OWNER_ALREADY_CLAIMED -> no attach/no failure commit
+replay cannot invalidate active owner
+read-then-write fake store -> not accepted as atomic proof
 ```
 
-and that only `created` may proceed. Explicitly test:
+### 22.8 Cancellation interleavings
+
+Test cancellation before/after prepared commit, owner-claim linearization, `ATTACHING`, request creation, HTTP 101, reader activation, dormant revalidation, and `PRESTART_READY`. Every interleaving must prove zero Docker start and no unauthorized capability.
+
+### 22.9 Reader/capability seal
+
+Prove readiness impossible until one live bounded reader exists with zero accepted payload bytes and final dormant/namespace validation passed. Reject second reader, reopen, reset, clone, stale handle, and cross-process handle reconstruction.
+
+### 22.10 Process loss
+
+Simulate graceful owner teardown and hard process-local loss separately.
+
+Required results:
 
 ```text
-same-owner replay -> existing -> no attach
-other-owner replay -> existing -> no attach
-concurrent race -> one created at most
-read-then-write fake store -> rejected/not accepted as proof
+graceful owner loss while actor alive
+-> invalidate live capability/controller
+-> durable owner-lost-graceful settlement allowed
+-> no start
+
+hard process loss
+-> no fabricated failure commit
+-> durable created owner claim remains
+-> later process derives OWNER_LOST_INDETERMINATE / NON_REUSABLE
+-> no takeover
+-> no reattach
+-> no start
 ```
 
-### 23.7 Cancellation interleavings
+### 22.11 R3G-E regression
 
-Test cancellation immediately:
-
-```text
-before prepared commit
-after prepared commit
-before owner-claim linearization
-after owner claim but before ATTACHING
-immediately after ATTACHING before request creation
-during request creation/handshake
-after HTTP 101 before reader activation
-after reader activation before post-attach revalidation
-after revalidation before PRESTART_READY transition
-after PRESTART_READY before B2B consumption
-```
-
-Every interleaving must prove no unauthorized capability and zero Docker start calls.
-
-### 23.8 Reader/capability seal
-
-Prove readiness impossible until one live bounded reader exists with zero accepted payload bytes and final dormant/namespace revalidation passed. Reject structural clone, Proxy, JSON round-trip, stale/invalidated handle, second use, second reader, reopen, and budget reset.
-
-### 23.9 Owner loss
-
-After a fresh durable owner claim, simulate abort, attach failure, reader failure, stream loss, owner teardown, and process-local capability loss. Prove no takeover, reattach, retry, or start.
-
-### 23.10 R3G-E regression
-
-Re-prove canonical Docker-stream framing, budget, fixed request, malformed-frame handling, abort handling, and root-export negative space after factorization.
+Re-prove canonical framing, budget, fixed request, malformed-frame handling, abort handling, and root-export negative space after factorization.
 
 ---
 
-## 24. Static forbidden-authority scan
+## 23. Static forbidden-authority scan
 
 The product delta must be scanned for reachable purpose-equivalent forms of:
 
@@ -1149,33 +1103,9 @@ Mentions in tests asserting absence do not create authority.
 
 ---
 
-## 25. Failure taxonomy
+## 24. Product-PR merge gates
 
-Public/bounded failure classes may be purpose-equivalent to:
-
-```text
-BLOCKED
-REJECTED
-UNPROVEN
-INDETERMINATE
-OWNER_ALREADY_CLAIMED
-OWNER_LOST
-SOCKET_NAMESPACE_UNTRUSTED
-ATTACH_FAILED
-READER_FAILED
-DORMANT_REVALIDATION_FAILED
-ABORTED
-```
-
-The durable `failurePhase` and `failureCode` enums in Section 11 remain the canonical evidence vocabulary; public error classes may group them but may not erase the durable reason.
-
-No failure implies permit reuse, owner takeover, or execution success.
-
----
-
-## 26. Product-PR merge gates
-
-The future B2A implementation PR must not merge unless the exact final head proves:
+The future implementation PR must not merge unless the exact final head proves:
 
 ```text
 AUTHORIZED_CHANGED_PATHS_ONLY=PASS
@@ -1184,10 +1114,13 @@ ZERO_DOCKER_START_PROOF=PASS
 ZERO_TTL_ARM_PROOF=PASS
 ROOTFUL_PROTECTED_SOCKET_NAMESPACE_PROOF=PASS
 ROOTLESS_B2A_REJECTION_PROOF=PASS
-PRESTART_FAILURE_SCHEMA_PROOF=PASS
+PRESTART_SCHEMA_PROOF=PASS
+UNFORGEABLE_OWNER_CAPABILITY_PROOF=PASS
 ATOMIC_OWNER_CLAIM_PROOF=PASS
-EXISTING_CLAIM_NO_REATTACH_PROOF=PASS
+EXISTING_CLAIM_NON_DURABLE_REPLAY_PROOF=PASS
+ACTIVE_OWNER_NON_INTERFERENCE_PROOF=PASS
 ATTACHING_CANCELLATION_LINEARIZATION_PROOF=PASS
+HARD_PROCESS_LOSS_INDETERMINATE_PROOF=PASS
 PRESTART_READY_SEAL_PROOF=PASS
 SINGLE_READER_CONCURRENCY_PROOF=PASS
 FIXED_ATTACH_PROTOCOL_PROOF=PASS
@@ -1204,7 +1137,7 @@ A stale review from before the final mutation is insufficient.
 
 ---
 
-## 27. Explicit non-grants
+## 25. Explicit non-grants and stop conditions
 
 This authorization does not grant:
 
@@ -1212,81 +1145,54 @@ This authorization does not grant:
 R4B-B2B implementation
 rootless Docker B2A
 abstract Unix-socket B2A
-Docker start
-Docker exec
-Docker restart
-Docker stop
-Docker kill
-Docker remove
+Docker start/exec/restart/stop/kill/remove
 workload execution
 running-subject creation
-TTL ARM
-TTL enforcement changes
+TTL ARM or TTL authority change
 start-to-ARM deadline design
 termination/containment mutation authority
 final output evidence settlement
-R3G-F E4
-R3G-F ASK enablement
+R3G-F E4 or R3G-F ASK
 generic runCommand ASK
 H4 completion
 H6
 K3-R6+
 automatic PRESTART_READY owner recovery/takeover
+post-crash cleanup/recovery authority
 ```
+
+Implementation must stop and return to authorization if it requires any such authority, rootless live attach, undocumented Node socket internals, native `SO_PEERCRED` helper, new dependency/workflow, Docker CLI fallback, or a source path outside the authorized set.
 
 ---
 
-## 28. Stop conditions
-
-Implementation must stop and return to authorization if it requires:
-
-```text
-Docker start to validate readiness
-TTL ARM to validate readiness
-container stop/kill/remove cleanup
-owner takeover after durable claim
-same-owner reattach after existing claim
-reopening output after live start
-R3G-D or R3G-F production changes
-wider R3G-E root authority
-caller-selectable socket/method/path
-rootless live attach support
-undocumented Node internal socket APIs
-native SO_PEERCRED helper
-new dependency
-workflow change
-Docker CLI fallback
-path outside the authorized set
-```
-
----
-
-## 29. Authorization acceptance criteria
+## 26. Authorization acceptance criteria
 
 This docs-only authorization may become canonical only if review agrees that:
 
 ```text
 B2A is zero-start and zero-live-workload.
-PRESTART_READY is live, non-serializable, and module-sealed.
+PRESTART_READY is live, non-serializable, module-sealed, and process-local.
 B2A v1 live attach is rootful protected-path only.
-The protected namespace—not pre/post lstat alone—closes untrusted pathname replacement.
-Host root is explicitly trusted; rootless B2A v1 is rejected.
+The protected namespace—not lstat alone—closes modeled untrusted pathname replacement.
+Host root is trusted; rootless B2A v1 is rejected.
+ownerInstanceIdentity comes only from an unforgeable sealed trusted owner capability.
+Persisted/serialized owner identity never recreates ownership authority.
 Owner-claim uniqueness is atomic by prestartOutputOperationIdentity.
 Only a freshly created owner claim can enter ATTACHING.
-Existing claim always fails closed, even for the same visible owner.
+Existing owner-claim replay is non-durable and cannot fail or invalidate the active owner.
 ATTACHING is the cancellation/POST-attach linearization point.
-Failure records and commits have closed deterministic contracts.
+Durable failure records have closed deterministic contracts and exclude replay rejection.
+Hard process loss is OWNER_LOST_INDETERMINATE / NON_REUSABLE, not fabricated durable failure evidence.
 There is at most one live reader and one readiness capability.
-Owner loss is non-transferable and fail-closed in B2A v1.
 R3G-E external behavior and package-root authority remain protected.
 B2B remains separately unauthorized.
 ```
 
-If review cannot accept these constraints, this authorization must not merge.
+If review cannot accept those constraints, this authorization must not merge.
 
 ---
 
-## 30. Final authorization statement
+## 27. Final authorization statement
 
 If and only if this document becomes canonical after exact-head CI and a fresh independent exact-head review, Kodac authorizes one subsequent bounded implementation of:
 
@@ -1310,6 +1216,7 @@ NO TTL ARM
 NO FINAL OUTPUT EVIDENCE
 NO R3G-F E4
 NO ROOTLESS LIVE ATTACH IN B2A V1
+NO OWNER TAKEOVER OR POST-CRASH RECOVERY IN B2A V1
 ```
 
 All later live-execution authority remains closed.
