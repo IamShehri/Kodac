@@ -48,7 +48,10 @@ import {
   GvisorDockerDormantCreateGateway,
   SandboxDormantCreateBlockedError,
   SandboxDormantCreateIndeterminateError,
+  SandboxDormantCreateUnprovenError,
   createGvisorDockerDormantCreateRuntime,
+  createSandboxDormantCreateDispatchClaimCommit,
+  type SandboxDormantCreateDispatchClaim,
 } from "../src/execution/gateway-gvisor-docker-dormant-create-runtime.ts"
 
 const source = (relative: string) => readFile(new URL(relative, import.meta.url), "utf8")
@@ -236,6 +239,7 @@ async function withFakeDocker<T>(
 function durableHarness(permit: SandboxAdmissionPermit, events: string[]) {
   let reservationIdentity: string | undefined
   let preparedIdentity: string | undefined
+  let dispatchClaimIdentity: string | undefined
   let createdIdentity: string | undefined
   return {
     commitReservation: (reservation: ReturnType<typeof createCanonicalR4BB1Reservation>) => {
@@ -251,6 +255,13 @@ function durableHarness(permit: SandboxAdmissionPermit, events: string[]) {
       if (preparedIdentity !== undefined && preparedIdentity !== prepared.preparedIdentity) throw new Error("prepared conflict")
       preparedIdentity = prepared.preparedIdentity
       return createSandboxDormantCreatePreparedCommit(prepared, permit, disposition)
+    },
+    commitCreateDispatchClaim: (claim: SandboxDormantCreateDispatchClaim) => {
+      events.push("store:dispatch")
+      const disposition = dispatchClaimIdentity === undefined ? "created" : "existing"
+      if (dispatchClaimIdentity !== undefined && dispatchClaimIdentity !== claim.claimIdentity) throw new Error("dispatch claim conflict")
+      dispatchClaimIdentity = claim.claimIdentity
+      return createSandboxDormantCreateDispatchClaimCommit(claim, disposition)
     },
     commitCreatedAdmission: (created: SandboxDormantCreatedAdmission) => {
       events.push("store:created")
@@ -302,7 +313,7 @@ test("H4-R4B-B1 prepared theorem fails closed on serialized substitution", () =>
   }
 })
 
-test("H4-R4B-B1 exact create orders durable reservation and preparation before one dormant Docker mutation", { skip: process.platform !== "linux" }, async () => {
+test("H4-R4B-B1 exact create orders durable reservation, preparation, and dispatch claim before one Docker mutation", { skip: process.platform !== "linux" }, async () => {
   const permit = fixedPermit()
   const permitCommit = createSandboxAdmissionPermitCommit(permit)
   const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
@@ -314,7 +325,7 @@ test("H4-R4B-B1 exact create orders durable reservation and preparation before o
     const result = await gateway.createDormantAdmission(permit, permitCommit)
 
     assert.equal(createCount(), 1)
-    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:create", "docker:inspect", "store:created"])
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "store:dispatch", "docker:create", "docker:inspect", "store:created"])
     assert.equal(result.recovered, false)
     assert.equal(result.createdAdmission.containerId, CONTAINER_ID)
     assert.equal(result.observation.running, false)
@@ -341,7 +352,38 @@ test("H4-R4B-B1 exact create orders durable reservation and preparation before o
   })
 })
 
-test("H4-R4B-B1 retry after durable preparation reconciles and never sends a second create", { skip: process.platform !== "linux" }, async () => {
+test("H4-R4B-B1 prepared-only recovery may acquire the first dispatch claim and issue the first POST", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+  await withFakeDocker(prepared, args, {}, async ({ socketPath, events, createCount }) => {
+    const stores = durableHarness(permit, events)
+    const firstRuntime = createGvisorDockerDormantCreateRuntime({
+      socketPath,
+      ...stores,
+      commitCreateDispatchClaim: () => {
+        events.push("store:dispatch-failed")
+        throw new Error("synthetic pre-dispatch persistence outage")
+      },
+    })
+    await assert.rejects(
+      new GvisorDockerDormantCreateGateway(firstRuntime).createDormantAdmission(permit, permitCommit),
+      SandboxDormantCreateUnprovenError,
+    )
+    assert.equal(createCount(), 0)
+
+    events.length = 0
+    const recovered = await new GvisorDockerDormantCreateGateway(
+      createGvisorDockerDormantCreateRuntime({ socketPath, ...stores }),
+    ).createDormantAdmission(permit, permitCommit)
+    assert.equal(recovered.recovered, true)
+    assert.equal(createCount(), 1)
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "store:dispatch", "docker:create", "docker:inspect", "store:created"])
+  })
+})
+
+test("H4-R4B-B1 retry after durable dispatch claim reconciles and never sends a second create", { skip: process.platform !== "linux" }, async () => {
   const permit = fixedPermit()
   const permitCommit = createSandboxAdmissionPermitCommit(permit)
   const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
@@ -355,7 +397,38 @@ test("H4-R4B-B1 retry after durable preparation reconciles and never sends a sec
     const recovered = await gateway.createDormantAdmission(permit, permitCommit)
     assert.equal(recovered.recovered, true)
     assert.equal(createCount(), 1)
-    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:inspect", "store:created"])
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "store:dispatch", "docker:inspect", "store:created"])
+  })
+})
+
+test("H4-R4B-B1 durable dispatch claim without observed container burns the attempt and remains inspect-only", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+  const controller = new AbortController()
+  await withFakeDocker(prepared, args, {}, async ({ socketPath, events, createCount }) => {
+    const stores = durableHarness(permit, events)
+    const firstRuntime = createGvisorDockerDormantCreateRuntime({
+      socketPath,
+      ...stores,
+      commitCreateDispatchClaim: (claim) => {
+        const commit = stores.commitCreateDispatchClaim(claim)
+        controller.abort()
+        return commit
+      },
+    })
+    await assert.rejects(
+      new GvisorDockerDormantCreateGateway(firstRuntime).createDormantAdmission(permit, permitCommit, { signal: controller.signal }),
+      SandboxDormantCreateBlockedError,
+    )
+    assert.equal(createCount(), 0)
+
+    await assert.rejects(
+      new GvisorDockerDormantCreateGateway(createGvisorDockerDormantCreateRuntime({ socketPath, ...stores })).createDormantAdmission(permit, permitCommit),
+      SandboxDormantCreateIndeterminateError,
+    )
+    assert.equal(createCount(), 0)
   })
 })
 
@@ -384,7 +457,7 @@ test("H4-R4B-B1 non-201 create response still reconciles one exact dormant side 
     assert.equal(result.recovered, true)
     assert.equal(createCount(), 1)
     assert.equal(result.createdAdmission.containerId, CONTAINER_ID)
-    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:create", "docker:inspect", "store:created"])
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "store:dispatch", "docker:create", "docker:inspect", "store:created"])
   })
 })
 
@@ -400,7 +473,7 @@ test("H4-R4B-B1 observed Docker labels must contain exactly the canonical reconc
       SandboxDormantCreateIndeterminateError,
     )
     assert.equal(createCount(), 1)
-    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:create", "docker:inspect"])
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "store:dispatch", "docker:create", "docker:inspect"])
   })
 })
 
@@ -426,7 +499,7 @@ test("H4-R4B-B1 canonical Docker none endpoint is not counted as a live attachme
   })
 })
 
-test("H4-R4B-B1 unresolved create outcome burns the prepared attempt and a retry remains read-only", { skip: process.platform !== "linux" }, async () => {
+test("H4-R4B-B1 unresolved create outcome burns the dispatch-claimed attempt and a retry remains read-only", { skip: process.platform !== "linux" }, async () => {
   const permit = fixedPermit()
   const permitCommit = createSandboxAdmissionPermitCommit(permit)
   const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
@@ -513,6 +586,7 @@ test("H4-R4B-B1 package root exposes bounded gateway and validators but withhold
   assert.match(root, /\bGvisorDockerDormantCreateGateway\b/)
   assert.match(root, /\bvalidateSandboxDormantCreatedAdmission\b/)
   assert.doesNotMatch(root, /\bcreateGvisorDockerDormantCreateRuntime\b/)
+  assert.doesNotMatch(root, /\bcreateSandboxDormantCreateDispatchClaimCommit\b/)
   assert.doesNotMatch(root, /\bcreateSandboxDormantCreatePrepared\b/)
   assert.doesNotMatch(root, /\bcreateSandboxDormantCreatedAdmissionCommit\b/)
   assert.doesNotMatch(root, /\bcreateCanonicalR4BB1Reservation\b/)
