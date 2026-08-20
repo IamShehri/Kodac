@@ -155,7 +155,7 @@ const SHA256 = /^[0-9a-f]{64}$/
 const CONTAINER_NAME = /^kodac-r4b-b1-[0-9a-f]{32}$/
 
 function sha256Domain(domain: string, payload: string | readonly string[]): string {
-  const body = Array.isArray(payload) ? payload.join("\n") : payload
+  const body = typeof payload === "string" ? payload : payload.join("\n")
   return createHash("sha256")
     .update(Buffer.from(`KODAC-H4-R4B-B1\0${domain}\0V1\0`, "ascii"))
     .update(Buffer.from(body, "utf8"))
