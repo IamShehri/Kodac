@@ -566,7 +566,12 @@ async function getExactDormantInspect(
 
   const networkSettings = requiredRecord(inspect, "NetworkSettings", "Docker inspect")
   const networks = requiredRecord(networkSettings, "Networks", "Docker inspect NetworkSettings")
-  const networkAttachmentCount = Object.keys(networks).length
+  const networkKeys = Object.keys(networks).sort()
+  if (networkKeys.some((key) => key !== "none") || networkKeys.length > 1) {
+    throw new TypeError("R4B-B1 Docker NetworkSettings.Networks may contain only the canonical none endpoint")
+  }
+  if (networkKeys.length === 1) requiredRecord(networks, "none", "Docker inspect NetworkSettings.Networks")
+  const networkAttachmentCount = 0
 
   return createSandboxDormantDockerObservation({
     socketEndpointIdentity: runtime.socketEndpoint.endpointIdentity,
