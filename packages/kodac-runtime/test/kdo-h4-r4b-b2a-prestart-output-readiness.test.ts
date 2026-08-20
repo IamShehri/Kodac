@@ -1,11 +1,23 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { chmodSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
+import { spawnSync } from "node:child_process"
+import {
+  chmodSync,
+  chownSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs"
+import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http"
+import { createConnection, createServer as createNetServer, type Server as NetServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { spawnSync } from "node:child_process"
 import type { Duplex } from "node:stream"
 import test from "node:test"
 
@@ -19,9 +31,8 @@ import {
 import { createConfinementRequest } from "../src/trust/confinement.ts"
 import { createSandboxExecutionRequirement, type SandboxExecutionRequirement } from "../src/trust/sandbox-backend-evidence.ts"
 import { createSandboxExecutionApprovalBinding, createSandboxExecutionApprovalIntent } from "../src/trust/sandbox-execution-approval-binding.ts"
-import { createSandboxAdmissionPermit, createSandboxAdmissionPermitCommit, type SandboxAdmissionPermit } from "../src/trust/sandbox-admission-permit.ts"
+import { createSandboxAdmissionPermit, type SandboxAdmissionPermit } from "../src/trust/sandbox-admission-permit.ts"
 import {
-  KDO_H4_R4B_B1_LABELS,
   createCanonicalR4BB1Reservation,
   createSandboxDormantCreatePrepared,
   createSandboxDormantCreatedAdmission,
@@ -74,7 +85,6 @@ import {
 import {
   GvisorDockerPrestartOutputGateway,
   KDO_H4_R4B_B2A_RUNTIME_LIMITS,
-  SandboxPrestartTerminalError,
   createGvisorDockerPrestartOutputRuntime,
 } from "../src/execution/gateway-gvisor-docker-prestart-output-runtime.ts"
 
@@ -108,6 +118,7 @@ function fixtureRequirement(maxOutputBytes = 1024): SandboxExecutionRequirement 
   })
   return createSandboxExecutionRequirement({ workload, requiredSemanticRuntimeClass: "gvisor" })
 }
+
 function fixedPermit(): SandboxAdmissionPermit {
   const requirement = fixtureRequirement()
   const expected = createSandboxExecutionApprovalIntent(requirement)
@@ -172,7 +183,7 @@ test("H4-R4B-B2A prepared and state identities are exact and deterministic", () 
   assert.deepEqual(validateSandboxPrestartStateFence(clone(fence), fixture.prepared), fence)
 })
 
-test("H4-R4B-B2A owner capability is sealed, non-structural, and produces unique owner identities", () => {
+test("H4-R4B-B2A owner capability is sealed, non-structural, and unique", () => {
   const fixture = syntheticPrepared()
   const ownerA = createSandboxPrestartOwnerCapability()
   const ownerB = createSandboxPrestartOwnerCapability()
@@ -189,7 +200,7 @@ test("H4-R4B-B2A owner capability is sealed, non-structural, and produces unique
   assert.equal(fence.ownerInstanceIdentity, claim.ownerInstanceIdentity)
 })
 
-test("H4-R4B-B2A durable failure enum excludes indeterminate and owner replay pseudo-failures", () => {
+test("H4-R4B-B2A durable failure enum excludes indeterminate replay pseudo-failures", () => {
   const fixture = syntheticPrepared()
   const owner = createSandboxPrestartOwnerCapability()
   for (const code of KDO_H4_R4B_B2A_FAILURE_CODES) {
@@ -200,7 +211,7 @@ test("H4-R4B-B2A durable failure enum excludes indeterminate and owner replay ps
   }
   for (const forbidden of ["indeterminate", "owner-already-claimed", "owner-lost-indeterminate"]) {
     const failure = createSandboxPrestartFailure(fixture.prepared, "attaching", "aborted", null)
-    const hostile = clone(failure) as any
+    const hostile = clone(failure) as Record<string, unknown>
     hostile.failureCode = forbidden
     assert.throws(() => validateSandboxPrestartFailure(hostile, fixture.prepared), /failureCode/)
   }
@@ -220,22 +231,21 @@ test("H4-R4B-B2A terminal fences distinguish pre-owner and exact-owner failures"
   assert.throws(() => createSandboxPrestartFailedFence(fixture.prepared, ownerFailure, null), /pre-owner failure/)
 })
 
-test("H4-R4B-B2A schema is closed and durable failure enum has no indeterminate values", () => {
+test("H4-R4B-B2A schema is closed and cannot serialize indeterminate as durable truth", () => {
   const schema = JSON.parse(source("../../../schema/kdo-h4-r4b-b2a-prestart-output.schema.json"))
   for (const key of ["prepared", "preparedCommit", "stateFence", "ownershipClaim", "ownershipClaimCommit", "failure", "failureCommit"]) assert.equal(schema.$defs[key].additionalProperties, false, key)
   const codes = schema.$defs.failure.properties.failureCode.enum as string[]
-  assert.equal(codes.includes("indeterminate"), false)
-  assert.equal(codes.includes("owner-already-claimed"), false)
-  assert.equal(codes.includes("owner-lost-indeterminate"), false)
+  for (const forbidden of ["indeterminate", "owner-already-claimed", "owner-lost-indeterminate"]) assert.equal(codes.includes(forbidden), false)
   assert.deepEqual(schema.$defs.ownershipClaimCommit.properties.disposition, { const: "created" })
 })
 
 interface FakeDocker {
   readonly socketPath: string
   readonly requests: string[]
-  readonly server: Server
+  readonly server: HttpServer
   close(): Promise<void>
 }
+
 function inspectBody(prepared: SandboxDormantCreatePrepared): Record<string, unknown> {
   return {
     Id: CONTAINER_ID,
@@ -276,11 +286,12 @@ function inspectBody(prepared: SandboxDormantCreatePrepared): Record<string, unk
     Mounts: [],
   }
 }
+
 async function startFakeDocker(root: string, prepared: SandboxDormantCreatePrepared): Promise<FakeDocker> {
   const socketPath = join(root, "docker.sock")
   const requests: string[] = []
   const sockets = new Set<Duplex>()
-  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+  const server = createHttpServer((request: IncomingMessage, response: ServerResponse) => {
     const method = request.method ?? ""; const url = request.url ?? ""; requests.push(`${method} ${url}`)
     if (method === "GET" && url === `/v1.48/images/${encodeURIComponent(prepared.sourceReference)}/json`) {
       response.writeHead(200, { "Content-Type": "application/json" })
@@ -364,10 +375,10 @@ async function rootPhysicalProof(): Promise<void> {
     if (result.status !== "PRESTART_READY") throw new Error("unexpected unavailable result")
     assert.equal(store.state()?.state, "OWNER_CLAIMED")
     assert.equal(store.writes(), 2)
-    assert.equal(fake.requests.some((entry) => /\/start|\/exec|\/restart|\/stop|\/kill|DELETE/.test(entry)), false)
     assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, 1)
+    assert.equal(fake.requests.some((entry) => /\/start|\/exec|\/restart|\/stop|\/kill|DELETE/.test(entry)), false)
     assert.ok(fake.requests.every((entry) => entry.startsWith("GET ") || entry === `UPGRADE /v1.48/containers/${CONTAINER_ID}/attach?logs=0&stream=1&stdin=0&stdout=1&stderr=1`))
-    await assert.rejects(gateway.invalidatePrestartOutput(result.readiness), SandboxPrestartTerminalError)
+    await gateway.invalidatePrestartOutput(result.readiness)
     assert.equal(store.state()?.state, "FAILED_TERMINAL")
     assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
     assert.equal(fake.requests.some((entry) => entry.includes("/start")), false)
@@ -377,18 +388,147 @@ async function rootPhysicalProof(): Promise<void> {
 }
 
 if (process.env.KODAC_B2A_ROOT_CHILD === "1") {
-  test("H4-R4B-B2A rootful protected-socket positive path reaches PRESTART_READY without start", rootPhysicalProof)
-} else {
-  test("H4-R4B-B2A Linux physical root proof executes under host root and stays zero-start", { skip: process.platform !== "linux" }, () => {
+  await rootPhysicalProof()
+  process.stdout.write("B2A_ROOT_PROOF_PASS\n")
+  process.exit(0)
+}
+
+function commandAvailable(name: string): boolean { return spawnSync("bash", ["-lc", `command -v -- ${name}`], { encoding: "utf8" }).status === 0 }
+function sudo(args: readonly string[]): void {
+  const result = spawnSync("sudo", ["-n", ...args], { encoding: "utf8" })
+  assert.equal(result.status, 0, `sudo ${args.join(" ")} failed\nstdout=${result.stdout}\nstderr=${result.stderr}`)
+}
+function getfacl(path: string): string {
+  const result = spawnSync("getfacl", ["-cp", "--", path], { encoding: "utf8" })
+  assert.equal(result.status, 0, `getfacl failed for ${path}: ${result.stderr}`)
+  return result.stdout
+}
+function actorEvidence() {
+  const status = readFileSync("/proc/self/status", "utf8")
+  const uid = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)$/m.exec(status)
+  const cap = /^CapEff:\s+([0-9A-Fa-f]+)$/m.exec(status)
+  assert.ok(uid); assert.ok(cap)
+  const fsuid = Number(uid[4]); assert.ok(Number.isSafeInteger(fsuid) && fsuid > 0)
+  const capEff = BigInt(`0x${cap[1]}`)
+  for (const bit of [0n, 1n, 2n, 3n]) assert.equal((capEff & (1n << bit)) === 0n, true, `negative actor capability bit ${bit} must be absent`)
+  const egid = process.getegid?.(); assert.equal(typeof egid, "number")
+  const groups = new Set<number>([egid as number, ...(process.getgroups?.() ?? [])])
+  assert.equal(groups.has(egid as number), true)
+  return Object.freeze({ fsuid, egid: egid as number, groups })
+}
+async function listenUnix(path: string): Promise<NetServer> {
+  const server = createNetServer((socket) => socket.end())
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(path, () => { server.off("error", reject); resolve() }) })
+  return server
+}
+async function connectUnix(path: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const socket = createConnection({ path })
+    socket.once("connect", () => { socket.destroy(); resolve() })
+    socket.once("error", reject)
+  })
+}
+async function expectConnectEacces(path: string): Promise<void> {
+  await assert.rejects(connectUnix(path), (error: unknown) => {
+    const code = (error as NodeJS.ErrnoException).code
+    assert.equal(code, "EACCES")
+    return true
+  })
+}
+function inodeIdentity(path: string): string { const stats = lstatSync(path, { bigint: true }); return `${stats.dev}:${stats.ino}:${stats.mode}:${stats.uid}:${stats.gid}` }
+function expectFsEacces(operation: () => void): void {
+  assert.throws(operation, (error: unknown) => { assert.equal((error as NodeJS.ErrnoException).code, "EACCES"); return true })
+}
+function controlDirectorySequence(root: string): void {
+  const createPath = join(root, "create-ok"); writeFileSync(createPath, "ok"); unlinkSync(createPath)
+  const unlinkPath = join(root, "unlink-ok"); writeFileSync(unlinkPath, "ok"); unlinkSync(unlinkPath)
+  const renameSource = join(root, "rename-source"); const renameTarget = join(root, "rename-target"); writeFileSync(renameSource, "ok"); writeFileSync(renameTarget, "target"); renameSync(renameSource, renameTarget); unlinkSync(renameTarget)
+}
+function denialDirectorySequence(root: string, actorSourceRoot: string): void {
+  const createTarget = join(root, "create-denied")
+  const unlinkTarget = join(root, "unlink-denied")
+  const renameTarget = join(root, "rename-denied")
+  const renameSource = join(actorSourceRoot, "rename-source")
+  writeFileSync(renameSource, "actor-source")
+  const unlinkBefore = inodeIdentity(unlinkTarget); const renameTargetBefore = inodeIdentity(renameTarget); const renameSourceBefore = inodeIdentity(renameSource)
+  expectFsEacces(() => writeFileSync(createTarget, "denied")); assert.throws(() => lstatSync(createTarget), (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT")
+  expectFsEacces(() => unlinkSync(unlinkTarget)); assert.equal(inodeIdentity(unlinkTarget), unlinkBefore)
+  expectFsEacces(() => renameSync(renameSource, renameTarget)); assert.equal(inodeIdentity(renameTarget), renameTargetBefore); assert.equal(inodeIdentity(renameSource), renameSourceBefore)
+}
+
+async function posixAclPhysicalProof(): Promise<void> {
+  const actor = actorEvidence()
+  assert.equal(process.geteuid?.(), actor.fsuid)
+  assert.equal(commandAvailable("setfacl"), true)
+  assert.equal(commandAvailable("getfacl"), true)
+  const root = mkdtempSync(join(tmpdir(), "kodac-b2a-acl-"))
+  const actorSourceRoot = join(root, "actor-source"); mkdirSync(actorSourceRoot, 0o700)
+  const extControlDir = join(root, "ext-control"); const extDenyDir = join(root, "ext-deny")
+  const minControlDir = join(root, "min-control"); const minDenyDir = join(root, "min-deny")
+  for (const path of [extControlDir, extDenyDir, minControlDir, minDenyDir]) mkdirSync(path, 0o700)
+  const extControlSocket = join(extControlDir, "control.sock"); const extDenySocket = join(extDenyDir, "deny.sock")
+  const minControlSocket = join(minControlDir, "control.sock"); const minDenySocket = join(minDenyDir, "deny.sock")
+  const servers: NetServer[] = []
+  try {
+    servers.push(await listenUnix(extControlSocket), await listenUnix(extDenySocket), await listenUnix(minControlSocket), await listenUnix(minDenySocket))
+    for (const path of [join(extDenyDir, "unlink-denied"), join(extDenyDir, "rename-denied"), join(minDenyDir, "unlink-denied"), join(minDenyDir, "rename-denied")]) writeFileSync(path, "protected")
+
+    sudo(["chown", "root:root", extControlDir, extDenyDir, extControlSocket, extDenySocket, join(extDenyDir, "unlink-denied"), join(extDenyDir, "rename-denied")])
+    sudo(["chmod", "0750", extControlDir, extDenyDir]); sudo(["chmod", "0600", extControlSocket, extDenySocket])
+    sudo(["setfacl", "-m", `u:${actor.fsuid}:rwx,m:rwx`, "--", extControlDir])
+    sudo(["setfacl", "-m", `u:${actor.fsuid}:rwx,m:r-x`, "--", extDenyDir])
+    sudo(["setfacl", "-m", `u:${actor.fsuid}:rw,m:rw`, "--", extControlSocket])
+    sudo(["setfacl", "-m", `u:${actor.fsuid}:rw,m:---`, "--", extDenySocket])
+
+    const extSocketAcl = getfacl(extDenySocket); const extDirAcl = getfacl(extDenyDir)
+    assert.match(extSocketAcl, new RegExp(`^user:${actor.fsuid}:rw-$`, "m")); assert.match(extSocketAcl, /^mask::---$/m)
+    assert.match(extDirAcl, new RegExp(`^user:${actor.fsuid}:rwx$`, "m")); assert.match(extDirAcl, /^mask::r-x$/m)
+    assert.equal(Number(lstatSync(extDenyDir, { bigint: true }).mode & 0o1000n), 0)
+    assert.equal(Number(lstatSync(extDenySocket, { bigint: true }).mode & 0o777n), 0o600)
+    await connectUnix(extControlSocket); await expectConnectEacces(extDenySocket)
+    controlDirectorySequence(extControlDir); denialDirectorySequence(extDenyDir, actorSourceRoot)
+
+    const protectedFile = join(extDenyDir, "unlink-denied")
+    assert.throws(() => chmodSync(protectedFile, 0o777), (error: unknown) => (error as NodeJS.ErrnoException).code === "EPERM")
+    assert.throws(() => chownSync(protectedFile, actor.fsuid, actor.egid), (error: unknown) => (error as NodeJS.ErrnoException).code === "EPERM")
+    const aclMutation = spawnSync("setfacl", ["-m", `u:${actor.fsuid}:rwx`, "--", protectedFile], { encoding: "utf8" }); assert.notEqual(aclMutation.status, 0)
+
+    sudo(["chown", `root:${actor.egid}`, minControlDir, minDenyDir, minControlSocket, minDenySocket, join(minDenyDir, "unlink-denied"), join(minDenyDir, "rename-denied")])
+    sudo(["setfacl", "-b", "--", minControlDir, minDenyDir, minControlSocket, minDenySocket, join(minDenyDir, "unlink-denied"), join(minDenyDir, "rename-denied")])
+    sudo(["chmod", "0770", minControlDir]); sudo(["chmod", "0550", minDenyDir]); sudo(["chmod", "0660", minControlSocket]); sudo(["chmod", "0600", minDenySocket])
+    assert.equal(actor.groups.has(actor.egid), true)
+    const minSocketAcl = getfacl(minDenySocket); const minDirAcl = getfacl(minDenyDir)
+    assert.doesNotMatch(minSocketAcl, /^mask::/m); assert.doesNotMatch(minSocketAcl, /^user:[0-9]+:/m); assert.doesNotMatch(minSocketAcl, /^group:[^:]+:/m); assert.match(minSocketAcl, /^group::---$/m)
+    assert.doesNotMatch(minDirAcl, /^mask::/m); assert.doesNotMatch(minDirAcl, /^user:[0-9]+:/m); assert.doesNotMatch(minDirAcl, /^group:[^:]+:/m); assert.match(minDirAcl, /^group::r-x$/m)
+    assert.equal(Number(lstatSync(minDenyDir, { bigint: true }).mode & 0o1000n), 0)
+    await connectUnix(minControlSocket); await expectConnectEacces(minDenySocket)
+    controlDirectorySequence(minControlDir); denialDirectorySequence(minDenyDir, actorSourceRoot)
+    assert.equal(actorEvidence().fsuid, actor.fsuid)
+  } finally {
+    for (const server of servers) await new Promise<void>((resolve) => server.close(() => resolve()))
+    sudo(["rm", "-rf", "--", root])
+  }
+}
+
+if (process.env.KODAC_B2A_ROOT_CHILD !== "1") {
+  test("H4-R4B-B2A Linux physical root proof reaches PRESTART_READY without start", { skip: process.platform !== "linux" }, () => {
     const script = fileURLToPath(import.meta.url)
-    const result = spawnSync("sudo", ["-n", process.execPath, "--experimental-strip-types", script], {
-      env: { ...process.env, KODAC_B2A_ROOT_CHILD: "1" }, encoding: "utf8", timeout: 60_000,
-    })
-    if (process.env.GITHUB_ACTIONS === "true") assert.equal(result.status, 0, `root B2A proof failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
-    else if (result.status !== 0) return
+    const result = spawnSync("sudo", ["-n", process.execPath, "--experimental-strip-types", script], { env: { ...process.env, KODAC_B2A_ROOT_CHILD: "1" }, encoding: "utf8", timeout: 30_000 })
+    if (process.env.GITHUB_ACTIONS === "true") {
+      assert.equal(result.status, 0, `root B2A proof failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
+      assert.match(result.stdout, /B2A_ROOT_PROOF_PASS/)
+    }
   })
 
-  test("H4-R4B-B2A deadlines remain exactly 5s/5s/5s/15s and zero-start is statically enforced", async () => {
+  test("H4-R4B-B2A extended and minimal POSIX ACL fixtures causally deny the same untrusted actor", { skip: process.platform !== "linux" }, async () => {
+    if (!commandAvailable("sudo") || !commandAvailable("setfacl") || !commandAvailable("getfacl")) {
+      if (process.env.GITHUB_ACTIONS === "true") assert.fail("GitHub Linux proof host must provide sudo/setfacl/getfacl")
+      return
+    }
+    await posixAclPhysicalProof()
+  })
+
+  test("H4-R4B-B2A deadlines remain exactly 5s/5s/5s/15s and zero-start is statically enforced", () => {
     assert.deepEqual(KDO_H4_R4B_B2A_RUNTIME_LIMITS, { attachUpgradeTimeoutMs: 5000, readerActivationTimeoutMs: 5000, dormantRevalidationTimeoutMs: 5000, ownerToReadyTimeoutMs: 15000 })
     const runtimeSource = source("../src/execution/gateway-gvisor-docker-prestart-output-runtime.ts")
     const channelSource = source("../src/execution/gateway-gvisor-output-channel-internal.ts")
@@ -398,9 +538,12 @@ if (process.env.KODAC_B2A_ROOT_CHILD === "1") {
     assert.equal(channelSource.includes('method: "DELETE"'), false)
     assert.equal(runtimeSource.includes("node:child_process"), false)
     assert.equal(channelSource.includes("node:child_process"), false)
+    assert.match(runtimeSource, /readFileSync\("\/proc\/self\/uid_map", "utf8"\)/)
+    assert.match(runtimeSource, /readFileSync\("\/proc\/self\/gid_map", "utf8"\)/)
+    assert.match(runtimeSource, /4294967295/)
   })
 
-  test("H4-R4B-B2A package-root negative space withholds raw attach, store mutation, owner and readiness constructors", async () => {
+  test("H4-R4B-B2A package-root negative space withholds raw attach, store mutation, owner and readiness constructors", () => {
     const root = source("../src/index.ts")
     for (const forbidden of [
       "openExactGvisorDockerAttach", "InternalGvisorPrestartMultiplexReader", "createGvisorDockerPrestartOutputRuntime",
@@ -409,5 +552,14 @@ if (process.env.KODAC_B2A_ROOT_CHILD === "1") {
       "createSandboxPrestartFailure", "createSandboxPrestartFailureCommit", "createSandboxPrestartPreparedCommit",
       "createSandboxPrestartOwnershipClaimCommit", "createReadiness",
     ]) assert.equal(root.includes(forbidden), false, forbidden)
+  })
+
+  test("H4-R4B-B2A R3G-E canonical regression suite remains present and fixed-protocol", () => {
+    const regression = source("./kdo-h4-r3g-e-docker-stream.test.ts")
+    assert.match(regression, /trusted transport proves exact list\/inspect\/attach multiplex path and aggregate bytes/)
+    assert.match(regression, /rejects TTY stdin and missing stdout\/stderr before attach upgrade/)
+    assert.match(regression, /overflow closes the accepted stream and same-attempt replay cannot replenish budget/)
+    assert.match(regression, /abort destroys the owned upgraded stream and cannot become late success/)
+    assert.match(regression, /socket replacement before any trusted output request/)
   })
 }
