@@ -231,7 +231,7 @@ test("H4-R4B-A constants authority surface and protected gateways are exact", ()
   assert.equal(root.includes("createSandboxAdmissionApprovalRuntime"), false)
   assert.equal(root.includes("createSandboxAdmissionPermitCommit"), false)
   assert.equal(root.includes("createSandboxAdmissionConsumptionReservation"), false)
-  assert.equal(root.includes("createSandboxAdmissionPermit,"), false)
+  assert.doesNotMatch(root, /\bcreateSandboxAdmissionPermit\b/)
 })
 
 test("H4-R4B-A exact allowed-once flow persists asked and decided evidence before one durable permit", async () => {
@@ -314,6 +314,39 @@ test("H4-R4B-A cancellation during pending approval converts late allowed-once t
     assert.equal((error as SandboxAdmissionApprovalBlockedError).outcome, "cancelled")
     return true
   })
+  assert.deepEqual(events, ["policy", "asked-commit", "decide", "decided-commit"])
+})
+
+test("H4-R4B-A cancellation does not wait for a non-cooperative approval service", async () => {
+  const events: string[] = []
+  const controller = new AbortController()
+  let decisionStarted = false
+  const gateway = gatewayFixture(events, {
+    decisionMutator() {
+      decisionStarted = true
+      return new Promise<unknown>(() => undefined)
+    },
+  })
+
+  const pending = gateway.authorizeSandboxAdmission(fixtureRequirement(), { signal: controller.signal })
+  while (!decisionStarted) {
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  controller.abort()
+
+  const outcome = await Promise.race([
+    pending.then(
+      () => ({ kind: "fulfilled" as const }),
+      (error: unknown) => ({ kind: "rejected" as const, error }),
+    ),
+    new Promise<{ readonly kind: "timeout" }>((resolve) => setTimeout(() => resolve({ kind: "timeout" }), 2000)),
+  ])
+  assert.notEqual(outcome.kind, "timeout")
+  assert.equal(outcome.kind, "rejected")
+  if (outcome.kind === "rejected") {
+    assert.equal(outcome.error instanceof SandboxAdmissionApprovalBlockedError, true)
+    assert.equal((outcome.error as SandboxAdmissionApprovalBlockedError).outcome, "cancelled")
+  }
   assert.deepEqual(events, ["policy", "asked-commit", "decide", "decided-commit"])
 })
 
