@@ -54,6 +54,16 @@ export {
   SandboxAdmissionApprovalUnprovenError,
   type SandboxAdmissionApprovalResult,
 } from "./execution/sandbox-admission-approval-runtime.ts"
+export {
+  GvisorDockerDormantCreateGateway,
+  KDO_H4_R4B_B1_RUNTIME_LIMITS,
+  KDO_H4_R4B_B1_RUNTIME_VERSION,
+  SandboxDormantCreateBlockedError,
+  SandboxDormantCreateIndeterminateError,
+  SandboxDormantCreateRejectedError,
+  SandboxDormantCreateUnprovenError,
+  type GvisorDockerDormantCreateResult,
+} from "./execution/gateway-gvisor-docker-dormant-create-runtime.ts"
 export * from "./extensions/contracts.ts"
 export * from "./extensions/registry.ts"
 export * from "./model/capabilities.ts"
@@ -95,6 +105,34 @@ export {
   type SandboxAdmissionPermit,
   type SandboxAdmissionPermitCommit,
 } from "./trust/sandbox-admission-permit.ts"
+export {
+  KDO_H4_R4B_B1_CREATED_ADMISSION_COMMIT_VERSION,
+  KDO_H4_R4B_B1_CREATED_ADMISSION_VERSION,
+  KDO_H4_R4B_B1_CREATE_PREPARED_COMMIT_VERSION,
+  KDO_H4_R4B_B1_CREATE_PREPARED_VERSION,
+  KDO_H4_R4B_B1_DOCKER_API_VERSION,
+  KDO_H4_R4B_B1_DOCKER_OBSERVATION_VERSION,
+  KDO_H4_R4B_B1_DURABILITY,
+  KDO_H4_R4B_B1_LABELS,
+  KDO_H4_R4B_B1_NETWORK_MODE,
+  KDO_H4_R4B_B1_RESERVATION_COMMIT_VERSION,
+  KDO_H4_R4B_B1_RUNTIME_NAME,
+  KDO_H4_R4B_B1_VERSION,
+  validateSandboxAdmissionConsumptionReservationCommit,
+  validateSandboxDormantCreatePrepared,
+  validateSandboxDormantCreatePreparedCommit,
+  validateSandboxDormantCreatedAdmission,
+  validateSandboxDormantCreatedAdmissionCommit,
+  validateSandboxDormantDockerObservation,
+  type SandboxAdmissionConsumptionReservationCommit,
+  type SandboxDormantCommitDisposition,
+  type SandboxDormantCreateLabels,
+  type SandboxDormantCreatePrepared,
+  type SandboxDormantCreatePreparedCommit,
+  type SandboxDormantCreatedAdmission,
+  type SandboxDormantCreatedAdmissionCommit,
+  type SandboxDormantDockerObservation,
+} from "./trust/sandbox-admission-dormant-create.ts"
 export * from "./trust/sandbox-backend-evidence.ts"
 export * from "./trust/sandbox-execution-approval-binding.ts"
 export * from "./trust/sandbox-lifecycle-gvisor-ttl.ts"
