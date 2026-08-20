@@ -66,6 +66,11 @@ export interface SandboxDormantCreateDispatchClaimCommit {
   readonly commitIdentity: string
 }
 
+interface DockerImagePreflight {
+  readonly imageId: string
+  readonly manifestDigest: string
+}
+
 export interface GvisorDockerDormantCreateRuntimeConfig {
   readonly socketPath: string
   readonly commitReservation: (
@@ -140,6 +145,7 @@ export class SandboxDormantCreateUnprovenError extends Error {
 const trustedRuntimes = new WeakSet<object>()
 const decoder = new TextDecoder("utf-8", { fatal: true })
 const SHA256 = /^[0-9a-f]{64}$/
+const DOCKER_IMAGE_ID = /^sha256:[0-9a-f]{64}$/
 
 function asPlainRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value) || utilTypes.isProxy(value)) {
@@ -471,7 +477,11 @@ function dockerCreatePayload(permit: SandboxAdmissionPermit, prepared: SandboxDo
     Image: prepared.sourceReference,
     Entrypoint: [prepared.entrypointExecutable],
     Cmd: [...requirement.workload.entrypoint.args],
+    AttachStdin: false,
     Tty: false,
+    OpenStdin: false,
+    StdinOnce: false,
+    Healthcheck: { Test: ["NONE"] },
     Labels: { ...prepared.labels, [KDO_H4_R4B_B1_LABELS.bindingVersion]: KDO_H4_R3F_BINDING_VERSION },
     HostConfig: {
       Runtime: "runsc",
@@ -598,10 +608,125 @@ function requiredStringArray(record: Record<string, unknown>, key: string, label
   }))
 }
 
+function optionalEmptyArray(record: Record<string, unknown>, key: string, label: string): void {
+  const value = record[key]
+  if (value === undefined || value === null) return
+  if (!Array.isArray(value) || utilTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== 0) {
+    throw new TypeError(`${label}.${key} must be absent, null, or an empty plain array`)
+  }
+}
+
+function optionalEmptyRecord(record: Record<string, unknown>, key: string, label: string): void {
+  const value = record[key]
+  if (value === undefined || value === null) return
+  const nested = asPlainRecord(value, `${label}.${key}`)
+  if (Object.keys(nested).length !== 0) throw new TypeError(`${label}.${key} must be absent, null, or empty`)
+}
+
+function optionalFalse(record: Record<string, unknown>, key: string, label: string): void {
+  const value = record[key]
+  if (value === undefined || value === null) return
+  if (value !== false) throw new TypeError(`${label}.${key} must be absent, null, or false`)
+}
+
+function optionalStringIn(record: Record<string, unknown>, key: string, allowed: readonly string[], label: string): void {
+  const value = record[key]
+  if (value === undefined || value === null) return
+  if (typeof value !== "string" || !allowed.includes(value)) throw new TypeError(`${label}.${key} contains unadmitted authority`)
+}
+
+function requireNoUnadmittedHostAuthority(inspect: Record<string, unknown>, config: Record<string, unknown>, hostConfig: Record<string, unknown>): void {
+  for (const key of ["Binds", "Links", "Dns", "DnsOptions", "DnsSearch", "ExtraHosts", "VolumesFrom", "CapAdd", "CapDrop", "GroupAdd", "Devices", "DeviceCgroupRules", "DeviceRequests", "Ulimits", "SecurityOpt", "Mounts"] as const) {
+    optionalEmptyArray(hostConfig, key, "Docker inspect HostConfig")
+  }
+  for (const key of ["PortBindings", "StorageOpt", "Tmpfs", "Sysctls"] as const) {
+    optionalEmptyRecord(hostConfig, key, "Docker inspect HostConfig")
+  }
+  for (const key of ["PublishAllPorts", "AutoRemove", "ReadonlyRootfs"] as const) {
+    optionalFalse(hostConfig, key, "Docker inspect HostConfig")
+  }
+  optionalStringIn(hostConfig, "PidMode", [""], "Docker inspect HostConfig")
+  optionalStringIn(hostConfig, "IpcMode", ["", "private"], "Docker inspect HostConfig")
+  optionalStringIn(hostConfig, "UTSMode", [""], "Docker inspect HostConfig")
+  optionalStringIn(hostConfig, "UsernsMode", [""], "Docker inspect HostConfig")
+  optionalStringIn(hostConfig, "CgroupnsMode", ["", "private"], "Docker inspect HostConfig")
+  optionalStringIn(hostConfig, "CgroupParent", [""], "Docker inspect HostConfig")
+  optionalStringIn(hostConfig, "VolumeDriver", [""], "Docker inspect HostConfig")
+
+  optionalFalse(config, "AttachStdin", "Docker inspect Config")
+  optionalFalse(config, "OpenStdin", "Docker inspect Config")
+  optionalFalse(config, "StdinOnce", "Docker inspect Config")
+  optionalFalse(config, "NetworkDisabled", "Docker inspect Config")
+  optionalEmptyRecord(config, "Volumes", "Docker inspect Config")
+
+  const healthcheckValue = config.Healthcheck
+  if (healthcheckValue !== undefined && healthcheckValue !== null) {
+    const healthcheck = asPlainRecord(healthcheckValue, "Docker inspect Config.Healthcheck")
+    const test = requiredStringArray(healthcheck, "Test", "Docker inspect Config.Healthcheck")
+    if (test.length !== 1 || test[0] !== "NONE") throw new TypeError("Docker inspect Config.Healthcheck must be disabled")
+  }
+
+  const mounts = inspect.Mounts
+  if (mounts !== undefined && mounts !== null) {
+    if (!Array.isArray(mounts) || utilTypes.isProxy(mounts) || Object.getPrototypeOf(mounts) !== Array.prototype || mounts.length !== 0) {
+      throw new TypeError("Docker inspect Mounts must be empty")
+    }
+  }
+}
+
+async function getExactImagePreflight(
+  runtime: TrustedGvisorDockerDormantCreateRuntime,
+  prepared: SandboxDormantCreatePrepared,
+): Promise<DockerImagePreflight> {
+  requireSameSocketEndpoint(runtime)
+  const path = `/v${KDO_H4_R4B_B1_DOCKER_API_VERSION}/images/${encodeURIComponent(prepared.sourceReference)}/json`
+  const response = await new Promise<{ readonly statusCode: number; readonly body: Buffer }>((resolve, reject) => {
+    let settled = false
+    const finishResolve = (value: { readonly statusCode: number; readonly body: Buffer }) => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+    const finishReject = (error: unknown) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+    const request = httpRequest({ socketPath: runtime.socketPath, path, method: "GET" }, (incoming) => {
+      void readResponseBody(incoming, KDO_H4_R4B_B1_RUNTIME_LIMITS.maxInspectResponseBytes).then(
+        (responseBody) => finishResolve({ statusCode: incoming.statusCode ?? 0, body: responseBody }),
+        finishReject,
+      )
+    })
+    request.on("error", finishReject)
+    request.setTimeout(KDO_H4_R4B_B1_RUNTIME_LIMITS.requestTimeoutMs, () => {
+      const error = new Error("R4B-B1 Docker image preflight timed out")
+      request.destroy(error)
+      finishReject(error)
+    })
+    request.end()
+  })
+  requireSameSocketEndpoint(runtime)
+  if (response.statusCode !== 200) throw new SandboxDormantCreateIndeterminateError(`R4B-B1 exact image preflight failed with HTTP ${response.statusCode}`)
+  const image = parseJsonObject(response.body, "R4B-B1 Docker image preflight response")
+  const imageId = requiredString(image, "Id", "Docker image preflight")
+  if (!DOCKER_IMAGE_ID.test(imageId)) throw new TypeError("Docker image preflight Id must be an exact sha256 image ID")
+  const descriptor = requiredRecord(image, "Descriptor", "Docker image preflight")
+  const manifestDigest = requiredString(descriptor, "digest", "Docker image preflight Descriptor")
+  if (manifestDigest !== prepared.sourceDigest) throw new TypeError("Docker image preflight manifest digest does not match admitted source digest")
+  const imageConfigValue = image.Config
+  if (imageConfigValue !== undefined && imageConfigValue !== null) {
+    const imageConfig = asPlainRecord(imageConfigValue, "Docker image preflight Config")
+    optionalEmptyRecord(imageConfig, "Volumes", "Docker image preflight Config")
+  }
+  return Object.freeze({ imageId, manifestDigest })
+}
+
 async function getExactDormantInspect(
   runtime: TrustedGvisorDockerDormantCreateRuntime,
   permit: SandboxAdmissionPermit,
   prepared: SandboxDormantCreatePrepared,
+  imagePreflight: DockerImagePreflight,
 ): Promise<SandboxDormantDockerObservation | null> {
   requireSameSocketEndpoint(runtime)
   const path = `/v${KDO_H4_R4B_B1_DOCKER_API_VERSION}/containers/${encodeURIComponent(prepared.containerName)}/json`
@@ -638,6 +763,7 @@ async function getExactDormantInspect(
   const id = requiredString(inspect, "Id", "Docker inspect")
   if (!/^[0-9a-f]{64}$/.test(id)) throw new TypeError("Docker inspect Id must be full lowercase container ID")
   if (requiredString(inspect, "Name", "Docker inspect") !== `/${prepared.containerName}`) throw new TypeError("Docker inspect Name does not match deterministic R4B-B1 container name")
+  if (requiredString(inspect, "Image", "Docker inspect") !== imagePreflight.imageId) throw new TypeError("Docker inspect Image does not match exact preflight image ID")
   if (requiredString(inspect, "Path", "Docker inspect") !== prepared.entrypointExecutable) throw new TypeError("Docker inspect Path does not match admitted executable")
   const args = requiredStringArray(inspect, "Args", "Docker inspect")
   const expectedArgs = permit.binding.requirement.workload.entrypoint.args
@@ -653,15 +779,13 @@ async function getExactDormantInspect(
   const restartCount = requiredInteger(inspect, "RestartCount", "Docker inspect")
 
   const config = requiredRecord(inspect, "Config", "Docker inspect")
+  if (requiredString(config, "Image", "Docker inspect Config") !== prepared.sourceReference) throw new TypeError("Docker inspect Config.Image does not match exact admitted source reference")
   const tty = requiredBoolean(config, "Tty", "Docker inspect Config")
   const labelsRecord = requiredRecord(config, "Labels", "Docker inspect Config")
   const expectedLabels: Record<string, string> = { ...prepared.labels, [KDO_H4_R4B_B1_LABELS.bindingVersion]: KDO_H4_R3F_BINDING_VERSION }
   for (const [key, wanted] of Object.entries(expectedLabels)) {
     if (labelsRecord[key] !== wanted) throw new TypeError(`Docker inspect required label mismatch: ${key}`)
   }
-
-  const descriptor = requiredRecord(inspect, "ImageManifestDescriptor", "Docker inspect")
-  const imageManifestDigest = requiredString(descriptor, "digest", "Docker inspect ImageManifestDescriptor")
 
   const hostConfig = requiredRecord(inspect, "HostConfig", "Docker inspect")
   const runtimeName = requiredString(hostConfig, "Runtime", "Docker inspect HostConfig")
@@ -673,6 +797,7 @@ async function getExactDormantInspect(
   const restartPolicyRecord = requiredRecord(hostConfig, "RestartPolicy", "Docker inspect HostConfig")
   const restartPolicy = requiredString(restartPolicyRecord, "Name", "Docker inspect HostConfig.RestartPolicy")
   if (requiredInteger(restartPolicyRecord, "MaximumRetryCount", "Docker inspect HostConfig.RestartPolicy") !== 0) throw new TypeError("Docker restart MaximumRetryCount must be zero")
+  requireNoUnadmittedHostAuthority(inspect, config, hostConfig)
 
   const networkSettings = requiredRecord(inspect, "NetworkSettings", "Docker inspect")
   const networks = requiredRecord(networkSettings, "Networks", "Docker inspect NetworkSettings")
@@ -687,7 +812,7 @@ async function getExactDormantInspect(
     socketEndpointIdentity: runtime.socketEndpoint.endpointIdentity,
     containerId: id,
     containerName: prepared.containerName,
-    imageManifestDigest,
+    imageManifestDigest: imagePreflight.manifestDigest,
     executable: prepared.entrypointExecutable,
     argsIdentity: prepared.argsIdentity,
     runtimeName,
@@ -741,6 +866,13 @@ export class GvisorDockerDormantCreateGateway {
     )
     const preparedCommit = validateSandboxDormantCreatePreparedCommit(preparedCommitValue, prepared, permit)
 
+    let imagePreflight: DockerImagePreflight
+    try {
+      imagePreflight = await getExactImagePreflight(this.#runtime, prepared)
+    } catch (error) {
+      throw new SandboxDormantCreateIndeterminateError(`R4B-B1 exact image preflight failed before dispatch authority: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
     const dispatchClaim = createSandboxDormantCreateDispatchClaim(prepared)
     const dispatchClaimCommitValue = await settleDurableMutation(
       "R4B-B1 create dispatch claim",
@@ -757,7 +889,7 @@ export class GvisorDockerDormantCreateGateway {
 
     let observation: SandboxDormantDockerObservation | null
     try {
-      observation = await getExactDormantInspect(this.#runtime, permit, prepared)
+      observation = await getExactDormantInspect(this.#runtime, permit, prepared, imagePreflight)
     } catch (error) {
       throw new SandboxDormantCreateIndeterminateError(`R4B-B1 exact dormant reconciliation failed: ${error instanceof Error ? error.message : String(error)}`)
     }
