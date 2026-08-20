@@ -111,7 +111,7 @@ function canonicalEmptyPaths(value: unknown): readonly string[] {
   }
   if (Object.getOwnPropertySymbols(value).length !== 0) throw new TypeError("R4A approval intent paths must not contain symbol fields")
   const descriptors = Object.getOwnPropertyDescriptors(value)
-  const lengthDescriptor = descriptors.length
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length")
   if (lengthDescriptor === undefined || !("value" in lengthDescriptor) || lengthDescriptor.value !== 0) {
     throw new TypeError("R4A approval intent paths must be exactly empty")
   }
