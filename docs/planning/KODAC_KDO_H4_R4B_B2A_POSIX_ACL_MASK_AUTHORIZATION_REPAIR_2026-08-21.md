@@ -43,19 +43,28 @@ All other B2A authorization clauses, path fences, zero-start requirements, owner
 
 ### 2.1 Linux POSIX access-ACL semantics
 
-Linux `acl(5)` defines the relevant semantics:
+Linux `acl(5)` defines two relevant valid access-ACL forms that B2A must distinguish rather than collapse:
 
-- `ACL_MASK` is the maximum access that can be granted by named `ACL_USER`, `ACL_GROUP_OBJ`, and named `ACL_GROUP` entries.
-- When an access ACL contains `ACL_MASK`, the file's group permission bits correspond to the `ACL_MASK` permissions.
-- File permission bits always match the corresponding ACL entries; modifying one updates the other.
-- A named user is granted access only when both its named entry **and** `ACL_MASK` contain the requested permission.
-- A matching group is granted access only when both the matching group entry and `ACL_MASK` contain the requested permission.
-- `ACL_OTHER` corresponds to the file's other permission bits.
+1. **Minimal/no-mask access ACL**
+   - contains `ACL_USER_OBJ`, `ACL_GROUP_OBJ`, and `ACL_OTHER`;
+   - contains no named `ACL_USER` or named `ACL_GROUP` entries;
+   - contains no `ACL_MASK`;
+   - file group permission bits correspond directly to `ACL_GROUP_OBJ`.
+2. **Extended/masked access ACL**
+   - may contain named `ACL_USER` and/or named `ACL_GROUP` entries;
+   - contains `ACL_MASK`;
+   - `ACL_MASK` is the maximum access that can be granted by named `ACL_USER`, `ACL_GROUP_OBJ`, and named `ACL_GROUP` entries;
+   - file group permission bits correspond to `ACL_MASK`.
+
+In both forms, file owner bits correspond to `ACL_USER_OBJ` and file other bits correspond to `ACL_OTHER`. File permission bits and the corresponding ACL entries are kept consistent by the Linux POSIX ACL model.
+
+Named-user and named-group effective permissions therefore use the mask branch only when `ACL_MASK` exists. B2A MUST NOT claim that `ACL_MASK` exists for a minimal access ACL.
 
 Primary references:
 
 ```text
 https://man7.org/linux/man-pages/man5/acl.5.html
+  VALID ACLs
   CORRESPONDENCE BETWEEN ACL ENTRIES AND FILE PERMISSION BITS
   ACCESS CHECK ALGORITHM
 
@@ -165,9 +174,10 @@ NO_EFFECTIVE_NONOWNER_SOCKET_WRITE
 NO_EFFECTIVE_UNTRUSTED_NONOWNER_ANCESTOR_WRITE
 LINUX_PATHNAME_SOCKET_DAC_ENFORCED
 UNTRUSTED_PRINCIPAL_OWNERSHIP_ACL_MUTATION_AUTHORITY=0
+POSIX_ACL_MASK_PRESENT_AND_ABSENT_CASES_COVERED=YES
 ```
 
-B2A therefore does not need to know whether an ineffective named ACL entry exists. It must prove that Linux's effective-rights mask makes every such entry incapable of granting the protected permission, that the running process is not ordinary rootless namespace-relative UID 0, and that the modeled untrusted principal cannot mutate ownership/mode/ACL state to escape the theorem.
+B2A therefore does not need to know whether an ineffective named ACL entry exists. For an extended ACL, it derives named-user/group effective rights through `ACL_MASK`. For a minimal ACL without `ACL_MASK`, it derives group-class rights directly from `ACL_GROUP_OBJ` and relies on the POSIX validity rule that named `ACL_USER`/`ACL_GROUP` entries are absent. It must also prove that the running process is not ordinary rootless namespace-relative UID 0 and that the modeled untrusted principal cannot mutate ownership/mode/ACL state to escape the theorem.
 
 ---
 
@@ -186,14 +196,16 @@ HOST_GID_MAP=FULL_IDENTITY
 ABSTRACT_SOCKET=NO
 ```
 
-On Linux POSIX access ACLs, if a nontrivial access ACL exists, the file group permission bits correspond to `ACL_MASK`.
+For mode `0600`, owner-class write exists and both group-class and other-class permissions are empty. The POSIX ACL proof then has two valid branches.
 
-For mode `0600`:
+### 4.1 Extended ACL with `ACL_MASK`
+
+When an extended access ACL exists:
 
 ```text
-owner class = rw-
+owner class / ACL_USER_OBJ = rw-
 group class / ACL_MASK = ---
-other class = ---
+other class / ACL_OTHER = ---
 ```
 
 Therefore:
@@ -206,7 +218,24 @@ ACL_OTHER permissions = ---
 SOCKET_EFFECTIVE_NONOWNER_WRITE=0
 ```
 
-Linux pathname `SOCK_STREAM` connect requires write permission on the socket object. Therefore, for the modeled ordinary unprivileged non-owner principal:
+### 4.2 Minimal ACL without `ACL_MASK`
+
+When the valid access ACL has no `ACL_MASK`:
+
+```text
+named ACL_USER entries = ABSENT
+named ACL_GROUP entries = ABSENT
+owner class / ACL_USER_OBJ = rw-
+group class / ACL_GROUP_OBJ = ---
+other class / ACL_OTHER = ---
+SOCKET_EFFECTIVE_NONOWNER_WRITE=0
+```
+
+No mask-based statement is made in this branch.
+
+### 4.3 Connection consequence
+
+Linux pathname `SOCK_STREAM` connect requires write permission on the socket object. Therefore, for the modeled ordinary unprivileged non-owner principal under either valid POSIX ACL branch:
 
 ```text
 SOCKET_EFFECTIVE_NONOWNER_WRITE=0
@@ -215,9 +244,9 @@ SOCKET_EFFECTIVE_NONOWNER_WRITE=0
 
 This is a Linux-specific theorem; it is not generalized to operating systems that ignore Unix-socket inode permissions or to non-POSIX access-ACL authorization models.
 
-A non-owner process without trusted host privilege therefore receives no effective discretionary socket-connect authority from a POSIX access ACL, even if named ACL entries are present textually.
+A non-owner process without trusted host privilege therefore receives no effective discretionary socket-connect authority from either valid POSIX ACL form accepted by this theorem.
 
-The runtime MUST NOT claim that named ACL entries are absent. It proves only the relevant result: they cannot obtain effective socket write permission through the Linux POSIX ACL mask.
+The runtime MUST NOT claim that named ACL entries are absent in the extended/masked branch. It also MUST NOT invent an `ACL_MASK` in the minimal/no-mask branch. The runtime derives only the effective-rights consequence represented by the kernel-visible mode class under the accepted Linux POSIX ACL model.
 
 A successful positive-path attach still requires the actual trusted B2A process to complete the pathname socket connection through Linux VFS. If that connection is denied for any reason, B2A fails closed and grants no readiness.
 
@@ -234,8 +263,6 @@ uid=0
 mode & 0o022 == 0
 ```
 
-For an ancestor with a POSIX access ACL, its group-class permission bits correspond to `ACL_MASK`.
-
 Because `mode & 0o022 == 0` proves:
 
 ```text
@@ -243,7 +270,11 @@ group-class write = 0
 other write = 0
 ```
 
-it also proves:
+the POSIX ACL proof again has two branches.
+
+### 5.1 Extended ACL with `ACL_MASK`
+
+When the ancestor has an extended access ACL:
 
 ```text
 named ACL_USER effective write <= ACL_MASK write = 0
@@ -252,6 +283,22 @@ named ACL_GROUP effective write <= ACL_MASK write = 0
 ACL_OTHER write = 0
 ANCESTOR_EFFECTIVE_NONOWNER_WRITE=0
 ```
+
+### 5.2 Minimal ACL without `ACL_MASK`
+
+When the ancestor has a valid minimal access ACL with no mask:
+
+```text
+named ACL_USER entries = ABSENT
+named ACL_GROUP entries = ABSENT
+ACL_GROUP_OBJ write = group-class write = 0
+ACL_OTHER write = 0
+ANCESTOR_EFFECTIVE_NONOWNER_WRITE=0
+```
+
+No mask-based statement is made in this branch.
+
+### 5.3 Pathname-mutation consequence
 
 Linux pathname socket creation requires directory write+search permission; rename and unlink likewise require write on the relevant containing directory in addition to path-search and other restrictions.
 
@@ -400,7 +447,8 @@ with:
 
 ```text
 POSIX_ACL_TEXTUAL_ABSENCE_PROOF=NOT_REQUIRED
-POSIX_ACL_EFFECTIVE_RIGHTS_MASK_PROOF=REQUIRED
+POSIX_ACL_EFFECTIVE_RIGHTS_PROOF=REQUIRED
+POSIX_ACL_MASK_PRESENT_AND_ABSENT_CASES_PROOF=REQUIRED
 NO_EFFECTIVE_NONOWNER_SOCKET_WRITE=REQUIRED
 NO_EFFECTIVE_UNTRUSTED_NONOWNER_ANCESTOR_WRITE=REQUIRED
 LINUX_PATHNAME_SOCKET_WRITE_PERMISSION_THEOREM=REQUIRED
@@ -413,7 +461,7 @@ CAP_FOWNER_UNTRUSTED_PRINCIPAL=FORBIDDEN
 
 Remove the requirement to reject a deployment merely because a nontrivial ACL may exist textually.
 
-Replace it with proof that the accepted socket/ancestor mode bits imply the required effective ACL mask rights under Linux `acl(5)` semantics and that Linux pathname `SOCK_STREAM` connect requires effective socket write permission.
+Replace it with proof that the accepted socket/ancestor mode bits imply the required effective rights under both valid Linux POSIX access-ACL forms: masked extended ACLs and minimal no-mask ACLs. The connection proof additionally requires that Linux pathname `SOCK_STREAM` connect requires effective socket write permission.
 
 The physical negative proofs remain required and are strengthened by Section 10 below.
 
@@ -430,11 +478,13 @@ with:
 ```text
 HOST_ID_MAPPING_GATE_PROOF=PASS
 LINUX_POSIX_ACL_MASK_SEMANTICS_PROOF=PASS
+POSIX_ACL_MASK_PRESENT_AND_ABSENT_CASES_PROOF=PASS
 LINUX_PATHNAME_SOCKET_WRITE_PERMISSION_PROOF=PASS
 PATH_PREFIX_PERMISSION_ENFORCEMENT_PROOF=PASS
 SOCKET_EFFECTIVE_NONOWNER_WRITE_DENY_PROOF=PASS
 ANCESTOR_EFFECTIVE_NONOWNER_WRITE_DENY_PROOF=PASS
 EXTENDED_ACL_PHYSICAL_NEGATIVE_PROOF=PASS
+MINIMAL_ACL_NO_MASK_BASELINE_PROOF=PASS
 OWNERSHIP_ACL_MUTATION_NEGATIVE_PROOF=PASS
 ```
 
@@ -460,21 +510,22 @@ No production permission to enumerate or mutate ACLs is added.
 Supersede the textual-ACL-absence criterion with:
 
 ```text
-Linux ACL_MASK/file-mode correspondence is the authority used for effective-rights proof.
+For an extended POSIX access ACL, group mode bits correspond to ACL_MASK and named-user/group effective rights are capped by that mask.
+For a minimal POSIX access ACL without ACL_MASK, named ACL_USER/ACL_GROUP entries are absent and group mode bits correspond directly to ACL_GROUP_OBJ.
 Linux pathname SOCK_STREAM connect requires effective write permission on the socket object.
-Socket uid=0 gid=0 mode=0600 implies named-user/group ACL effective socket write is empty.
-Ancestor mode & 0o022 == 0 implies named-user/group ACL effective directory write is absent.
+Socket uid=0 gid=0 mode=0600 implies zero non-owner socket write in both valid POSIX ACL branches.
+Ancestor mode & 0o022 == 0 implies zero non-owner directory write in both valid POSIX ACL branches.
 Lack of containing-directory write denies the namespace mutation needed for replacement/unlink/create by the modeled unprivileged non-owner.
 Full host identity uid_map/gid_map is required before B2A preparation.
 CAP_CHOWN and CAP_FOWNER are excluded from the untrusted-principal theorem.
-The implementation never claims that ACL entries are textually absent.
+The implementation never claims that ACL entries are textually absent and never invents an ACL_MASK for the minimal branch.
 ```
 
 No other predecessor clause is superseded.
 
 ---
 
-## 10. Required extended-ACL and rootless negative fixtures
+## 10. Required extended-ACL, minimal-ACL, and rootless negative fixtures
 
 ### 10.1 Extended-ACL physical fixture
 
@@ -539,7 +590,23 @@ CAP_CHOWN=NO
 CAP_FOWNER=NO
 ```
 
-### 10.2 Rootless/user-namespace negative fixture
+### 10.2 Minimal/no-mask baseline fixture
+
+The proof matrix must separately cover the valid minimal POSIX access-ACL branch without `ACL_MASK`.
+
+A temporary test fixture may use trusted fixture setup to remove extended entries and establish a known minimal ACL. The proof must establish:
+
+```text
+ACL_MASK=ABSENT
+NAMED_ACL_USER_ENTRIES=ABSENT
+NAMED_ACL_GROUP_ENTRIES=ABSENT
+SOCKET_GROUP_CLASS=ACL_GROUP_OBJ=--- for mode 0600
+ANCESTOR_GROUP_CLASS_WRITE=ACL_GROUP_OBJ_WRITE=0 when mode & 0o022 == 0
+```
+
+Then the same ordinary non-root/no-capability negative actor must prove socket-connect denial and protected-path mutation denial. This fixture is a test theorem only; product runtime still does not enumerate ACL entries.
+
+### 10.3 Rootless/user-namespace negative fixture
 
 The implementation test matrix must include deterministic rejection fixtures for `/proc/self/uid_map` and `/proc/self/gid_map` values representing ordinary rootless/user-namespace mappings, including at minimum:
 
@@ -577,17 +644,22 @@ LINUX_ONLY_PATHNAME_SOCKET_THEOREM=PASS
 HOST_ID_MAPPING_GATE_PROOF=PASS
 ROOTLESS_MAPPING_NEGATIVE_PROOF=PASS
 ROOT_CLIENT_EUID_EGID_COMPOSITION_PROOF=PASS
+POSIX_ACL_MASK_PRESENT_AND_ABSENT_CASES_PROOF=PASS
 SOCKET_UID_GID_MODE_0600_PROOF=PASS
 SOCKET_ACL_MASK_EFFECTIVE_WRITE_ZERO_PROOF=PASS
+SOCKET_MINIMAL_ACL_GROUP_OBJ_WRITE_ZERO_PROOF=PASS
 LINUX_STREAM_CONNECT_REQUIRES_SOCKET_WRITE_PROOF=PASS
 ANCESTOR_ROOT_OWNERSHIP_PROOF=PASS
 ANCESTOR_GROUP_OTHER_WRITE_ZERO_PROOF=PASS
 ANCESTOR_ACL_MASK_EFFECTIVE_WRITE_ZERO_PROOF=PASS
+ANCESTOR_MINIMAL_ACL_GROUP_OBJ_WRITE_ZERO_PROOF=PASS
 PATH_MUTATION_REQUIRES_DIRECTORY_WRITE_PROOF=PASS
 CAP_CHOWN_UNTRUSTED_PRINCIPAL_EXCLUDED=PASS
 CAP_FOWNER_UNTRUSTED_PRINCIPAL_EXCLUDED=PASS
 EXTENDED_ACL_SOCKET_CONNECT_NEGATIVE_PROOF=PASS
 EXTENDED_ACL_PATH_MUTATION_NEGATIVE_PROOF=PASS
+MINIMAL_ACL_SOCKET_CONNECT_NEGATIVE_PROOF=PASS
+MINIMAL_ACL_PATH_MUTATION_NEGATIVE_PROOF=PASS
 OWNERSHIP_MODE_ACL_MUTATION_NEGATIVE_PROOF=PASS
 NO_ACL_ENUMERATION_AUTHORITY=PASS
 NO_ACL_MUTATION_AUTHORITY=PASS
@@ -598,7 +670,7 @@ NO_CALLER_HOST_ID_MAP_ASSERTION=PASS
 
 A test that merely inspects `mode=0600` and then claims **ACL entries are absent** is invalid.
 
-A valid proof states instead that the observed mode bits are the Linux kernel-visible group-class/other effective-rights representation, derives the maximum named-ACL rights from `ACL_MASK` correspondence, and demonstrates the resulting denial through Linux pathname-socket/path-mutation behavior with a real extended-ACL fixture.
+A valid proof distinguishes both POSIX ACL branches. For an extended ACL it derives the maximum named rights through `ACL_MASK` and demonstrates denial with a real extended-ACL fixture. For a minimal/no-mask ACL it derives group rights directly from `ACL_GROUP_OBJ`, requires named user/group entries to be absent by the valid-minimal-ACL contract, and demonstrates the same denial in a separate baseline fixture.
 
 The product implementation must not attempt to inspect or modify another process's filesystem credentials. If the trusted B2A process cannot actually connect under the kernel's current credential state, readiness fails closed.
 
@@ -636,7 +708,7 @@ H6
 K3-R6+
 ```
 
-The sole additional proof-harness grant is the bounded temporary-fixture `setfacl` authority in Section 10.1. It creates no product/runtime capability.
+The sole additional proof-harness grant is the bounded temporary-fixture `setfacl` authority in Sections 10.1 and 10.2. It creates no product/runtime capability.
 
 ---
 
@@ -655,6 +727,7 @@ PRIMARY_SOURCE_ACL_SEMANTICS_REVIEW=PASS
 PRIMARY_SOURCE_UNIX_PATHNAME_PERMISSION_REVIEW=PASS
 PRIMARY_SOURCE_USER_NAMESPACE_REVIEW=PASS
 CAPABILITY_BOUNDARY_REVIEW=PASS
+POSIX_ACL_MASK_PRESENT_AND_ABSENT_CASES_REVIEW=PASS
 EXACT_HEAD_CI=PASS
 FRESH_INDEPENDENT_EXACT_HEAD_REVIEW=PASS
 UNRESOLVED_ACTIONABLE_THREADS=0
@@ -670,14 +743,17 @@ This repair may become canonical only if review accepts all of:
 
 ```text
 The predecessor's ACL textual-absence requirement is not observable with the authorized Node API surface.
-Linux acl(5) makes ACL_MASK the maximum rights for named users/groups and maps group mode bits to ACL_MASK when present.
+Linux acl(5) distinguishes valid minimal/no-mask ACLs from extended/masked ACLs.
+For an extended access ACL, group mode bits correspond to ACL_MASK and named-user/group effective rights are capped by that mask.
+For a minimal access ACL without ACL_MASK, named ACL_USER/ACL_GROUP entries are absent and group mode bits correspond directly to ACL_GROUP_OBJ.
 Linux pathname SOCK_STREAM connect requires write permission on the socket object.
-Socket mode 0600 therefore proves zero effective named-user/group/other socket write rights under the accepted POSIX access-ACL model.
+Socket mode 0600 therefore proves zero non-owner socket write under either valid POSIX access-ACL branch.
 Linux pathname creation/rename/unlink requires containing-directory write authority in addition to applicable path-search rules.
-Ancestor group/other write bits of zero therefore prove zero effective named-user/group/other directory-write rights under the accepted POSIX access-ACL model.
+Ancestor group/other write bits of zero therefore prove zero non-owner directory-write rights under either valid POSIX access-ACL branch.
 A full canonical uid_map/gid_map identity mapping is required so ordinary rootless namespace-relative UID/GID 0 is rejected.
 CAP_CHOWN and CAP_FOWNER are explicitly excluded from the untrusted-principal theorem.
 A real extended-ACL physical fixture proves that requested named rights cannot escape the mask for socket connect or namespace mutation.
+A separate minimal/no-mask baseline proves the direct ACL_GROUP_OBJ branch without inventing ACL_MASK.
 The negative actor cannot mutate fixture ownership, mode, or ACL.
 No ACL entry enumeration or mutation is needed in product runtime.
 No new package dependency/helper is needed.
@@ -692,4 +768,4 @@ B2A remains zero-start, zero-workload, and PRESTART_READY-only.
 B2B remains separately unauthorized.
 ```
 
-If independent review rejects the Linux ACL-mask/pathname-socket/host-ID-mapping derivation or identifies a filesystem/privilege case that invalidates it within the accepted B2A deployment theorem, implementation remains blocked and must return to authorization again.
+If independent review rejects the Linux POSIX ACL two-case/pathname-socket/host-ID-mapping derivation or identifies a filesystem/privilege case that invalidates it within the accepted B2A deployment theorem, implementation remains blocked and must return to authorization again.
