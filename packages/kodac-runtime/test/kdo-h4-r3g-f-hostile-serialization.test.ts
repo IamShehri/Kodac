@@ -121,3 +121,28 @@ test("H4-R3G-F implementation theorem enumerates every local material schema ver
     assert.match(theorem, new RegExp(`\\b${name}\\b`))
   }
 })
+
+test("H4-R3G-F conjunction record validates nested mint evidence before semantic reads", () => {
+  const source = readFileSync(new URL("../src/trust/sandbox-physical-conjunction-gvisor.ts", import.meta.url), "utf8")
+  const start = source.indexOf("export function createGvisorPhysicalConjunctionRecord")
+  const end = source.indexOf("export function validateGvisorPhysicalConjunctionRecord", start)
+  assert.ok(start >= 0 && end > start, "conjunction record constructor block must exist")
+  const block = source.slice(start, end)
+  const structuralValidation = block.indexOf("const mintRecord = asPlainRecord(record.mint")
+  const canonicalMint = block.indexOf("const canonicalMint = mintGvisorPhysicalProof")
+  assert.ok(structuralValidation >= 0 && canonicalMint > structuralValidation, "raw mint must be structurally validated before canonical comparison")
+  assert.match(block, /capability: validateSandboxBackendCapabilityDeclaration\(mintRecord\.capability\)/)
+  assert.match(block, /observation: validateSandboxBackendObservation\(mintRecord\.observation\)/)
+  assert.match(block, /evidence: validateSandboxExecutionEvidence\(mintRecord\.evidence\)/)
+  assert.doesNotMatch(block, /const mint = record\.mint as GvisorPhysicalProofMint/)
+})
+
+test("H4-R3G-F conjunction commit identity uses an explicit ordered preimage", () => {
+  const source = readFileSync(new URL("../src/trust/sandbox-physical-conjunction-gvisor.ts", import.meta.url), "utf8")
+  const start = source.indexOf("export function createGvisorPhysicalConjunctionCommit")
+  const end = source.indexOf("export function validateGvisorPhysicalConjunctionCommit", start)
+  assert.ok(start >= 0 && end > start, "conjunction commit constructor block must exist")
+  const block = source.slice(start, end)
+  assert.match(block, /hash\("CONJUNCTION_COMMIT", \[\s*base\.version,\s*base\.executionAttemptIdentity,\s*base\.evidenceBundleIdentity,\s*base\.recordIdentity,\s*\]\)/)
+  assert.doesNotMatch(block, /hash\("CONJUNCTION_COMMIT", base\)/)
+})
