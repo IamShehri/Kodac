@@ -85,7 +85,9 @@ import {
 import {
   GvisorDockerPrestartOutputGateway,
   KDO_H4_R4B_B2A_RUNTIME_LIMITS,
+  SandboxPrestartIndeterminateError,
   createGvisorDockerPrestartOutputRuntime,
+  validateGvisorDockerPrestartHostIdMappingForTest,
 } from "../src/execution/gateway-gvisor-docker-prestart-output-runtime.ts"
 
 const source = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf8")
@@ -239,6 +241,46 @@ test("H4-R4B-B2A schema is closed and cannot serialize indeterminate as durable 
   assert.deepEqual(schema.$defs.ownershipClaimCommit.properties.disposition, { const: "created" })
 })
 
+test("H4-R4B-B2A host-ID mapping gate accepts only the full initial-namespace-equivalent map", () => {
+  assert.equal(validateGvisorDockerPrestartHostIdMappingForTest(" 0\t0 4294967295\n", "0 0 4294967295"), true)
+  const rejected = [
+    "", "0 1000 1", "0 100000 65536", "0 0 4294967294", "1 0 4294967295", "0 1 4294967295",
+    "0 0 4294967295\n1 1 1", "0 0", "0 0 4294967296", "0 0 -1", "0 0 nope", "00 0 4294967295",
+  ]
+  for (const value of rejected) {
+    assert.throws(() => validateGvisorDockerPrestartHostIdMappingForTest(value, "0 0 4294967295"))
+    assert.throws(() => validateGvisorDockerPrestartHostIdMappingForTest("0 0 4294967295", value))
+  }
+})
+
+test("H4-R4B-B2A atomic fence orderings permit at most one owner or one terminal winner", () => {
+  const fixture = syntheticPrepared()
+  const preparedCommit = createSandboxPrestartPreparedCommit(fixture.prepared)
+  const ownerA = createSandboxPrestartOwnerCapability()
+  const ownerB = createSandboxPrestartOwnerCapability()
+  const claimA = createSandboxPrestartOwnershipClaim(fixture.prepared, ownerA)
+  const claimB = createSandboxPrestartOwnershipClaim(fixture.prepared, ownerB)
+
+  const claimFirst = durableStore()
+  claimFirst.commitPreparationTransaction({ prepared: fixture.prepared, preparedCommit, fence: createSandboxPrestartPreparedFence(fixture.prepared) })
+  const baseA = claimFirst.state()!
+  const claimACommit = createSandboxPrestartOwnershipClaimCommit(claimA)
+  const won = claimFirst.commitOwnershipClaimTransaction({ claim: claimA, claimCommit: claimACommit, expectedFence: baseA, nextFence: createSandboxPrestartOwnerClaimedFence(fixture.prepared, claimA) })
+  assert.equal(won.kind, "created")
+  const lost = claimFirst.commitOwnershipClaimTransaction({ claim: claimB, claimCommit: createSandboxPrestartOwnershipClaimCommit(claimB), expectedFence: baseA, nextFence: createSandboxPrestartOwnerClaimedFence(fixture.prepared, claimB) })
+  assert.equal(lost.kind, "owner-claimed-unavailable")
+  assert.equal(claimFirst.state()?.ownerInstanceIdentity, claimA.ownerInstanceIdentity)
+
+  const failureFirst = durableStore()
+  failureFirst.commitPreparationTransaction({ prepared: fixture.prepared, preparedCommit, fence: createSandboxPrestartPreparedFence(fixture.prepared) })
+  const baseB = failureFirst.state()!
+  const failure = createSandboxPrestartFailure(fixture.prepared, "prepare", "aborted", null)
+  failureFirst.commitFailureTransaction({ failure, failureCommit: createSandboxPrestartFailureCommit(failure, "created"), expectedFence: baseB, nextFence: createSandboxPrestartFailedFence(fixture.prepared, failure, null) })
+  const afterTerminal = failureFirst.commitOwnershipClaimTransaction({ claim: claimA, claimCommit: claimACommit, expectedFence: baseB, nextFence: createSandboxPrestartOwnerClaimedFence(fixture.prepared, claimA) })
+  assert.equal(afterTerminal.kind, "failed-terminal")
+  assert.equal(failureFirst.state()?.state, "FAILED_TERMINAL")
+})
+
 interface FakeDocker {
   readonly socketPath: string
   readonly requests: string[]
@@ -351,6 +393,16 @@ function durableStore() {
   }
 }
 
+function runtimeFromStore(socketPath: string, store: ReturnType<typeof durableStore>) {
+  return createGvisorDockerPrestartOutputRuntime({
+    socketPath,
+    commitPreparationTransaction: store.commitPreparationTransaction,
+    readStateFence: store.readStateFence,
+    commitOwnershipClaimTransaction: store.commitOwnershipClaimTransaction,
+    commitFailureTransaction: store.commitFailureTransaction,
+  })
+}
+
 function rootStage(stage: string): void { process.stderr.write(`B2A_ROOT_STAGE=${stage}\n`) }
 
 async function rootPhysicalProof(): Promise<void> {
@@ -373,13 +425,7 @@ async function rootPhysicalProof(): Promise<void> {
     assert.equal(endpoint.uid, "0"); assert.equal(endpoint.gid, "0"); assert.equal(Number(stats.mode & 0o777n), 0o600)
     const lineage = b1Lineage(permit, endpoint)
     const store = durableStore()
-    const runtime = createGvisorDockerPrestartOutputRuntime({
-      socketPath: fake.socketPath,
-      commitPreparationTransaction: store.commitPreparationTransaction,
-      readStateFence: store.readStateFence,
-      commitOwnershipClaimTransaction: store.commitOwnershipClaimTransaction,
-      commitFailureTransaction: store.commitFailureTransaction,
-    })
+    const runtime = runtimeFromStore(fake.socketPath, store)
     const gateway = new GvisorDockerPrestartOutputGateway(runtime)
     rootStage("before-prepare")
     const result = await gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
@@ -391,6 +437,54 @@ async function rootPhysicalProof(): Promise<void> {
     assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, 1)
     assert.equal(fake.requests.some((entry) => /\/start|\/exec|\/restart|\/stop|\/kill|DELETE/.test(entry)), false)
     assert.ok(fake.requests.every((entry) => entry.startsWith("GET ") || entry === `UPGRADE /v1.48/containers/${CONTAINER_ID}/attach?logs=0&stream=1&stdin=0&stdout=1&stderr=1`))
+
+    const writesBeforeReplay = store.writes()
+    const upgradesBeforeReplay = fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length
+    const replay = await gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+    assert.deepEqual(replay, { status: "OWNER_CLAIMED_UNAVAILABLE", classification: "INDETERMINATE", reusable: false })
+    assert.equal(store.writes(), writesBeforeReplay)
+    assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, upgradesBeforeReplay)
+
+    const otherRuntime = runtimeFromStore(fake.socketPath, store)
+    const otherGateway = new GvisorDockerPrestartOutputGateway(otherRuntime)
+    const hardLossAmbiguity = await otherGateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+    assert.deepEqual(hardLossAmbiguity, { status: "OWNER_CLAIMED_UNAVAILABLE", classification: "INDETERMINATE", reusable: false })
+    assert.equal(store.writes(), writesBeforeReplay)
+    assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, upgradesBeforeReplay)
+
+    const orphanRuntime = createGvisorDockerPrestartOutputRuntime({
+      socketPath: fake.socketPath,
+      commitPreparationTransaction: (input: { prepared: SandboxPrestartPrepared; preparedCommit: SandboxPrestartPreparedCommit }) => ({ disposition: "existing", prepared: input.prepared, preparedCommit: input.preparedCommit, fence: null }),
+      readStateFence: () => { throw new Error("orphan fence unavailable") },
+      commitOwnershipClaimTransaction: () => { throw new Error("owner claim must not run") },
+      commitFailureTransaction: () => { throw new Error("failure repair must not run") },
+    })
+    const orphanGateway = new GvisorDockerPrestartOutputGateway(orphanRuntime)
+    await assert.rejects(orphanGateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
+    assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, upgradesBeforeReplay)
+
+    const unknownPrepareRuntime = createGvisorDockerPrestartOutputRuntime({
+      socketPath: fake.socketPath,
+      commitPreparationTransaction: () => { throw new Error("unknown durable preparation outcome") },
+      readStateFence: () => { throw new Error("must not read") },
+      commitOwnershipClaimTransaction: () => { throw new Error("must not claim") },
+      commitFailureTransaction: () => { throw new Error("must not settle") },
+    })
+    await assert.rejects(new GvisorDockerPrestartOutputGateway(unknownPrepareRuntime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
+    assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, upgradesBeforeReplay)
+
+    const claimUnknownStore = durableStore()
+    const claimUnknownRuntime = createGvisorDockerPrestartOutputRuntime({
+      socketPath: fake.socketPath,
+      commitPreparationTransaction: claimUnknownStore.commitPreparationTransaction,
+      readStateFence: claimUnknownStore.readStateFence,
+      commitOwnershipClaimTransaction: () => { throw new Error("unknown durable claim outcome") },
+      commitFailureTransaction: claimUnknownStore.commitFailureTransaction,
+    })
+    await assert.rejects(new GvisorDockerPrestartOutputGateway(claimUnknownRuntime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
+    assert.equal(claimUnknownStore.state()?.state, "PREPARED")
+    assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, upgradesBeforeReplay)
+
     rootStage("before-invalidate")
     await gateway.invalidatePrestartOutput(result.readiness)
     rootStage("after-invalidate")
@@ -529,7 +623,7 @@ async function posixAclPhysicalProof(): Promise<void> {
 }
 
 if (process.env.KODAC_B2A_ROOT_CHILD !== "1") {
-  test("H4-R4B-B2A Linux physical root proof reaches PRESTART_READY without start", { skip: process.platform !== "linux" }, () => {
+  test("H4-R4B-B2A Linux physical root replay and ambiguity proof stays zero-start", { skip: process.platform !== "linux" }, () => {
     const script = fileURLToPath(import.meta.url)
     const result = spawnSync("sudo", ["-n", "/usr/bin/env", "KODAC_B2A_ROOT_CHILD=1", process.execPath, "--experimental-strip-types", script], { encoding: "utf8", timeout: 30_000 })
     if (process.env.GITHUB_ACTIONS === "true") {
@@ -568,7 +662,7 @@ if (process.env.KODAC_B2A_ROOT_CHILD !== "1") {
       "createSandboxPrestartOwnerCapability", "sandboxPrestartOwnerInstanceIdentity", "createSandboxPrestartOwnershipClaim",
       "createSandboxPrestartOwnerClaimedFence", "createSandboxPrestartFailedFence", "createSandboxPrestartPreparedFence",
       "createSandboxPrestartFailure", "createSandboxPrestartFailureCommit", "createSandboxPrestartPreparedCommit",
-      "createSandboxPrestartOwnershipClaimCommit", "createReadiness",
+      "createSandboxPrestartOwnershipClaimCommit", "createReadiness", "validateGvisorDockerPrestartHostIdMappingForTest",
     ]) assert.equal(root.includes(forbidden), false, forbidden)
   })
 
