@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { lstatSync } from "node:fs"
 import { request as httpRequest, type IncomingMessage } from "node:http"
 import { posix } from "node:path"
@@ -12,6 +13,7 @@ import {
 } from "../trust/sandbox-admission-permit.ts"
 import {
   KDO_H4_R4B_B1_DOCKER_API_VERSION,
+  KDO_H4_R4B_B1_DURABILITY,
   KDO_H4_R4B_B1_LABELS,
   createCanonicalR4BB1Reservation,
   createSandboxDormantCreatePrepared,
@@ -21,6 +23,7 @@ import {
   validateSandboxDormantCreatePreparedCommit,
   validateSandboxDormantCreatedAdmissionCommit,
   type SandboxAdmissionConsumptionReservationCommit,
+  type SandboxDormantCommitDisposition,
   type SandboxDormantCreatePrepared,
   type SandboxDormantCreatePreparedCommit,
   type SandboxDormantCreatedAdmission,
@@ -35,11 +38,33 @@ import {
 } from "../trust/sandbox-observer-docker-control-plane.ts"
 
 export const KDO_H4_R4B_B1_RUNTIME_VERSION = "kodac-h4-r4b-b1-dormant-docker-create-runtime-v1" as const
+export const KDO_H4_R4B_B1_DISPATCH_CLAIM_VERSION = "kodac-h4-r4b-b1-create-dispatch-claim-v1" as const
+export const KDO_H4_R4B_B1_DISPATCH_CLAIM_COMMIT_VERSION = "kodac-h4-r4b-b1-create-dispatch-claim-commit-v1" as const
 export const KDO_H4_R4B_B1_RUNTIME_LIMITS = Object.freeze({
   maxCreateResponseBytes: 65_536,
   maxInspectResponseBytes: KDO_H4_R3F_LIMITS.maxInspectResponseBytes,
   requestTimeoutMs: KDO_H4_R3F_LIMITS.requestTimeoutMs,
 } as const)
+
+export interface SandboxDormantCreateDispatchClaim {
+  readonly version: typeof KDO_H4_R4B_B1_DISPATCH_CLAIM_VERSION
+  readonly permitIdentity: string
+  readonly reservationIdentity: string
+  readonly executionAttemptIdentity: string
+  readonly preparedIdentity: string
+  readonly createOperationIdentity: string
+  readonly claimIdentity: string
+}
+
+export interface SandboxDormantCreateDispatchClaimCommit {
+  readonly version: typeof KDO_H4_R4B_B1_DISPATCH_CLAIM_COMMIT_VERSION
+  readonly claimIdentity: string
+  readonly preparedIdentity: string
+  readonly createOperationIdentity: string
+  readonly disposition: SandboxDormantCommitDisposition
+  readonly durability: typeof KDO_H4_R4B_B1_DURABILITY
+  readonly commitIdentity: string
+}
 
 export interface GvisorDockerDormantCreateRuntimeConfig {
   readonly socketPath: string
@@ -49,6 +74,10 @@ export interface GvisorDockerDormantCreateRuntimeConfig {
   ) => Promise<unknown> | unknown
   readonly commitCreatePrepared: (
     prepared: SandboxDormantCreatePrepared,
+    options: { readonly signal: AbortSignal },
+  ) => Promise<unknown> | unknown
+  readonly commitCreateDispatchClaim: (
+    claim: SandboxDormantCreateDispatchClaim,
     options: { readonly signal: AbortSignal },
   ) => Promise<unknown> | unknown
   readonly commitCreatedAdmission: (
@@ -63,6 +92,7 @@ interface TrustedGvisorDockerDormantCreateRuntime {
   readonly socketEndpoint: DockerSocketEndpointIdentity
   readonly commitReservation: GvisorDockerDormantCreateRuntimeConfig["commitReservation"]
   readonly commitCreatePrepared: GvisorDockerDormantCreateRuntimeConfig["commitCreatePrepared"]
+  readonly commitCreateDispatchClaim: GvisorDockerDormantCreateRuntimeConfig["commitCreateDispatchClaim"]
   readonly commitCreatedAdmission: GvisorDockerDormantCreateRuntimeConfig["commitCreatedAdmission"]
 }
 
@@ -109,6 +139,7 @@ export class SandboxDormantCreateUnprovenError extends Error {
 
 const trustedRuntimes = new WeakSet<object>()
 const decoder = new TextDecoder("utf-8", { fatal: true })
+const SHA256 = /^[0-9a-f]{64}$/
 
 function asPlainRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value) || utilTypes.isProxy(value)) {
@@ -130,6 +161,84 @@ function exactKeys(record: Record<string, unknown>, expected: readonly string[],
   if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
     throw new TypeError(`${label} must contain exactly: ${wanted.join(", ")}`)
   }
+}
+
+function identity(value: unknown, label: string): string {
+  if (typeof value !== "string" || !SHA256.test(value)) throw new TypeError(`${label} must be a lowercase SHA-256 identity`)
+  return value
+}
+
+function dispatchDisposition(value: unknown): SandboxDormantCommitDisposition {
+  if (value !== "created" && value !== "existing") throw new TypeError("dispatch claim disposition must be created or existing")
+  return value
+}
+
+function runtimeIdentity(domain: string, value: unknown): string {
+  return createHash("sha256")
+    .update(Buffer.from(`KODAC-H4-R4B-B1-RUNTIME\0${domain}\0V1\0`, "ascii"))
+    .update(Buffer.from(JSON.stringify(value), "utf8"))
+    .digest("hex")
+}
+
+function createSandboxDormantCreateDispatchClaim(prepared: SandboxDormantCreatePrepared): SandboxDormantCreateDispatchClaim {
+  const base = Object.freeze({
+    version: KDO_H4_R4B_B1_DISPATCH_CLAIM_VERSION,
+    permitIdentity: prepared.permitIdentity,
+    reservationIdentity: prepared.reservationIdentity,
+    executionAttemptIdentity: prepared.executionAttemptIdentity,
+    preparedIdentity: prepared.preparedIdentity,
+    createOperationIdentity: prepared.createOperationIdentity,
+  })
+  return Object.freeze({ ...base, claimIdentity: runtimeIdentity("CREATE_DISPATCH_CLAIM", base) })
+}
+
+function validateSandboxDormantCreateDispatchClaim(value: unknown): SandboxDormantCreateDispatchClaim {
+  const record = asPlainRecord(value, "R4B-B1 create dispatch claim")
+  exactKeys(record, ["version", "permitIdentity", "reservationIdentity", "executionAttemptIdentity", "preparedIdentity", "createOperationIdentity", "claimIdentity"], "R4B-B1 create dispatch claim")
+  if (record.version !== KDO_H4_R4B_B1_DISPATCH_CLAIM_VERSION) throw new TypeError("R4B-B1 create dispatch claim version mismatch")
+  const base = Object.freeze({
+    version: KDO_H4_R4B_B1_DISPATCH_CLAIM_VERSION,
+    permitIdentity: identity(record.permitIdentity, "dispatch claim permitIdentity"),
+    reservationIdentity: identity(record.reservationIdentity, "dispatch claim reservationIdentity"),
+    executionAttemptIdentity: identity(record.executionAttemptIdentity, "dispatch claim executionAttemptIdentity"),
+    preparedIdentity: identity(record.preparedIdentity, "dispatch claim preparedIdentity"),
+    createOperationIdentity: identity(record.createOperationIdentity, "dispatch claim createOperationIdentity"),
+  })
+  const claimIdentity = runtimeIdentity("CREATE_DISPATCH_CLAIM", base)
+  if (record.claimIdentity !== claimIdentity) throw new TypeError("R4B-B1 create dispatch claim identity mismatch")
+  return Object.freeze({ ...base, claimIdentity })
+}
+
+export function createSandboxDormantCreateDispatchClaimCommit(
+  claimValue: unknown,
+  dispositionValue: SandboxDormantCommitDisposition,
+): SandboxDormantCreateDispatchClaimCommit {
+  const claim = validateSandboxDormantCreateDispatchClaim(claimValue)
+  const disposition = dispatchDisposition(dispositionValue)
+  const base = Object.freeze({
+    version: KDO_H4_R4B_B1_DISPATCH_CLAIM_COMMIT_VERSION,
+    claimIdentity: claim.claimIdentity,
+    preparedIdentity: claim.preparedIdentity,
+    createOperationIdentity: claim.createOperationIdentity,
+    disposition,
+    durability: KDO_H4_R4B_B1_DURABILITY,
+  })
+  return Object.freeze({ ...base, commitIdentity: runtimeIdentity("CREATE_DISPATCH_CLAIM_COMMIT", base) })
+}
+
+function validateSandboxDormantCreateDispatchClaimCommit(
+  value: unknown,
+  expectedClaim: SandboxDormantCreateDispatchClaim,
+): SandboxDormantCreateDispatchClaimCommit {
+  const record = asPlainRecord(value, "R4B-B1 create dispatch claim commit")
+  exactKeys(record, ["version", "claimIdentity", "preparedIdentity", "createOperationIdentity", "disposition", "durability", "commitIdentity"], "R4B-B1 create dispatch claim commit")
+  if (record.version !== KDO_H4_R4B_B1_DISPATCH_CLAIM_COMMIT_VERSION) throw new TypeError("R4B-B1 create dispatch claim commit version mismatch")
+  if (record.durability !== KDO_H4_R4B_B1_DURABILITY) throw new TypeError("R4B-B1 create dispatch claim commit must be durable")
+  const rebuilt = createSandboxDormantCreateDispatchClaimCommit(expectedClaim, dispatchDisposition(record.disposition))
+  for (const key of ["claimIdentity", "preparedIdentity", "createOperationIdentity", "disposition", "durability", "commitIdentity"] as const) {
+    if (record[key] !== rebuilt[key]) throw new TypeError(`R4B-B1 create dispatch claim commit ${key} mismatch`)
+  }
+  return rebuilt
 }
 
 function canonicalSocketPath(value: unknown): string {
@@ -169,7 +278,7 @@ function requireSameSocketEndpoint(runtime: TrustedGvisorDockerDormantCreateRunt
 export function createGvisorDockerDormantCreateRuntime(value: unknown): TrustedGvisorDockerDormantCreateRuntime {
   if (process.platform !== "linux") throw new Error("R4B-B1 Docker create runtime requires Linux")
   const record = asPlainRecord(value, "R4B-B1 runtime config")
-  exactKeys(record, ["socketPath", "commitReservation", "commitCreatePrepared", "commitCreatedAdmission"], "R4B-B1 runtime config")
+  exactKeys(record, ["socketPath", "commitReservation", "commitCreatePrepared", "commitCreateDispatchClaim", "commitCreatedAdmission"], "R4B-B1 runtime config")
   const socketPath = canonicalSocketPath(record.socketPath)
   const runtime = Object.freeze({
     version: KDO_H4_R4B_B1_RUNTIME_VERSION,
@@ -177,6 +286,7 @@ export function createGvisorDockerDormantCreateRuntime(value: unknown): TrustedG
     socketEndpoint: snapshotSocketEndpoint(socketPath),
     commitReservation: trustedCallback<GvisorDockerDormantCreateRuntimeConfig["commitReservation"]>(record.commitReservation, "commitReservation"),
     commitCreatePrepared: trustedCallback<GvisorDockerDormantCreateRuntimeConfig["commitCreatePrepared"]>(record.commitCreatePrepared, "commitCreatePrepared"),
+    commitCreateDispatchClaim: trustedCallback<GvisorDockerDormantCreateRuntimeConfig["commitCreateDispatchClaim"]>(record.commitCreateDispatchClaim, "commitCreateDispatchClaim"),
     commitCreatedAdmission: trustedCallback<GvisorDockerDormantCreateRuntimeConfig["commitCreatedAdmission"]>(record.commitCreatedAdmission, "commitCreatedAdmission"),
   })
   trustedRuntimes.add(runtime)
@@ -509,7 +619,7 @@ async function getExactDormantInspect(
     }
     const request = httpRequest({ socketPath: runtime.socketPath, path, method: "GET" }, (incoming) => {
       void readResponseBody(incoming, KDO_H4_R4B_B1_RUNTIME_LIMITS.maxInspectResponseBytes).then(
-        (body) => finishResolve({ statusCode: incoming.statusCode ?? 0, body }),
+        (responseBody) => finishResolve({ statusCode: incoming.statusCode ?? 0, body: responseBody }),
         finishReject,
       )
     })
@@ -631,9 +741,17 @@ export class GvisorDockerDormantCreateGateway {
     )
     const preparedCommit = validateSandboxDormantCreatePreparedCommit(preparedCommitValue, prepared, permit)
 
+    const dispatchClaim = createSandboxDormantCreateDispatchClaim(prepared)
+    const dispatchClaimCommitValue = await settleDurableMutation(
+      "R4B-B1 create dispatch claim",
+      (signal) => this.#runtime.commitCreateDispatchClaim(dispatchClaim, { signal }),
+      options.signal,
+    )
+    const dispatchClaimCommit = validateSandboxDormantCreateDispatchClaimCommit(dispatchClaimCommitValue, dispatchClaim)
+
     let createResult: CreateRequestResult | undefined
-    if (preparedCommit.disposition === "created") {
-      if (options.signal?.aborted) throw new SandboxDormantCreateBlockedError("R4B-B1 admission was cancelled before Docker mutation")
+    if (dispatchClaimCommit.disposition === "created") {
+      if (options.signal?.aborted) throw new SandboxDormantCreateBlockedError("R4B-B1 admission was cancelled after durable dispatch claim and before Docker mutation; the claimed attempt remains non-reusable")
       createResult = await postExactDormantCreate(this.#runtime, permit, prepared, options.signal)
     }
 
@@ -647,7 +765,11 @@ export class GvisorDockerDormantCreateGateway {
       if (createResult?.kind === "rejected") {
         throw new SandboxDormantCreateRejectedError(`R4B-B1 Docker create was rejected and exact reconciliation found no dormant candidate: ${createResult.detail}`)
       }
-      const detail = createResult?.kind === "indeterminate" ? createResult.detail : "deterministic container was not found"
+      const detail = createResult?.kind === "indeterminate"
+        ? createResult.detail
+        : dispatchClaimCommit.disposition === "existing"
+          ? "durable dispatch claim already existed and deterministic container was not found; retry is forbidden"
+          : "deterministic container was not found"
       throw new SandboxDormantCreateIndeterminateError(`R4B-B1 create outcome remains indeterminate: ${detail}`)
     }
     if (createResult?.kind === "created" && observation.containerId !== createResult.containerId) {
@@ -677,7 +799,7 @@ export class GvisorDockerDormantCreateGateway {
       observation,
       createdAdmission,
       createdAdmissionCommit,
-      recovered: preparedCommit.disposition === "existing" || (createResult !== undefined && createResult.kind !== "created"),
+      recovered: preparedCommit.disposition === "existing" || dispatchClaimCommit.disposition === "existing" || (createResult !== undefined && createResult.kind !== "created"),
     })
   }
 }
