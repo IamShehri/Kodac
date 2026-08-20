@@ -178,6 +178,7 @@ export class InternalGvisorPrestartMultiplexReader {
   }
 
   destroy(reason = new Error("B2A prestart reader invalidated")): void {
+    if (!this.#failureReported) this.#failureReported = true
     this.#live = false
     this.#socket.destroy(reason)
   }
