@@ -130,7 +130,7 @@ function fixedPermit(requestInstanceId = REQUEST_INSTANCE_A): SandboxAdmissionPe
   })
 }
 
-function inspectBody(prepared: SandboxDormantCreatePrepared, args: readonly string[]) {
+function inspectBody(prepared: SandboxDormantCreatePrepared, args: readonly string[], extraLabels: Readonly<Record<string, string>> = {}) {
   return {
     Id: CONTAINER_ID,
     Name: `/${prepared.containerName}`,
@@ -138,7 +138,7 @@ function inspectBody(prepared: SandboxDormantCreatePrepared, args: readonly stri
     Args: [...args],
     State: { Status: "created", Running: false, Paused: false, Restarting: false, Dead: false, Pid: 0 },
     RestartCount: 0,
-    Config: { Tty: false, Labels: { ...prepared.labels } },
+    Config: { Tty: false, Labels: { ...prepared.labels, ...extraLabels } },
     ImageManifestDescriptor: { digest: prepared.sourceDigest },
     HostConfig: {
       Runtime: "runsc",
@@ -163,6 +163,8 @@ interface FakeDockerOptions {
   readonly abortController?: AbortController
   readonly loseCreateResponse?: boolean
   readonly persistOnLostResponse?: boolean
+  readonly createStatusCode?: number
+  readonly extraInspectLabels?: Readonly<Record<string, string>>
 }
 
 async function withFakeDocker<T>(
@@ -188,6 +190,12 @@ async function withFakeDocker<T>(
         response.socket?.destroy()
         return
       }
+      if (options.createStatusCode !== undefined) {
+        if (options.persistOnLostResponse) created = true
+        response.writeHead(options.createStatusCode, { "Content-Type": "application/json" })
+        response.end(JSON.stringify({ message: "synthetic non-success create response" }))
+        return
+      }
       created = true
       response.writeHead(201, { "Content-Type": "application/json" })
       response.end(JSON.stringify({ Id: CONTAINER_ID, Warnings: [] }))
@@ -201,7 +209,7 @@ async function withFakeDocker<T>(
         return
       }
       response.writeHead(200, { "Content-Type": "application/json" })
-      response.end(JSON.stringify(inspectBody(prepared, args)))
+      response.end(JSON.stringify(inspectBody(prepared, args, options.extraInspectLabels)))
       return
     }
     response.writeHead(500)
@@ -356,6 +364,37 @@ test("H4-R4B-B1 lost create response may recover one exact dormant candidate wit
     assert.equal(result.recovered, true)
     assert.equal(createCount(), 1)
     assert.equal(result.createdAdmission.containerId, CONTAINER_ID)
+  })
+})
+
+test("H4-R4B-B1 non-201 create response still reconciles one exact dormant side effect", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+  await withFakeDocker(prepared, args, { createStatusCode: 500, persistOnLostResponse: true }, async ({ socketPath, events, createCount }) => {
+    const runtime = createGvisorDockerDormantCreateRuntime({ socketPath, ...durableHarness(permit, events) })
+    const result = await new GvisorDockerDormantCreateGateway(runtime).createDormantAdmission(permit, permitCommit)
+    assert.equal(result.recovered, true)
+    assert.equal(createCount(), 1)
+    assert.equal(result.createdAdmission.containerId, CONTAINER_ID)
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:create", "docker:inspect", "store:created"])
+  })
+})
+
+test("H4-R4B-B1 observed Docker labels must contain exactly the canonical reconciliation keys", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+  await withFakeDocker(prepared, args, { extraInspectLabels: { "io.kodac.unexpected": "forbidden" } }, async ({ socketPath, events, createCount }) => {
+    const runtime = createGvisorDockerDormantCreateRuntime({ socketPath, ...durableHarness(permit, events) })
+    await assert.rejects(
+      new GvisorDockerDormantCreateGateway(runtime).createDormantAdmission(permit, permitCommit),
+      SandboxDormantCreateIndeterminateError,
+    )
+    assert.equal(createCount(), 1)
+    assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:create", "docker:inspect"])
   })
 })
 
