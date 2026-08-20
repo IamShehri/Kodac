@@ -64,6 +64,19 @@ export {
   SandboxDormantCreateUnprovenError,
   type GvisorDockerDormantCreateResult,
 } from "./execution/gateway-gvisor-docker-dormant-create-runtime.ts"
+export {
+  GvisorDockerPrestartOutputGateway,
+  KDO_H4_R4B_B2A_PRESTART_READY_VERSION,
+  KDO_H4_R4B_B2A_RUNTIME_LIMITS,
+  KDO_H4_R4B_B2A_RUNTIME_VERSION,
+  SandboxPrestartBlockedError,
+  SandboxPrestartIndeterminateError,
+  SandboxPrestartTerminalError,
+  type SandboxPrestartOwnerUnavailableResult,
+  type SandboxPrestartPreparationResult,
+  type SandboxPrestartReadyCapability,
+  type SandboxPrestartReadyResult,
+} from "./execution/gateway-gvisor-docker-prestart-output-runtime.ts"
 export * from "./extensions/contracts.ts"
 export * from "./extensions/registry.ts"
 export * from "./model/capabilities.ts"
@@ -133,6 +146,36 @@ export {
   type SandboxDormantCreatedAdmissionCommit,
   type SandboxDormantDockerObservation,
 } from "./trust/sandbox-admission-dormant-create.ts"
+export {
+  KDO_H4_R4B_B2A_DURABILITY,
+  KDO_H4_R4B_B2A_FAILURE_CODES,
+  KDO_H4_R4B_B2A_FAILURE_COMMIT_VERSION,
+  KDO_H4_R4B_B2A_FAILURE_PHASES,
+  KDO_H4_R4B_B2A_FAILURE_VERSION,
+  KDO_H4_R4B_B2A_OWNERSHIP_CLAIM_COMMIT_VERSION,
+  KDO_H4_R4B_B2A_OWNERSHIP_CLAIM_VERSION,
+  KDO_H4_R4B_B2A_PREPARED_COMMIT_VERSION,
+  KDO_H4_R4B_B2A_PREPARED_VERSION,
+  KDO_H4_R4B_B2A_STATE_FENCE_VERSION,
+  KDO_H4_R4B_B2A_VERSION,
+  validateSandboxPrestartFailure,
+  validateSandboxPrestartFailureCommit,
+  validateSandboxPrestartOwnershipClaim,
+  validateSandboxPrestartOwnershipClaimCommit,
+  validateSandboxPrestartPrepared,
+  validateSandboxPrestartPreparedCommit,
+  validateSandboxPrestartStateFence,
+  type SandboxPrestartFailure,
+  type SandboxPrestartFailureCode,
+  type SandboxPrestartFailureCommit,
+  type SandboxPrestartFailurePhase,
+  type SandboxPrestartOwnershipClaim,
+  type SandboxPrestartOwnershipClaimCommit,
+  type SandboxPrestartPrepared,
+  type SandboxPrestartPreparedCommit,
+  type SandboxPrestartState,
+  type SandboxPrestartStateFence,
+} from "./trust/sandbox-admission-prestart-output.ts"
 export * from "./trust/sandbox-backend-evidence.ts"
 export * from "./trust/sandbox-execution-approval-binding.ts"
 export * from "./trust/sandbox-lifecycle-gvisor-ttl.ts"
