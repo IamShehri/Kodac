@@ -43,6 +43,11 @@ export interface GvisorPhysicalConjunctionRuntimeConfig {
     resolution: GvisorPhysicalEvidenceResolution,
     options: { readonly signal?: AbortSignal },
   ) => Promise<unknown> | unknown
+  /**
+   * Trusted positive-evidence durable boundary. If options.signal aborts before
+   * durable completion, the callback MUST reject and MUST NOT persist the E4
+   * conjunction. Once mutation starts, K2 waits for authoritative settlement.
+   */
   readonly commitConjunctionEvidence: (
     record: GvisorPhysicalConjunctionRecord,
     options: { readonly signal?: AbortSignal },
@@ -171,33 +176,74 @@ async function boundedReadStage<T>(
   }
 }
 
+class GvisorPhysicalCommitAbortError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "GvisorPhysicalCommitAbortError"
+  }
+}
+
+function asynchronousMutationResult<T>(value: Promise<T> | T, label: string): Promise<T> | null {
+  if (utilTypes.isPromise(value)) return Promise.resolve(value as Promise<T>)
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return null
+  let thenValue: unknown
+  try { thenValue = Reflect.get(value as object, "then") }
+  catch (error) {
+    if (error instanceof Error) throw error
+    throw new Error(`${label} failed while inspecting trusted asynchronous result: ${String(error)}`)
+  }
+  return typeof thenValue === "function" ? Promise.resolve(value as unknown as PromiseLike<T>) : null
+}
+
+/**
+ * Final positive E4 persistence is abort-fenced. A local deadline or caller
+ * cancellation signals the trusted durable transaction, but K2 does not detach
+ * a mutation in the background: once the callback has started, it waits for the
+ * callback's authoritative settlement and never converts a post-abort success
+ * into positive caller-visible evidence.
+ */
 async function boundedDurableCommit(
   runtime: GvisorPhysicalConjunctionRuntime,
   record: GvisorPhysicalConjunctionRecord,
   callerSignal?: AbortSignal,
 ): Promise<unknown> {
-  if (callerSignal?.aborted) throw new Error("R3G-F final durable commit aborted before start")
+  const label = "R3G-F final durable commit"
+  if (callerSignal?.aborted) throw new GvisorPhysicalCommitAbortError(`${label} aborted before start`)
   const controller = new AbortController()
   const onCallerAbort = () => controller.abort()
   callerSignal?.addEventListener("abort", onCallerAbort, { once: true })
   let timer: NodeJS.Timeout | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      controller.abort()
-      reject(new Error("R3G-F final durable commit timed out"))
-    }, KDO_H4_R3G_F_LIMITS.commitTimeoutMs)
+  const abortOutcome = new Promise<{ readonly kind: "aborted" }>((resolve) => {
+    controller.signal.addEventListener("abort", () => resolve({ kind: "aborted" }), { once: true })
   })
-  const aborted = new Promise<never>((_, reject) => {
-    controller.signal.addEventListener("abort", () => reject(new Error("R3G-F final durable commit aborted")), { once: true })
-  })
+  timer = setTimeout(() => controller.abort(), KDO_H4_R3G_F_LIMITS.commitTimeoutMs)
   try {
-    const result = await Promise.race([
-      Promise.resolve().then(() => runtime.commitConjunctionEvidence(record, { signal: controller.signal })),
-      timeout,
-      aborted,
-    ])
-    if (callerSignal?.aborted) throw new Error("R3G-F caller aborted before positive durable completion")
-    return result
+    if (controller.signal.aborted) throw new GvisorPhysicalCommitAbortError(`${label} aborted before start`)
+    let started: Promise<unknown> | unknown
+    try { started = runtime.commitConjunctionEvidence(record, { signal: controller.signal }) }
+    catch (error) {
+      if (controller.signal.aborted) throw new GvisorPhysicalCommitAbortError(`${label} aborted before durable completion`)
+      if (error instanceof Error) throw error
+      throw new Error(`${label} failed: ${String(error)}`)
+    }
+    const mutation = asynchronousMutationResult(started, label)
+    if (mutation === null) {
+      if (controller.signal.aborted) throw new Error(`${label} trusted callback returned success after abort`)
+      return started
+    }
+    const mutationOutcome = mutation.then(
+      (value) => ({ kind: "fulfilled" as const, value }),
+      (error: unknown) => ({ kind: "rejected" as const, error }),
+    )
+    const first = await Promise.race([mutationOutcome, abortOutcome])
+    if (first.kind === "fulfilled") return first.value
+    if (first.kind === "rejected") {
+      if (first.error instanceof Error) throw first.error
+      throw new Error(`${label} failed: ${String(first.error)}`)
+    }
+    const final = await mutationOutcome
+    if (final.kind === "rejected") throw new GvisorPhysicalCommitAbortError(`${label} aborted before durable completion`)
+    throw new Error(`${label} trusted callback settled successfully after abort`)
   } finally {
     if (timer !== undefined) clearTimeout(timer)
     callerSignal?.removeEventListener("abort", onCallerAbort)
