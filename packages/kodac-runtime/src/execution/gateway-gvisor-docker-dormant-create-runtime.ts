@@ -149,6 +149,26 @@ const trustedRuntimes = new WeakSet<object>()
 const decoder = new TextDecoder("utf-8", { fatal: true })
 const SHA256 = /^[0-9a-f]{64}$/
 const DOCKER_IMAGE_ID = /^sha256:[0-9a-f]{64}$/
+const DOCKER_API_1_48_MASKED_PATH_FLOOR = Object.freeze([
+  "/proc/asound",
+  "/proc/acpi",
+  "/proc/kcore",
+  "/proc/keys",
+  "/proc/latency_stats",
+  "/proc/timer_list",
+  "/proc/timer_stats",
+  "/proc/sched_debug",
+  "/proc/scsi",
+  "/sys/firmware",
+  "/sys/devices/virtual/powercap",
+] as const)
+const DOCKER_API_1_48_READONLY_PATH_FLOOR = Object.freeze([
+  "/proc/bus",
+  "/proc/fs",
+  "/proc/irq",
+  "/proc/sys",
+  "/proc/sysrq-trigger",
+] as const)
 
 function asPlainRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value) || utilTypes.isProxy(value)) {
@@ -635,6 +655,15 @@ function sameStringArray(left: readonly string[], right: readonly string[]): boo
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
+function requireProtectionPathFloor(record: Record<string, unknown>, key: string, required: readonly string[], label: string): void {
+  const observed = requiredStringArray(record, key, label)
+  const observedSet = new Set(observed)
+  if (observedSet.size !== observed.length) throw new TypeError(`${label}.${key} must not contain duplicate paths`)
+  for (const path of required) {
+    if (!observedSet.has(path)) throw new TypeError(`${label}.${key} is missing required protection path ${path}`)
+  }
+}
+
 function optionalEmptyArray(record: Record<string, unknown>, key: string, label: string): void {
   const value = record[key]
   if (value === undefined || value === null) return
@@ -663,6 +692,8 @@ function optionalStringIn(record: Record<string, unknown>, key: string, allowed:
 }
 
 function requireNoUnadmittedHostAuthority(inspect: Record<string, unknown>, config: Record<string, unknown>, hostConfig: Record<string, unknown>): void {
+  requireProtectionPathFloor(hostConfig, "MaskedPaths", DOCKER_API_1_48_MASKED_PATH_FLOOR, "Docker inspect HostConfig")
+  requireProtectionPathFloor(hostConfig, "ReadonlyPaths", DOCKER_API_1_48_READONLY_PATH_FLOOR, "Docker inspect HostConfig")
   for (const key of ["Binds", "Links", "Dns", "DnsOptions", "DnsSearch", "ExtraHosts", "VolumesFrom", "CapAdd", "CapDrop", "GroupAdd", "Devices", "DeviceCgroupRules", "DeviceRequests", "Ulimits", "SecurityOpt", "Mounts"] as const) {
     optionalEmptyArray(hostConfig, key, "Docker inspect HostConfig")
   }

@@ -79,6 +79,26 @@ const IMAGE_ID = `sha256:${"d".repeat(64)}`
 const IMAGE_USER = "10001:10001"
 const IMAGE_ENV = Object.freeze(["NODE_ENV=production", "PATH=/usr/local/bin:/usr/bin"])
 const IMAGE_WORKING_DIR = "/workspace"
+const DOCKER_API_1_48_MASKED_PATHS = Object.freeze([
+  "/proc/asound",
+  "/proc/acpi",
+  "/proc/kcore",
+  "/proc/keys",
+  "/proc/latency_stats",
+  "/proc/timer_list",
+  "/proc/timer_stats",
+  "/proc/sched_debug",
+  "/proc/scsi",
+  "/sys/firmware",
+  "/sys/devices/virtual/powercap",
+] as const)
+const DOCKER_API_1_48_READONLY_PATHS = Object.freeze([
+  "/proc/bus",
+  "/proc/fs",
+  "/proc/irq",
+  "/proc/sys",
+  "/proc/sysrq-trigger",
+] as const)
 const WORKSPACE_IDENTITY = "a".repeat(64)
 const EXECUTION_INTENT_IDENTITY = "b".repeat(64)
 const REQUEST_INSTANCE_A = "123e4567-e89b-42d3-a456-426614174000"
@@ -210,6 +230,8 @@ function inspectBody(
       CgroupnsMode: "private",
       CgroupParent: "",
       VolumeDriver: "",
+      MaskedPaths: [...DOCKER_API_1_48_MASKED_PATHS],
+      ReadonlyPaths: [...DOCKER_API_1_48_READONLY_PATHS],
       ...options.hostConfigOverrides,
     },
     NetworkSettings: { Networks: { none: {}, ...options.extraNetworks } },
@@ -626,6 +648,12 @@ test("H4-R4B-B1 rejects unadmitted host authority during Docker reconciliation",
     { hostConfigOverrides: { Devices: [{ PathOnHost: "/dev/kvm" }] } },
     { hostConfigOverrides: { SecurityOpt: ["apparmor=unconfined"] } },
     { hostConfigOverrides: { PidMode: "host" } },
+    { hostConfigOverrides: { MaskedPaths: undefined } },
+    { hostConfigOverrides: { MaskedPaths: [] } },
+    { hostConfigOverrides: { MaskedPaths: DOCKER_API_1_48_MASKED_PATHS.slice(1) } },
+    { hostConfigOverrides: { ReadonlyPaths: undefined } },
+    { hostConfigOverrides: { ReadonlyPaths: [] } },
+    { hostConfigOverrides: { ReadonlyPaths: DOCKER_API_1_48_READONLY_PATHS.slice(1) } },
     { mounts: [{ Type: "bind", Source: "/host", Destination: "/host" }] },
   ] as const
   for (const options of hostile) {
@@ -646,6 +674,7 @@ test("H4-R4B-B1 image-derived execution config must match exact image preflight"
   const hostile = [
     { inspectConfigOverrides: { User: "root" } },
     { inspectConfigOverrides: { Env: [...IMAGE_ENV, "LD_PRELOAD=/tmp/hostile.so"] } },
+    { inspectConfigOverrides: { WorkingDir: "/" } },
   ] as const
   for (const options of hostile) {
     await withFakeDocker(prepared, args, options, async ({ socketPath, events, createCount }) => {
