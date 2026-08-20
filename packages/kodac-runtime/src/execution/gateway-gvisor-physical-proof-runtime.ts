@@ -28,6 +28,7 @@ import {
   ExecutionBlockedError,
   ExecutionFailedError,
   ExecutionGateway,
+  ExecutionUnprovenError,
   type ExecutionObserver,
 } from "./gateway.ts"
 
@@ -118,6 +119,11 @@ function proofIntent(requirement: SandboxExecutionRequirement): ExecutionIntent 
     paths: Object.freeze([]) as unknown as string[],
     inputDigest: intentDigest(requirement),
   })
+}
+
+async function persistReceipt(observer: ExecutionObserver | undefined, receipt: ExecutionReceipt): Promise<void> {
+  try { await observer?.onReceipt?.(receipt) }
+  catch (error) { throw new ExecutionUnprovenError("R3G-F execution evidence could not be persisted.", receipt, { cause: error }) }
 }
 
 export function createGvisorPhysicalConjunctionRuntime(value: GvisorPhysicalConjunctionRuntimeConfig): GvisorPhysicalConjunctionRuntime
@@ -270,7 +276,7 @@ export class GvisorPhysicalProofExecutionGateway extends ExecutionGateway {
       completedAt: new Date().toISOString(),
       result: { status: "failure", error: message },
     })
-    await observer?.onReceipt?.(receipt)
+    await persistReceipt(observer, receipt)
     return receipt
   }
 
@@ -296,7 +302,7 @@ export class GvisorPhysicalProofExecutionGateway extends ExecutionGateway {
         completedAt: new Date().toISOString(),
         result: { status: "blocked", reason },
       })
-      await observer?.onReceipt?.(receipt)
+      await persistReceipt(observer, receipt)
       throw new ExecutionBlockedError(reason, receipt)
     }
 
@@ -340,7 +346,7 @@ export class GvisorPhysicalProofExecutionGateway extends ExecutionGateway {
         completedAt: new Date().toISOString(),
         result: { status: "success", outputDigest: record.recordIdentity, outputBytes: 0, exitCode: 0 },
       })
-      await observer?.onReceipt?.(receipt)
+      await persistReceipt(observer, receipt)
       return Object.freeze({
         capability: mint.capability,
         observation: mint.observation,
@@ -352,7 +358,7 @@ export class GvisorPhysicalProofExecutionGateway extends ExecutionGateway {
         subjectCoherenceIdentity: coherence.subjectCoherenceIdentity,
       })
     } catch (error) {
-      if (error instanceof ExecutionBlockedError || error instanceof ExecutionFailedError) throw error
+      if (error instanceof ExecutionBlockedError || error instanceof ExecutionFailedError || error instanceof ExecutionUnprovenError) throw error
       const message = error instanceof Error ? error.message : String(error)
       const receipt = await this.failureReceipt(intent, policy, startedAt, message, observer)
       throw new ExecutionFailedError(message, receipt, { cause: error })
