@@ -527,6 +527,27 @@ No other predecessor clause is superseded.
 
 ## 10. Required extended-ACL, minimal-ACL, and rootless negative fixtures
 
+The two ACL fixtures below are **causal DAC proofs**, not merely failure observations. Each fixture must use one stable untrusted actor identity for its positive controls and denial checks. Trusted setup authority may create fixture objects and ACLs, but it may not perform the actor's control or denial operation on the actor's behalf.
+
+Immediately before the permission-behavior sequence, the test harness must bind the negative actor's filesystem credential and capability preconditions. The harness may read the fixed kernel status interface for that actor solely as test evidence:
+
+```text
+/proc/<negative-actor-pid>/status
+```
+
+The `Uid:` row's filesystem-UID field must be nonzero for the same actor PID that performs every control and denial operation. The actor must additionally satisfy:
+
+```text
+UNTRUSTED_PRINCIPAL_FSUID_NE_0=YES
+CAP_DAC_OVERRIDE=NO
+CAP_DAC_READ_SEARCH=NO
+CAP_CHOWN=NO
+CAP_FOWNER=NO
+SAME_ACTOR_FOR_CONTROL_AND_DENIAL=YES
+```
+
+This `/proc/<negative-actor-pid>/status` read is test-harness evidence only. It adds no product/runtime filesystem-credential inspection authority.
+
 ### 10.1 Extended-ACL physical fixture
 
 The future B2A implementation proof MUST include a Linux physical fixture containing real named POSIX access-ACL entries whose requested rights exceed their effective rights because of `ACL_MASK`.
@@ -548,47 +569,80 @@ WORKFLOW_DEPENDENCY_INSTALLATION=NOT_AUTHORIZED_BY_THIS_REPAIR
 
 If the proof host does not provide a trustworthy POSIX ACL fixture capability, the physical proof cannot claim PASS and the implementation merge remains blocked. The product runtime must never compensate by adding ACL enumeration or mutation authority.
 
-The socket-connect fixture must establish a named ACL entry requesting write while its effective mask is empty, purpose-equivalent to:
+Before the denial case, the **same negative actor** must pass a positive socket control on a separate temporary pathname socket in the same trusted fixture prefix:
 
 ```text
+CONTROL_SOCKET_IS_LISTENING=YES
+CONTROL_PATH_SEARCH_PERMISSION=ALLOWED
+CONTROL_SOCKET_EFFECTIVE_ACTOR_WRITE=ALLOWED
+SAME_ACTOR_STREAM_CONNECT_CONTROL=SUCCESS
+```
+
+The denial socket must then establish all of the following before the connect attempt:
+
+```text
+DENIAL_SOCKET_IS_LISTENING=YES
+DENIAL_PATH_SEARCH_PERMISSION=ALLOWED
+DENIAL_SOCKET_IDENTITY_FROZEN=YES
 named untrusted user entry requests rw-
 ACL_MASK=---
 SOCKET_EFFECTIVE_UNTRUSTED_WRITE=---
+UNTRUSTED_PRINCIPAL_FSUID_NE_0=YES
 ```
 
-Then prove with an ordinary non-root/no-capability principal:
+The same actor must receive the operation-specific Linux pathname-socket permission result:
 
 ```text
-STREAM_CONNECT=EACCES_OR_EQUIVALENT_PERMISSION_DENIAL
+SAME_ACTOR_STREAM_CONNECT_DENIAL=EACCES
+DENIAL_SOCKET_IDENTITY_UNCHANGED=YES
 ```
 
-The protected-directory fixture must establish a named ACL entry requesting write while the mask removes write, purpose-equivalent to:
+A refused connection, missing listener, missing path-search permission, nonexistent socket, different actor, or any error other than the expected permission denial cannot satisfy this proof.
+
+The protected-directory portion must likewise include a same-actor positive control in a separate temporary control directory before the denial operations:
+
+```text
+CONTROL_DIRECTORY_SEARCH=ALLOWED
+CONTROL_DIRECTORY_WRITE=ALLOWED
+SAME_ACTOR_CREATE_CONTROL=SUCCESS
+SAME_ACTOR_UNLINK_CONTROL=SUCCESS
+SAME_ACTOR_RENAME_CONTROL=SUCCESS
+```
+
+The denial directory must establish a named ACL entry requesting write while the mask removes write, purpose-equivalent to:
 
 ```text
 named untrusted user entry requests rwx
 ACL_MASK=r-x
 DIRECTORY_EFFECTIVE_UNTRUSTED_WRITE=0
 DIRECTORY_EFFECTIVE_UNTRUSTED_SEARCH=1
+DENIAL_DIRECTORY_PATH_SEARCH=ALLOWED
 ```
 
-Then prove that search permission alone does not permit:
+Before each denial attempt the target state must be exact:
 
 ```text
-create replacement entry
-unlink protected entry
-rename over protected entry
+CREATE_DENIAL_TARGET=ABSENT
+UNLINK_DENIAL_TARGET=EXISTS_AND_IDENTITY_FROZEN
+RENAME_SOURCE=EXISTS_ACTOR_REACHABLE_AND_IDENTITY_FROZEN
+RENAME_DENIAL_TARGET=EXISTS_AND_IDENTITY_FROZEN
 ```
 
-Every attempted mutation must fail without changing the protected pathname identity.
-
-The fixture must also prove the untrusted principal cannot change the root-owned fixture's UID/GID, mode, or access ACL. Test setup may use trusted fixture-owner/root authority; the negative actor itself must have:
+The same actor must then prove:
 
 ```text
-CAP_DAC_OVERRIDE=NO
-CAP_DAC_READ_SEARCH=NO
-CAP_CHOWN=NO
-CAP_FOWNER=NO
+CREATE_REPLACEMENT_DENIAL=EACCES
+CREATE_DENIAL_TARGET_REMAINS_ABSENT=YES
+UNLINK_PROTECTED_DENIAL=EACCES
+UNLINK_DENIAL_TARGET_IDENTITY_UNCHANGED=YES
+RENAME_OVER_PROTECTED_DENIAL=EACCES
+RENAME_DENIAL_TARGET_IDENTITY_UNCHANGED=YES
+RENAME_SOURCE_IDENTITY_UNCHANGED=YES
 ```
+
+Any setup failure, target absence where existence is required, source absence, path-search failure, cross-actor substitution, or non-permission failure makes the causal DAC proof invalid.
+
+The fixture must also prove the same untrusted actor cannot change the root-owned fixture's UID/GID, mode, or access ACL. Test setup may use trusted fixture-owner/root authority; the negative actor itself remains bound by the common `fsuid` and no-capability preconditions above.
 
 ### 10.2 Minimal/no-mask baseline fixture
 
@@ -602,9 +656,66 @@ NAMED_ACL_USER_ENTRIES=ABSENT
 NAMED_ACL_GROUP_ENTRIES=ABSENT
 SOCKET_GROUP_CLASS=ACL_GROUP_OBJ=--- for mode 0600
 ANCESTOR_GROUP_CLASS_WRITE=ACL_GROUP_OBJ_WRITE=0 when mode & 0o022 == 0
+UNTRUSTED_PRINCIPAL_FSUID_NE_0=YES
 ```
 
-Then the same ordinary non-root/no-capability negative actor must prove socket-connect denial and protected-path mutation denial. This fixture is a test theorem only; product runtime still does not enumerate ACL entries.
+The **same negative actor** used for the minimal fixture's denial checks must first pass positive controls on separate temporary control objects:
+
+```text
+MINIMAL_CONTROL_SOCKET_IS_LISTENING=YES
+MINIMAL_CONTROL_PATH_SEARCH_PERMISSION=ALLOWED
+MINIMAL_CONTROL_SOCKET_ACTOR_WRITE=ALLOWED
+SAME_ACTOR_MINIMAL_STREAM_CONNECT_CONTROL=SUCCESS
+MINIMAL_CONTROL_DIRECTORY_SEARCH=ALLOWED
+MINIMAL_CONTROL_DIRECTORY_WRITE=ALLOWED
+SAME_ACTOR_MINIMAL_CREATE_CONTROL=SUCCESS
+SAME_ACTOR_MINIMAL_UNLINK_CONTROL=SUCCESS
+SAME_ACTOR_MINIMAL_RENAME_CONTROL=SUCCESS
+```
+
+The minimal/no-mask denial socket must then prove before connection:
+
+```text
+MINIMAL_DENIAL_SOCKET_IS_LISTENING=YES
+MINIMAL_DENIAL_PATH_SEARCH_PERMISSION=ALLOWED
+MINIMAL_DENIAL_SOCKET_IDENTITY_FROZEN=YES
+ACL_MASK=ABSENT
+NAMED_ACL_USER_ENTRIES=ABSENT
+NAMED_ACL_GROUP_ENTRIES=ABSENT
+SOCKET_GROUP_CLASS=ACL_GROUP_OBJ=---
+```
+
+The same actor must receive:
+
+```text
+SAME_ACTOR_MINIMAL_STREAM_CONNECT_DENIAL=EACCES
+MINIMAL_DENIAL_SOCKET_IDENTITY_UNCHANGED=YES
+```
+
+For protected-path mutation, the denial directory must preserve search while withholding write and must establish exact target state before each operation:
+
+```text
+MINIMAL_DENIAL_DIRECTORY_SEARCH=ALLOWED
+MINIMAL_DENIAL_DIRECTORY_WRITE=DENIED
+MINIMAL_CREATE_DENIAL_TARGET=ABSENT
+MINIMAL_UNLINK_DENIAL_TARGET=EXISTS_AND_IDENTITY_FROZEN
+MINIMAL_RENAME_SOURCE=EXISTS_ACTOR_REACHABLE_AND_IDENTITY_FROZEN
+MINIMAL_RENAME_DENIAL_TARGET=EXISTS_AND_IDENTITY_FROZEN
+```
+
+The same actor must then receive operation-specific permission denial with causal state preservation:
+
+```text
+MINIMAL_CREATE_REPLACEMENT_DENIAL=EACCES
+MINIMAL_CREATE_DENIAL_TARGET_REMAINS_ABSENT=YES
+MINIMAL_UNLINK_PROTECTED_DENIAL=EACCES
+MINIMAL_UNLINK_DENIAL_TARGET_IDENTITY_UNCHANGED=YES
+MINIMAL_RENAME_OVER_PROTECTED_DENIAL=EACCES
+MINIMAL_RENAME_DENIAL_TARGET_IDENTITY_UNCHANGED=YES
+MINIMAL_RENAME_SOURCE_IDENTITY_UNCHANGED=YES
+```
+
+A different actor, missing listener, failed path search, missing required target/source, or any non-permission failure invalidates the minimal-branch proof. This fixture is a test theorem only; product runtime still does not enumerate ACL entries.
 
 ### 10.3 Rootless/user-namespace negative fixture
 
@@ -656,10 +767,14 @@ ANCESTOR_MINIMAL_ACL_GROUP_OBJ_WRITE_ZERO_PROOF=PASS
 PATH_MUTATION_REQUIRES_DIRECTORY_WRITE_PROOF=PASS
 CAP_CHOWN_UNTRUSTED_PRINCIPAL_EXCLUDED=PASS
 CAP_FOWNER_UNTRUSTED_PRINCIPAL_EXCLUDED=PASS
+NEGATIVE_ACTOR_FSUID_NONZERO_PROOF=PASS
+SAME_ACTOR_POSITIVE_CONTROL_PROOF=PASS
 EXTENDED_ACL_SOCKET_CONNECT_NEGATIVE_PROOF=PASS
 EXTENDED_ACL_PATH_MUTATION_NEGATIVE_PROOF=PASS
 MINIMAL_ACL_SOCKET_CONNECT_NEGATIVE_PROOF=PASS
 MINIMAL_ACL_PATH_MUTATION_NEGATIVE_PROOF=PASS
+OPERATION_SPECIFIC_EACCES_PROOF=PASS
+PATHNAME_IDENTITY_PRESERVATION_PROOF=PASS
 OWNERSHIP_MODE_ACL_MUTATION_NEGATIVE_PROOF=PASS
 NO_ACL_ENUMERATION_AUTHORITY=PASS
 NO_ACL_MUTATION_AUTHORITY=PASS
@@ -671,6 +786,8 @@ NO_CALLER_HOST_ID_MAP_ASSERTION=PASS
 A test that merely inspects `mode=0600` and then claims **ACL entries are absent** is invalid.
 
 A valid proof distinguishes both POSIX ACL branches. For an extended ACL it derives the maximum named rights through `ACL_MASK` and demonstrates denial with a real extended-ACL fixture. For a minimal/no-mask ACL it derives group rights directly from `ACL_GROUP_OBJ`, requires named user/group entries to be absent by the valid-minimal-ACL contract, and demonstrates the same denial in a separate baseline fixture.
+
+Both physical ACL fixtures must be causal: the same actor must pass control operations when the relevant permission is intentionally granted, then receive operation-specific `EACCES` when write is removed while listener/path-search/target-state prerequisites remain valid. The harness must bind that actor's filesystem UID as nonzero immediately before the permission sequence and preserve the protected pathname identities after every denied mutation.
 
 The product implementation must not attempt to inspect or modify another process's filesystem credentials. If the trusted B2A process cannot actually connect under the kernel's current credential state, readiness fails closed.
 
@@ -694,6 +811,7 @@ abstract Unix socket
 non-root Docker client support
 runtime ACL enumeration
 runtime ACL mutation
+runtime inspection of another process's fsuid/fsgid
 permission repair
 chmod/chown repair
 runtime getfacl/setfacl
@@ -708,7 +826,7 @@ H6
 K3-R6+
 ```
 
-The sole additional proof-harness grant is the bounded temporary-fixture `setfacl` authority in Sections 10.1 and 10.2. It creates no product/runtime capability.
+The sole additional proof-harness grants are the bounded temporary-fixture `setfacl` authority and negative-actor `/proc/<pid>/status` evidence read in Section 10. They create no product/runtime capability.
 
 ---
 
@@ -728,6 +846,8 @@ PRIMARY_SOURCE_UNIX_PATHNAME_PERMISSION_REVIEW=PASS
 PRIMARY_SOURCE_USER_NAMESPACE_REVIEW=PASS
 CAPABILITY_BOUNDARY_REVIEW=PASS
 POSIX_ACL_MASK_PRESENT_AND_ABSENT_CASES_REVIEW=PASS
+CAUSAL_DAC_FIXTURE_REVIEW=PASS
+NEGATIVE_ACTOR_FSUID_REVIEW=PASS
 EXACT_HEAD_CI=PASS
 FRESH_INDEPENDENT_EXACT_HEAD_REVIEW=PASS
 UNRESOLVED_ACTIONABLE_THREADS=0
@@ -752,6 +872,11 @@ Linux pathname creation/rename/unlink requires containing-directory write author
 Ancestor group/other write bits of zero therefore prove zero non-owner directory-write rights under either valid POSIX access-ACL branch.
 A full canonical uid_map/gid_map identity mapping is required so ordinary rootless namespace-relative UID/GID 0 is rejected.
 CAP_CHOWN and CAP_FOWNER are explicitly excluded from the untrusted-principal theorem.
+The negative fixture actor's filesystem UID is proven nonzero immediately before permission-behavior tests.
+The same actor passes positive controls and performs the corresponding denial operations.
+Each socket denial uses a live listening socket with successful path search before expecting EACCES.
+Each create/unlink/rename denial has exact reachable target/source preconditions and operation-specific EACCES.
+Every denied mutation preserves the protected pathname identity and expected source/absence state.
 A real extended-ACL physical fixture proves that requested named rights cannot escape the mask for socket connect or namespace mutation.
 A separate minimal/no-mask baseline proves the direct ACL_GROUP_OBJ branch without inventing ACL_MASK.
 The negative actor cannot mutate fixture ownership, mode, or ACL.
