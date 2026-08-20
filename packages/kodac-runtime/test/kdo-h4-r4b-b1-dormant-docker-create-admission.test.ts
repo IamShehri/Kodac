@@ -76,6 +76,9 @@ function referenceRequestIdentity(intent: ApprovalRequest["intent"]): string {
 
 const FIXTURE_DIGEST = `sha256:${"1".repeat(64)}`
 const IMAGE_ID = `sha256:${"d".repeat(64)}`
+const IMAGE_USER = "10001:10001"
+const IMAGE_ENV = Object.freeze(["NODE_ENV=production", "PATH=/usr/local/bin:/usr/bin"])
+const IMAGE_WORKING_DIR = "/workspace"
 const WORKSPACE_IDENTITY = "a".repeat(64)
 const EXECUTION_INTENT_IDENTITY = "b".repeat(64)
 const REQUEST_INSTANCE_A = "123e4567-e89b-42d3-a456-426614174000"
@@ -140,6 +143,7 @@ function inspectBody(
   options: {
     readonly extraLabels?: Readonly<Record<string, string>>
     readonly extraNetworks?: Readonly<Record<string, unknown>>
+    readonly configOverrides?: Readonly<Record<string, unknown>>
     readonly hostConfigOverrides?: Readonly<Record<string, unknown>>
     readonly mounts?: readonly unknown[]
     readonly containerImageId?: string
@@ -155,6 +159,9 @@ function inspectBody(
     RestartCount: 0,
     Config: {
       Image: prepared.sourceReference,
+      User: IMAGE_USER,
+      Env: [...IMAGE_ENV],
+      WorkingDir: IMAGE_WORKING_DIR,
       AttachStdin: false,
       Tty: false,
       OpenStdin: false,
@@ -163,6 +170,7 @@ function inspectBody(
       Volumes: {},
       Healthcheck: { Test: ["NONE"] },
       Labels: { ...prepared.labels, ...options.extraLabels },
+      ...options.configOverrides,
     },
     HostConfig: {
       Runtime: "runsc",
@@ -224,6 +232,7 @@ interface FakeDockerOptions {
   readonly wrongImageDigest?: boolean
   readonly extraInspectLabels?: Readonly<Record<string, string>>
   readonly extraInspectNetworks?: Readonly<Record<string, unknown>>
+  readonly inspectConfigOverrides?: Readonly<Record<string, unknown>>
   readonly hostConfigOverrides?: Readonly<Record<string, unknown>>
   readonly mounts?: readonly unknown[]
   readonly containerImageId?: string
@@ -247,7 +256,12 @@ async function withFakeDocker<T>(
       events.push("docker:image-inspect")
       const body: Record<string, unknown> = {
         Id: IMAGE_ID,
-        Config: { Volumes: {} },
+        Config: {
+          User: IMAGE_USER,
+          Env: [...IMAGE_ENV],
+          WorkingDir: IMAGE_WORKING_DIR,
+          Volumes: {},
+        },
       }
       if (!options.omitImageDescriptor) {
         body.Descriptor = { digest: options.wrongImageDigest ? `sha256:${"e".repeat(64)}` : prepared.sourceDigest }
@@ -288,6 +302,7 @@ async function withFakeDocker<T>(
       response.end(JSON.stringify(inspectBody(prepared, args, {
         extraLabels: options.extraInspectLabels,
         extraNetworks: options.extraInspectNetworks,
+        configOverrides: options.inspectConfigOverrides,
         hostConfigOverrides: options.hostConfigOverrides,
         mounts: options.mounts,
         containerImageId: options.containerImageId,
@@ -586,6 +601,28 @@ test("H4-R4B-B1 rejects unadmitted host authority during Docker reconciliation",
     await withFakeDocker(prepared, args, options, async ({ socketPath, events, createCount }) => {
       const runtime = createGvisorDockerDormantCreateRuntime({ socketPath, ...durableHarness(permit, events) })
       await assert.rejects(new GvisorDockerDormantCreateGateway(runtime).createDormantAdmission(permit, permitCommit), SandboxDormantCreateIndeterminateError)
+      assert.equal(createCount(), 1)
+      assert.equal(events.includes("store:created"), false)
+    })
+  }
+})
+
+test("H4-R4B-B1 image-derived execution config must match exact image preflight", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+  const hostile = [
+    { inspectConfigOverrides: { User: "root" } },
+    { inspectConfigOverrides: { Env: [...IMAGE_ENV, "LD_PRELOAD=/tmp/hostile.so"] } },
+  ] as const
+  for (const options of hostile) {
+    await withFakeDocker(prepared, args, options, async ({ socketPath, events, createCount }) => {
+      const runtime = createGvisorDockerDormantCreateRuntime({ socketPath, ...durableHarness(permit, events) })
+      await assert.rejects(
+        new GvisorDockerDormantCreateGateway(runtime).createDormantAdmission(permit, permitCommit),
+        SandboxDormantCreateIndeterminateError,
+      )
       assert.equal(createCount(), 1)
       assert.equal(events.includes("store:created"), false)
     })
