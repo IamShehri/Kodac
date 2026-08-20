@@ -254,8 +254,10 @@ export function validateGvisorPhysicalEvidenceBundle(value: unknown, requirement
   ] as const
   exactKeys(record, keys, "R3G-F evidence bundle")
   if (keys.length !== KDO_H4_R3G_F_LIMITS.maxBundleRecords) throw new Error("R3G-F internal bundle record-count invariant failed")
-  boundedJsonBytes(record, KDO_H4_R3G_F_LIMITS.maxBundleSerializedBytes, "R3G-F evidence bundle")
 
+  // Never traverse or serialize untrusted nested predecessor values before their
+  // canonical validators reject proxies/accessors/hooks. Size accounting is
+  // performed only over the normalized, validator-produced immutable bundle.
   const resourceRecord = validateGvisorCgroupV2ResourceRecord(record.resourceRecord)
   const resourceCommit = validateGvisorCgroupV2ResourceCommit(record.resourceCommit, resourceRecord)
   const sourceRecord = validateGvisorSourceLineageRecord(record.sourceRecord)
@@ -280,6 +282,11 @@ export function validateGvisorPhysicalEvidenceBundle(value: unknown, requirement
   })
   const outputRecord = validateGvisorOutputBoundRecord(record.outputRecord, requirement)
   const outputCommit = validateGvisorOutputBoundCommit(record.outputCommit, outputRecord)
+  const validatedBundle = Object.freeze({
+    resourceRecord, resourceCommit, sourceRecord, sourceCommit, networkRecord, networkCommit,
+    ttlArmRecord, ttlArmCommit, ttlTerminalRecord, ttlTerminalCommit, outputRecord, outputCommit,
+  })
+  boundedJsonBytes(validatedBundle, KDO_H4_R3G_F_LIMITS.maxBundleSerializedBytes, "R3G-F evidence bundle")
 
   const requirementIdentity = requireSame("requirementIdentity", [
     requirement.requirementIdentity,
@@ -344,10 +351,7 @@ export function validateGvisorPhysicalEvidenceBundle(value: unknown, requirement
   if (outputRecord.maxOutputBytes !== requirement.workload.resourcePolicy.maxOutputBytes) throw new TypeError("R3G-F output theorem does not match exact requirement")
   if (outputRecord.terminalEvidenceIdentity !== ttlTerminalRecord.recordIdentity) throw new TypeError("R3G-F output evidence is bound to a different TTL terminal record")
 
-  return Object.freeze({
-    resourceRecord, resourceCommit, sourceRecord, sourceCommit, networkRecord, networkCommit,
-    ttlArmRecord, ttlArmCommit, ttlTerminalRecord, ttlTerminalCommit, outputRecord, outputCommit,
-  })
+  return validatedBundle
 }
 
 export function createGvisorPhysicalEvidenceResolution(input: {
