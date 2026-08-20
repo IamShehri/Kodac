@@ -412,7 +412,7 @@ test("H4-R4B-B1 durable dispatch claim without observed container burns the atte
     const firstRuntime = createGvisorDockerDormantCreateRuntime({
       socketPath,
       ...stores,
-      commitCreateDispatchClaim: (claim) => {
+      commitCreateDispatchClaim: (claim: SandboxDormantCreateDispatchClaim) => {
         const commit = stores.commitCreateDispatchClaim(claim)
         controller.abort()
         return commit
