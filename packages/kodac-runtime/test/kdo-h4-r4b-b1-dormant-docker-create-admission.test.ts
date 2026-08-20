@@ -130,7 +130,12 @@ function fixedPermit(requestInstanceId = REQUEST_INSTANCE_A): SandboxAdmissionPe
   })
 }
 
-function inspectBody(prepared: SandboxDormantCreatePrepared, args: readonly string[], extraLabels: Readonly<Record<string, string>> = {}) {
+function inspectBody(
+  prepared: SandboxDormantCreatePrepared,
+  args: readonly string[],
+  extraLabels: Readonly<Record<string, string>> = {},
+  extraNetworks: Readonly<Record<string, unknown>> = {},
+) {
   return {
     Id: CONTAINER_ID,
     Name: `/${prepared.containerName}`,
@@ -149,7 +154,7 @@ function inspectBody(prepared: SandboxDormantCreatePrepared, args: readonly stri
       MemorySwap: prepared.memorySwapBytes,
       RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
     },
-    NetworkSettings: { Networks: {} },
+    NetworkSettings: { Networks: { none: {}, ...extraNetworks } },
   }
 }
 
@@ -165,6 +170,7 @@ interface FakeDockerOptions {
   readonly persistOnLostResponse?: boolean
   readonly createStatusCode?: number
   readonly extraInspectLabels?: Readonly<Record<string, string>>
+  readonly extraInspectNetworks?: Readonly<Record<string, unknown>>
 }
 
 async function withFakeDocker<T>(
@@ -209,7 +215,7 @@ async function withFakeDocker<T>(
         return
       }
       response.writeHead(200, { "Content-Type": "application/json" })
-      response.end(JSON.stringify(inspectBody(prepared, args, options.extraInspectLabels)))
+      response.end(JSON.stringify(inspectBody(prepared, args, options.extraInspectLabels, options.extraInspectNetworks)))
       return
     }
     response.writeHead(500)
@@ -395,6 +401,28 @@ test("H4-R4B-B1 observed Docker labels must contain exactly the canonical reconc
     )
     assert.equal(createCount(), 1)
     assert.deepEqual(events, ["store:reservation", "store:prepared", "docker:create", "docker:inspect"])
+  })
+})
+
+test("H4-R4B-B1 canonical Docker none endpoint is not counted as a live attachment and other networks fail closed", { skip: process.platform !== "linux" }, async () => {
+  const permit = fixedPermit()
+  const permitCommit = createSandboxAdmissionPermitCommit(permit)
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const args = permit.binding.requirement.workload.entrypoint.args
+
+  await withFakeDocker(prepared, args, {}, async ({ socketPath, events }) => {
+    const runtime = createGvisorDockerDormantCreateRuntime({ socketPath, ...durableHarness(permit, events) })
+    const result = await new GvisorDockerDormantCreateGateway(runtime).createDormantAdmission(permit, permitCommit)
+    assert.equal(result.observation.networkMode, "none")
+    assert.equal(result.observation.networkAttachmentCount, 0)
+  })
+
+  await withFakeDocker(prepared, args, { extraInspectNetworks: { bridge: {} } }, async ({ socketPath, events }) => {
+    const runtime = createGvisorDockerDormantCreateRuntime({ socketPath, ...durableHarness(permit, events) })
+    await assert.rejects(
+      new GvisorDockerDormantCreateGateway(runtime).createDormantAdmission(permit, permitCommit),
+      SandboxDormantCreateIndeterminateError,
+    )
   })
 })
 
