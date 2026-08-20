@@ -61,7 +61,10 @@ function sha256(value: string): string {
 }
 
 function gitBlobSha1(value: string): string {
-  const bytes = Buffer.from(value, "utf8")
+  // GitHub's canonical repository blobs are LF-delimited. Windows checkout may
+  // materialize CRLF, so normalize working-tree transport before pinning blob bytes.
+  const canonical = value.replace(/\r\n/g, "\n")
+  const bytes = Buffer.from(canonical, "utf8")
   return createHash("sha1").update(`blob ${bytes.byteLength}\0`, "utf8").update(bytes).digest("hex")
 }
 
@@ -420,6 +423,7 @@ test("H4-R4B-A schema is closed and positive permit can represent only allowed-o
     required: string[]
     properties: Record<string, unknown>
     $defs: {
+      requestInstanceId: { minLength: number; pattern: string; description: string; maxLength?: number }
       askedEvidence: { additionalProperties: boolean }
       decidedEvidence: { additionalProperties: boolean; properties: { outcome: { const: string } } }
       approvalEvidenceCommit: { additionalProperties: boolean }
@@ -433,6 +437,8 @@ test("H4-R4B-A schema is closed and positive permit can represent only allowed-o
   assert.deepEqual(schema.properties.outcome, { const: "allowed-once" })
   assert.deepEqual(schema.properties.admissionAttemptLimit, { const: 1 })
   assert.deepEqual(schema.properties.binding, { $ref: "./kdo-h4-r4a-sandbox-execution-approval-binding.schema.json" })
+  assert.equal(Object.hasOwn(schema.$defs.requestInstanceId, "maxLength"), false)
+  assert.match(schema.$defs.requestInstanceId.description, /128 UTF-8 bytes/)
   assert.equal(Object.hasOwn(schema.properties, "containerId"), false)
   assert.equal(Object.hasOwn(schema.properties, "processId"), false)
   assert.equal(Object.hasOwn(schema.properties, "dockerOperation"), false)
