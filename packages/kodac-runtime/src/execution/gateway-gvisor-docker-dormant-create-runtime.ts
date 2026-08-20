@@ -255,7 +255,7 @@ function validateJsonSyntaxNoDuplicateKeys(text: string, label: string): void {
           if (!/^[0-9a-fA-F]{4}$/.test(text.slice(index + 1, index + 5))) throw new TypeError(`${label} contains invalid JSON unicode escape`)
           index += 4
         } else if (!'"\\/bfnrt'.includes(text[index] ?? "")) {
-          throw new TypeError(`${label} contains invalid JSON escape`)
+          throw new TypeError(`${label} contains an invalid JSON escape`)
         }
       } else if (char.charCodeAt(0) < 0x20) {
         throw new TypeError(`${label} contains an unescaped JSON control character`)
@@ -590,7 +590,7 @@ async function getExactDormantInspect(
     restarting,
     dead,
     pid,
-    labels: expectedLabels,
+    labels: labelsRecord,
   }, prepared, permit)
 }
 
@@ -630,9 +630,6 @@ export class GvisorDockerDormantCreateGateway {
     if (preparedCommit.disposition === "created") {
       if (options.signal?.aborted) throw new SandboxDormantCreateBlockedError("R4B-B1 admission was cancelled before Docker mutation")
       createResult = await postExactDormantCreate(this.#runtime, permit, prepared, options.signal)
-      if (createResult.kind === "rejected") {
-        throw new SandboxDormantCreateRejectedError(`R4B-B1 Docker create was authoritatively rejected: ${createResult.detail}`)
-      }
     }
 
     let observation: SandboxDormantDockerObservation | null
@@ -642,6 +639,9 @@ export class GvisorDockerDormantCreateGateway {
       throw new SandboxDormantCreateIndeterminateError(`R4B-B1 exact dormant reconciliation failed: ${error instanceof Error ? error.message : String(error)}`)
     }
     if (observation === null) {
+      if (createResult?.kind === "rejected") {
+        throw new SandboxDormantCreateRejectedError(`R4B-B1 Docker create was rejected and exact reconciliation found no dormant candidate: ${createResult.detail}`)
+      }
       const detail = createResult?.kind === "indeterminate" ? createResult.detail : "deterministic container was not found"
       throw new SandboxDormantCreateIndeterminateError(`R4B-B1 create outcome remains indeterminate: ${detail}`)
     }
@@ -672,7 +672,7 @@ export class GvisorDockerDormantCreateGateway {
       observation,
       createdAdmission,
       createdAdmissionCommit,
-      recovered: preparedCommit.disposition === "existing" || createResult?.kind === "indeterminate",
+      recovered: preparedCommit.disposition === "existing" || (createResult !== undefined && createResult.kind !== "created"),
     })
   }
 }
