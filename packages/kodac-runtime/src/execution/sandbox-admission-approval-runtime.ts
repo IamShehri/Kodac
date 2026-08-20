@@ -200,6 +200,56 @@ async function commitApprovalEvidence(
   }
 }
 
+async function decideApprovalOutcome(
+  runtime: SandboxAdmissionApprovalRuntime,
+  request: ApprovalRequest,
+  signal?: AbortSignal,
+): Promise<ApprovalOutcome> {
+  if (signal?.aborted) return "cancelled"
+
+  let started: Promise<unknown> | unknown
+  try {
+    started = runtime.decide(request, { signal })
+  } catch {
+    return signal?.aborted ? "cancelled" : "unavailable"
+  }
+
+  const settled = Promise.resolve(started).then(
+    (value) => ({ kind: "fulfilled" as const, value }),
+    (error: unknown) => ({ kind: "rejected" as const, error }),
+  )
+  if (signal === undefined) {
+    const result = await settled
+    if (result.kind === "rejected") return "unavailable"
+    try {
+      return strictApprovalDecision(result.value, request).outcome
+    } catch {
+      return "unavailable"
+    }
+  }
+
+  let abortHandler: (() => void) | undefined
+  const aborted = new Promise<{ readonly kind: "aborted" }>((resolve) => {
+    abortHandler = () => resolve({ kind: "aborted" })
+    signal.addEventListener("abort", abortHandler, { once: true })
+    if (signal.aborted) abortHandler()
+  })
+
+  try {
+    const first = await Promise.race([settled, aborted])
+    if (first.kind === "aborted") return "cancelled"
+    if (first.kind === "rejected") return signal.aborted ? "cancelled" : "unavailable"
+    if (signal.aborted) return "cancelled"
+    try {
+      return strictApprovalDecision(first.value, request).outcome
+    } catch {
+      return signal.aborted ? "cancelled" : "unavailable"
+    }
+  } finally {
+    if (abortHandler !== undefined) signal.removeEventListener("abort", abortHandler)
+  }
+}
+
 function asynchronousMutationResult<T>(value: Promise<T> | T, label: string): Promise<T> | null {
   if (utilTypes.isPromise(value)) return Promise.resolve(value as Promise<T>)
   if (value === null || (typeof value !== "object" && typeof value !== "function")) return null
@@ -309,17 +359,8 @@ export class SandboxAdmissionApprovalGateway {
     const askedEvidence = createApprovalEvidence(request, "asked")
     const askedEvidenceCommit = await commitApprovalEvidence(this.runtime, askedEvidence, "R4B-A asked approval evidence")
 
-    let outcome: ApprovalOutcome
-    if (options.signal?.aborted) {
-      outcome = "cancelled"
-    } else {
-      try {
-        const rawDecision = await this.runtime.decide(request, { signal: options.signal })
-        outcome = options.signal?.aborted ? "cancelled" : strictApprovalDecision(rawDecision, request).outcome
-      } catch {
-        outcome = options.signal?.aborted ? "cancelled" : "unavailable"
-      }
-    }
+    let outcome = await decideApprovalOutcome(this.runtime, request, options.signal)
+    if (options.signal?.aborted) outcome = "cancelled"
 
     const decidedEvidence = createApprovalEvidence(request, "decided", outcome)
     const decidedEvidenceCommit = await commitApprovalEvidence(this.runtime, decidedEvidence, "R4B-A decided approval evidence")
