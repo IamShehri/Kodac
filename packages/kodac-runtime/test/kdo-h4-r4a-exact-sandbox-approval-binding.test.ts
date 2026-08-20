@@ -11,6 +11,7 @@ import { createConfinementRequest } from "../src/trust/confinement.ts"
 import {
   createSandboxExecutionRequirement,
   type SandboxExecutionRequirement,
+  type SandboxSemanticRuntimeClass,
 } from "../src/trust/sandbox-backend-evidence.ts"
 import {
   KDO_H4_R3A_NETWORK_MODE,
@@ -54,12 +55,26 @@ const EXECUTION_INTENT_IDENTITY = "b".repeat(64)
 const REQUEST_INSTANCE_A = "123e4567-e89b-42d3-a456-426614174000"
 const REQUEST_INSTANCE_B = "123e4567-e89b-42d3-a456-426614174001"
 
-function fixtureWorkload(overrides: { digest?: string; executable?: string; args?: readonly string[]; cpuMillis?: number; ttlMs?: number } = {}) {
+type FixtureOverrides = {
+  digest?: string
+  executable?: string
+  args?: readonly string[]
+  cpuMillis?: number
+  memoryBytes?: number
+  ttlMs?: number
+  maxOutputBytes?: number
+  workspaceIdentity?: string
+  executionIntentIdentity?: string
+  readPaths?: readonly string[]
+  requiredSemanticRuntimeClass?: SandboxSemanticRuntimeClass
+}
+
+function fixtureWorkload(overrides: FixtureOverrides = {}) {
   const confinement = createConfinementRequest({
     mode: "read-only",
-    workspaceIdentity: WORKSPACE_IDENTITY,
-    executionIntentIdentity: EXECUTION_INTENT_IDENTITY,
-    scope: { readPaths: ["src"], writePaths: [] },
+    workspaceIdentity: overrides.workspaceIdentity ?? WORKSPACE_IDENTITY,
+    executionIntentIdentity: overrides.executionIntentIdentity ?? EXECUTION_INTENT_IDENTITY,
+    scope: { readPaths: [...(overrides.readPaths ?? ["src"])], writePaths: [] },
   })
   return createSandboxWorkloadRequest({
     source: createSandboxOciImageSource({
@@ -72,9 +87,9 @@ function fixtureWorkload(overrides: { digest?: string; executable?: string; args
     }),
     resourcePolicy: createSandboxResourcePolicy({
       cpuMillis: overrides.cpuMillis ?? 1000,
-      memoryBytes: 536870912,
+      memoryBytes: overrides.memoryBytes ?? 536870912,
       ttlMs: overrides.ttlMs ?? 60000,
-      maxOutputBytes: 1048576,
+      maxOutputBytes: overrides.maxOutputBytes ?? 1048576,
     }),
     networkPolicy: createSandboxNetworkPolicy({ mode: KDO_H4_R3A_NETWORK_MODE }),
     confinement,
@@ -82,10 +97,10 @@ function fixtureWorkload(overrides: { digest?: string; executable?: string; args
   })
 }
 
-function fixtureRequirement(overrides: Parameters<typeof fixtureWorkload>[0] = {}): SandboxExecutionRequirement {
+function fixtureRequirement(overrides: FixtureOverrides = {}): SandboxExecutionRequirement {
   return createSandboxExecutionRequirement({
     workload: fixtureWorkload(overrides),
-    requiredSemanticRuntimeClass: "gvisor",
+    requiredSemanticRuntimeClass: overrides.requiredSemanticRuntimeClass ?? "gvisor",
   })
 }
 
@@ -165,7 +180,7 @@ test("H4-R4A same requirement/request pair is deterministic while a new one-shot
   assert.notEqual(first.bindingIdentity, nextOccurrence.bindingIdentity)
 })
 
-test("H4-R4A approval intent is fixed namespace empty paths and requirement-sensitive", () => {
+test("H4-R4A approval intent is fixed namespace empty paths and changes across every independently variable admitted theorem family", () => {
   const base = createSandboxExecutionApprovalIntent(fixtureRequirement())
   assert.equal(base.capability, KDO_H4_R4A_CAPABILITY)
   assert.deepEqual(base.paths, [])
@@ -177,7 +192,13 @@ test("H4-R4A approval intent is fixed namespace empty paths and requirement-sens
     fixtureRequirement({ executable: "/usr/bin/python3" }),
     fixtureRequirement({ args: ["--version", "different"] }),
     fixtureRequirement({ cpuMillis: 1001 }),
+    fixtureRequirement({ memoryBytes: 536870913 }),
     fixtureRequirement({ ttlMs: 60001 }),
+    fixtureRequirement({ maxOutputBytes: 1048577 }),
+    fixtureRequirement({ workspaceIdentity: "c".repeat(64) }),
+    fixtureRequirement({ executionIntentIdentity: "d".repeat(64) }),
+    fixtureRequirement({ readPaths: ["src", "test"] }),
+    fixtureRequirement({ requiredSemanticRuntimeClass: "kata-qemu" }),
   ]) {
     assert.notEqual(createSandboxExecutionApprovalIntent(requirement).inputDigest, base.inputDigest)
   }
@@ -228,6 +249,10 @@ test("H4-R4A serialized outer-field substitution fails even with canonical neste
     "confinementRequestIdentity",
     "executionIntentIdentity",
     "workspaceIdentity",
+    "requiredSemanticRuntimeClass",
+    "downgradePolicy",
+    "credentialBindingIdentity",
+    "approvalCapability",
     "approvalInputDigest",
     "approvalRequestIdentity",
     "bindingIdentity",
@@ -248,12 +273,25 @@ test("H4-R4A serialized outer-field substitution fails even with canonical neste
   assert.throws(() => validateSandboxExecutionApprovalBinding(instance), /approvalRequestInstanceId mismatch/)
 })
 
-test("H4-R4A nested requirement substitution cannot be rescued by recomputing only outer fields", () => {
+test("H4-R4A nested requirement policy substitutions fail closed before they can become approval authority", () => {
   const requirement = fixtureRequirement()
   const binding = createSandboxExecutionApprovalBinding(requirement, fixedRequest(requirement))
-  const broken = clone(binding)
-  ;(broken.requirement.workload.source as { digest: string }).digest = OTHER_DIGEST
-  assert.throws(() => validateSandboxExecutionApprovalBinding(broken), /OCI image source identity mismatch/)
+
+  const sourceSubstitution = clone(binding)
+  ;(sourceSubstitution.requirement.workload.source as { digest: string }).digest = OTHER_DIGEST
+  assert.throws(() => validateSandboxExecutionApprovalBinding(sourceSubstitution), /source identity mismatch/i)
+
+  const networkSubstitution = clone(binding)
+  ;(networkSubstitution.requirement.workload.networkPolicy as { mode: string }).mode = "bridge"
+  assert.throws(() => validateSandboxExecutionApprovalBinding(networkSubstitution), /network/i)
+
+  const downgradeSubstitution = clone(binding)
+  ;(downgradeSubstitution.requirement as { downgradePolicy: string }).downgradePolicy = "allow"
+  assert.throws(() => validateSandboxExecutionApprovalBinding(downgradeSubstitution), /downgrade/i)
+
+  const credentialSubstitution = clone(binding)
+  ;(credentialSubstitution.requirement.workload as { credentialBindingIdentity: string | null }).credentialBindingIdentity = "f".repeat(64)
+  assert.throws(() => validateSandboxExecutionApprovalBinding(credentialSubstitution), /credential/i)
 })
 
 test("H4-R4A hostile top-level and approval-request structures fail closed without executing hooks", () => {
