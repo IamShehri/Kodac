@@ -1,8 +1,6 @@
 import { types as utilTypes } from "node:util"
 
 import {
-  KDO_H4_R1_APPROVAL_VERSION,
-  KDO_H4_R1_EVIDENCE_COMMIT_VERSION,
   createApprovalEvidence,
   createApprovalRequest,
   validateApprovalDecision,
@@ -24,10 +22,7 @@ import {
   type SandboxAdmissionPermit,
   type SandboxAdmissionPermitCommit,
 } from "../trust/sandbox-admission-permit.ts"
-import {
-  validateSandboxExecutionRequirement,
-  type SandboxExecutionRequirement,
-} from "../trust/sandbox-backend-evidence.ts"
+import { validateSandboxExecutionRequirement } from "../trust/sandbox-backend-evidence.ts"
 import type { ExecutionIntent, PolicyEngine, PolicyResult } from "../trust/policy.ts"
 
 export const KDO_H4_R4B_A_RUNTIME_VERSION = "kodac-h4-r4b-a-sandbox-admission-approval-runtime-v1" as const
@@ -129,24 +124,22 @@ function validatePolicyResult(value: unknown): PolicyResult {
 function strictApprovalDecision(value: unknown, request: ApprovalRequest) {
   const record = asPlainRecord(value, "R4B-A approval decision")
   exactKeys(record, ["version", "requestIdentity", "requestInstanceId", "outcome"], "R4B-A approval decision")
-  const normalized = Object.freeze({
+  return validateApprovalDecision(Object.freeze({
     version: record.version,
     requestIdentity: record.requestIdentity,
     requestInstanceId: record.requestInstanceId,
     outcome: record.outcome,
-  })
-  return validateApprovalDecision(normalized, request)
+  }), request)
 }
 
 function strictApprovalEvidenceCommit(value: unknown, evidence: ApprovalEvidence, label: string): ApprovalEvidenceCommit {
   const record = asPlainRecord(value, label)
   exactKeys(record, ["version", "evidenceIdentity", "durability"], label)
-  const normalized = Object.freeze({
+  return validateApprovalEvidenceCommit(Object.freeze({
     version: record.version,
     evidenceIdentity: record.evidenceIdentity,
     durability: record.durability,
-  })
-  return validateApprovalEvidenceCommit(normalized, evidence)
+  }), evidence)
 }
 
 export function createSandboxAdmissionApprovalRuntime(value: SandboxAdmissionApprovalRuntimeConfig): SandboxAdmissionApprovalRuntime
@@ -220,22 +213,33 @@ function asynchronousMutationResult<T>(value: Promise<T> | T, label: string): Pr
   return typeof thenValue === "function" ? Promise.resolve(value as unknown as PromiseLike<T>) : null
 }
 
+function cancelledPermitPolicy(): PolicyResult {
+  return Object.freeze({ decision: "ask", reason: "operation aborted" })
+}
+
 async function commitPermitAuthoritatively(
   runtime: SandboxAdmissionApprovalRuntime,
   permit: SandboxAdmissionPermit,
   callerSignal?: AbortSignal,
 ): Promise<SandboxAdmissionPermitCommit> {
   const label = "R4B-A admission permit durable commit"
-  if (callerSignal?.aborted) throw new SandboxAdmissionApprovalBlockedError(`${label} aborted before start`, Object.freeze({ decision: "ask", reason: "operation aborted" }), "cancelled")
+  if (callerSignal?.aborted) {
+    throw new SandboxAdmissionApprovalBlockedError(`${label} aborted before start`, cancelledPermitPolicy(), "cancelled")
+  }
 
   const controller = new AbortController()
   const onAbort = () => controller.abort()
   callerSignal?.addEventListener("abort", onAbort, { once: true })
+  if (callerSignal?.aborted) controller.abort()
   const abortOutcome = new Promise<{ readonly kind: "aborted" }>((resolve) => {
     controller.signal.addEventListener("abort", () => resolve({ kind: "aborted" }), { once: true })
   })
 
   try {
+    if (controller.signal.aborted) {
+      throw new SandboxAdmissionApprovalBlockedError(`${label} aborted before mutation start`, cancelledPermitPolicy(), "cancelled")
+    }
+
     let started: Promise<unknown> | unknown
     try {
       started = runtime.commitAdmissionPermit(permit, { signal: controller.signal })
