@@ -510,7 +510,7 @@ async function postExactDormantCreate(
   prepared: SandboxDormantCreatePrepared,
   signal?: AbortSignal,
 ): Promise<CreateRequestResult> {
-  if (signal?.aborted) return { kind: "indeterminate", detail: "caller aborted immediately before Docker create dispatch" }
+  if (signal?.aborted) throw new SandboxDormantCreateBlockedError("R4B-B1 Docker create blocked by cancellation before dispatch")
   requireSameSocketEndpoint(runtime)
   const body = Buffer.from(dockerCreatePayload(permit, prepared), "utf8")
   const path = `/v${KDO_H4_R4B_B1_DOCKER_API_VERSION}/containers/create?name=${encodeURIComponent(prepared.containerName)}`
@@ -545,7 +545,9 @@ async function postExactDormantCreate(
         )
       })
       const onAbort = () => {
-        const error = new Error(requestStarted ? "R4B-B1 Docker create aborted after dispatch" : "R4B-B1 Docker create aborted before dispatch")
+        const error = requestStarted
+          ? new Error("R4B-B1 Docker create aborted after dispatch")
+          : new SandboxDormantCreateBlockedError("R4B-B1 Docker create blocked by cancellation before dispatch")
         request.destroy(error)
         finishReject(error)
       }
@@ -572,6 +574,7 @@ async function postExactDormantCreate(
     if (parsed.Warnings !== null && (!Array.isArray(parsed.Warnings) || parsed.Warnings.length !== 0)) throw new TypeError("R4B-B1 Docker create response must not contain warnings")
     return { kind: "created", containerId: parsed.Id }
   } catch (error) {
+    if (error instanceof SandboxDormantCreateBlockedError) throw error
     try { requireSameSocketEndpoint(runtime) }
     catch (endpointError) {
       return { kind: "indeterminate", detail: endpointError instanceof Error ? endpointError.message : String(endpointError) }
@@ -701,7 +704,9 @@ function requireNoUnadmittedHostAuthority(inspect: Record<string, unknown>, conf
 async function getExactImagePreflight(
   runtime: TrustedGvisorDockerDormantCreateRuntime,
   prepared: SandboxDormantCreatePrepared,
+  signal?: AbortSignal,
 ): Promise<DockerImagePreflight> {
+  if (signal?.aborted) throw new SandboxDormantCreateBlockedError("R4B-B1 image preflight blocked by cancellation before Docker read")
   requireSameSocketEndpoint(runtime)
   const path = `/v${KDO_H4_R4B_B1_DOCKER_API_VERSION}/images/${encodeURIComponent(prepared.sourceReference)}/json`
   const response = await new Promise<{ readonly statusCode: number; readonly body: Buffer }>((resolve, reject) => {
@@ -709,11 +714,13 @@ async function getExactImagePreflight(
     const finishResolve = (value: { readonly statusCode: number; readonly body: Buffer }) => {
       if (settled) return
       settled = true
+      signal?.removeEventListener("abort", onAbort)
       resolve(value)
     }
     const finishReject = (error: unknown) => {
       if (settled) return
       settled = true
+      signal?.removeEventListener("abort", onAbort)
       reject(error)
     }
     const request = httpRequest({ socketPath: runtime.socketPath, path, method: "GET" }, (incoming) => {
@@ -722,12 +729,19 @@ async function getExactImagePreflight(
         finishReject,
       )
     })
+    const onAbort = () => {
+      const error = new SandboxDormantCreateBlockedError("R4B-B1 image preflight blocked by cancellation during Docker read")
+      request.destroy(error)
+      finishReject(error)
+    }
     request.on("error", finishReject)
     request.setTimeout(KDO_H4_R4B_B1_RUNTIME_LIMITS.requestTimeoutMs, () => {
       const error = new Error("R4B-B1 Docker image preflight timed out")
       request.destroy(error)
       finishReject(error)
     })
+    signal?.addEventListener("abort", onAbort, { once: true })
+    if (signal?.aborted) { onAbort(); return }
     request.end()
   })
   requireSameSocketEndpoint(runtime)
@@ -751,7 +765,9 @@ async function getExactDormantInspect(
   permit: SandboxAdmissionPermit,
   prepared: SandboxDormantCreatePrepared,
   imagePreflight: DockerImagePreflight,
+  signal?: AbortSignal,
 ): Promise<SandboxDormantDockerObservation | null> {
+  if (signal?.aborted) throw new SandboxDormantCreateBlockedError("R4B-B1 reconciliation blocked by cancellation before Docker read")
   requireSameSocketEndpoint(runtime)
   const path = `/v${KDO_H4_R4B_B1_DOCKER_API_VERSION}/containers/${encodeURIComponent(prepared.containerName)}/json`
   const response = await new Promise<{ readonly statusCode: number; readonly body: Buffer }>((resolve, reject) => {
@@ -759,11 +775,13 @@ async function getExactDormantInspect(
     const finishResolve = (value: { readonly statusCode: number; readonly body: Buffer }) => {
       if (settled) return
       settled = true
+      signal?.removeEventListener("abort", onAbort)
       resolve(value)
     }
     const finishReject = (error: unknown) => {
       if (settled) return
       settled = true
+      signal?.removeEventListener("abort", onAbort)
       reject(error)
     }
     const request = httpRequest({ socketPath: runtime.socketPath, path, method: "GET" }, (incoming) => {
@@ -772,12 +790,19 @@ async function getExactDormantInspect(
         finishReject,
       )
     })
+    const onAbort = () => {
+      const error = new SandboxDormantCreateBlockedError("R4B-B1 reconciliation blocked by cancellation during Docker read")
+      request.destroy(error)
+      finishReject(error)
+    }
     request.on("error", finishReject)
     request.setTimeout(KDO_H4_R4B_B1_RUNTIME_LIMITS.requestTimeoutMs, () => {
       const error = new Error("R4B-B1 Docker inspect request timed out")
       request.destroy(error)
       finishReject(error)
     })
+    signal?.addEventListener("abort", onAbort, { once: true })
+    if (signal?.aborted) { onAbort(); return }
     request.end()
   })
   requireSameSocketEndpoint(runtime)
@@ -898,8 +923,9 @@ export class GvisorDockerDormantCreateGateway {
 
     let imagePreflight: DockerImagePreflight
     try {
-      imagePreflight = await getExactImagePreflight(this.#runtime, prepared)
+      imagePreflight = await getExactImagePreflight(this.#runtime, prepared, options.signal)
     } catch (error) {
+      if (error instanceof SandboxDormantCreateBlockedError) throw error
       throw new SandboxDormantCreateIndeterminateError(`R4B-B1 exact image preflight failed before dispatch authority: ${error instanceof Error ? error.message : String(error)}`)
     }
 
@@ -919,8 +945,9 @@ export class GvisorDockerDormantCreateGateway {
 
     let observation: SandboxDormantDockerObservation | null
     try {
-      observation = await getExactDormantInspect(this.#runtime, permit, prepared, imagePreflight)
+      observation = await getExactDormantInspect(this.#runtime, permit, prepared, imagePreflight, options.signal)
     } catch (error) {
+      if (error instanceof SandboxDormantCreateBlockedError) throw error
       throw new SandboxDormantCreateIndeterminateError(`R4B-B1 exact dormant reconciliation failed: ${error instanceof Error ? error.message : String(error)}`)
     }
     if (observation === null) {
