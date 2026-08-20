@@ -124,11 +124,21 @@ test("H4-R4A constants and production dependency boundary are exact", () => {
   }
 })
 
-test("H4-R4A exact requirement and approval occurrence produce one immutable self-validating binding", () => {
+test("H4-R4A exact requirement and approval occurrence produce pinned immutable self-validating vectors", () => {
   const requirement = fixtureRequirement()
   const request = fixedRequest(requirement)
   const binding = createSandboxExecutionApprovalBinding(requirement, request)
 
+  assert.equal(binding.requirementIdentity, "46a11674fd3d973204bdaa8aa140076b5e45b84c276cb66cbb453c0b0b4cbc7f")
+  assert.equal(binding.workloadIdentity, "7e148da8275b34e873bd6fdd33cc5d4977c6577a4f3631ca988c3b9c227801c3")
+  assert.equal(binding.sourceIdentity, "89b8758e4ac8a073c06768ffc6e4aae994cbf4607db33c92ee993a4f1fa23a86")
+  assert.equal(binding.entrypointIdentity, "e3b75ab65d9efc9d41bc16f71cb22a0b7936edb749d46af1697700c34ed0f844")
+  assert.equal(binding.resourcePolicyIdentity, "cf0077cf2277c1800a5bb08f1780abb2504255fa7b58eec369cc2a27811fb510")
+  assert.equal(binding.networkPolicyIdentity, "c17924ecbb8bfaa005dd6c8b0b321adf7f606b19b39672de51ac5b53c14ad3d6")
+  assert.equal(binding.confinementRequestIdentity, "a22b2611b230d184748ab77f59155127a5e7a6c6bfe469df6cb3cbffc7351ee5")
+  assert.equal(binding.approvalInputDigest, "1c72050411b936f0036b76a4e5660803a4a1f1e3a5ba06107e3893b643c05ca3")
+  assert.equal(binding.approvalRequestIdentity, "79866fda0d94eeb4c02fa98f87e1817d373a48e77420ab3815923faf5fd9624b")
+  assert.equal(binding.bindingIdentity, "b69b85d1225d63e750ead34380d691cfa3f737e52d1ae623308933c706d22747")
   assert.equal(binding.requirementIdentity, requirement.requirementIdentity)
   assert.equal(binding.workloadIdentity, requirement.workload.workloadIdentity)
   assert.equal(binding.sourceDigest, FIXTURE_DIGEST)
@@ -141,19 +151,6 @@ test("H4-R4A exact requirement and approval occurrence produce one immutable sel
   for (const value of [binding, binding.requirement, binding.requirement.workload, binding.approvalRequest, binding.approvalRequest.intent, binding.approvalRequest.intent.paths]) {
     assert.equal(Object.isFrozen(value), true)
   }
-
-  console.log("H4_R4A_FIXED_VECTOR", JSON.stringify({
-    requirementIdentity: binding.requirementIdentity,
-    workloadIdentity: binding.workloadIdentity,
-    sourceIdentity: binding.sourceIdentity,
-    entrypointIdentity: binding.entrypointIdentity,
-    resourcePolicyIdentity: binding.resourcePolicyIdentity,
-    networkPolicyIdentity: binding.networkPolicyIdentity,
-    confinementRequestIdentity: binding.confinementRequestIdentity,
-    approvalInputDigest: binding.approvalInputDigest,
-    approvalRequestIdentity: binding.approvalRequestIdentity,
-    bindingIdentity: binding.bindingIdentity,
-  }))
 })
 
 test("H4-R4A same requirement/request pair is deterministic while a new one-shot occurrence changes binding identity", () => {
