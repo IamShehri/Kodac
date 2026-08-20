@@ -351,7 +351,10 @@ function durableStore() {
   }
 }
 
+function rootStage(stage: string): void { process.stderr.write(`B2A_ROOT_STAGE=${stage}\n`) }
+
 async function rootPhysicalProof(): Promise<void> {
+  rootStage("begin")
   assert.equal(process.platform, "linux")
   assert.equal(process.geteuid?.(), 0)
   assert.equal(process.getegid?.(), 0)
@@ -362,7 +365,9 @@ async function rootPhysicalProof(): Promise<void> {
   const preparedForName = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
   let fake: FakeDocker | undefined
   try {
+    rootStage("before-fake-docker")
     fake = await startFakeDocker(root, preparedForName)
+    rootStage("fake-docker-ready")
     const stats = lstatSync(fake.socketPath, { bigint: true })
     const endpoint = createDockerSocketEndpointIdentity({ device: stats.dev.toString(10), inode: stats.ino.toString(10), uid: stats.uid.toString(10), gid: stats.gid.toString(10), mode: stats.mode.toString(10) })
     assert.equal(endpoint.uid, "0"); assert.equal(endpoint.gid, "0"); assert.equal(Number(stats.mode & 0o777n), 0o600)
@@ -370,7 +375,9 @@ async function rootPhysicalProof(): Promise<void> {
     const store = durableStore()
     const runtime = createGvisorDockerPrestartOutputRuntime({ socketPath: fake.socketPath, ...store })
     const gateway = new GvisorDockerPrestartOutputGateway(runtime)
+    rootStage("before-prepare")
     const result = await gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+    rootStage("after-prepare")
     assert.equal(result.status, "PRESTART_READY")
     if (result.status !== "PRESTART_READY") throw new Error("unexpected unavailable result")
     assert.equal(store.state()?.state, "OWNER_CLAIMED")
@@ -378,12 +385,17 @@ async function rootPhysicalProof(): Promise<void> {
     assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, 1)
     assert.equal(fake.requests.some((entry) => /\/start|\/exec|\/restart|\/stop|\/kill|DELETE/.test(entry)), false)
     assert.ok(fake.requests.every((entry) => entry.startsWith("GET ") || entry === `UPGRADE /v1.48/containers/${CONTAINER_ID}/attach?logs=0&stream=1&stdin=0&stdout=1&stderr=1`))
+    rootStage("before-invalidate")
     await gateway.invalidatePrestartOutput(result.readiness)
+    rootStage("after-invalidate")
     assert.equal(store.state()?.state, "FAILED_TERMINAL")
     assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
     assert.equal(fake.requests.some((entry) => entry.includes("/start")), false)
   } finally {
-    await fake?.close(); rmSync(root, { recursive: true, force: true })
+    rootStage("before-close")
+    await fake?.close()
+    rootStage("after-close")
+    rmSync(root, { recursive: true, force: true })
   }
 }
 
@@ -399,7 +411,7 @@ function sudo(args: readonly string[]): void {
   assert.equal(result.status, 0, `sudo ${args.join(" ")} failed\nstdout=${result.stdout}\nstderr=${result.stderr}`)
 }
 function getfacl(path: string): string {
-  const result = spawnSync("getfacl", ["-cp", "--", path], { encoding: "utf8" })
+  const result = spawnSync("getfacl", ["-cpn", "--", path], { encoding: "utf8" })
   assert.equal(result.status, 0, `getfacl failed for ${path}: ${result.stderr}`)
   return result.stdout
 }
