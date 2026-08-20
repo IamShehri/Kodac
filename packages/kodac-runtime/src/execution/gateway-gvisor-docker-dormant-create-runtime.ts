@@ -69,6 +69,9 @@ export interface SandboxDormantCreateDispatchClaimCommit {
 interface DockerImagePreflight {
   readonly imageId: string
   readonly manifestDigest: string
+  readonly user: string
+  readonly env: readonly string[]
+  readonly workingDir: string
 }
 
 export interface GvisorDockerDormantCreateRuntimeConfig {
@@ -608,6 +611,27 @@ function requiredStringArray(record: Record<string, unknown>, key: string, label
   }))
 }
 
+function optionalString(record: Record<string, unknown>, key: string, label: string): string {
+  const value = record[key]
+  if (value === undefined || value === null) return ""
+  if (typeof value !== "string") throw new TypeError(`${label}.${key} must be absent, null, or a string`)
+  return value
+}
+
+function optionalStringArray(record: Record<string, unknown>, key: string, label: string): readonly string[] {
+  const value = record[key]
+  if (value === undefined || value === null) return Object.freeze([])
+  if (!Array.isArray(value) || utilTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError(`${label}.${key} must be absent, null, or a plain array`)
+  return Object.freeze(value.map((entry, index) => {
+    if (typeof entry !== "string") throw new TypeError(`${label}.${key}[${index}] must be a string`)
+    return entry
+  }))
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
 function optionalEmptyArray(record: Record<string, unknown>, key: string, label: string): void {
   const value = record[key]
   if (value === undefined || value === null) return
@@ -714,12 +738,12 @@ async function getExactImagePreflight(
   const descriptor = requiredRecord(image, "Descriptor", "Docker image preflight")
   const manifestDigest = requiredString(descriptor, "digest", "Docker image preflight Descriptor")
   if (manifestDigest !== prepared.sourceDigest) throw new TypeError("Docker image preflight manifest digest does not match admitted source digest")
-  const imageConfigValue = image.Config
-  if (imageConfigValue !== undefined && imageConfigValue !== null) {
-    const imageConfig = asPlainRecord(imageConfigValue, "Docker image preflight Config")
-    optionalEmptyRecord(imageConfig, "Volumes", "Docker image preflight Config")
-  }
-  return Object.freeze({ imageId, manifestDigest })
+  const imageConfig = requiredRecord(image, "Config", "Docker image preflight")
+  optionalEmptyRecord(imageConfig, "Volumes", "Docker image preflight Config")
+  const user = optionalString(imageConfig, "User", "Docker image preflight Config")
+  const env = optionalStringArray(imageConfig, "Env", "Docker image preflight Config")
+  const workingDir = optionalString(imageConfig, "WorkingDir", "Docker image preflight Config")
+  return Object.freeze({ imageId, manifestDigest, user, env, workingDir })
 }
 
 async function getExactDormantInspect(
@@ -780,6 +804,12 @@ async function getExactDormantInspect(
 
   const config = requiredRecord(inspect, "Config", "Docker inspect")
   if (requiredString(config, "Image", "Docker inspect Config") !== prepared.sourceReference) throw new TypeError("Docker inspect Config.Image does not match exact admitted source reference")
+  const observedUser = optionalString(config, "User", "Docker inspect Config")
+  if (observedUser !== imagePreflight.user) throw new TypeError("Docker inspect Config.User does not match exact image preflight Config.User")
+  const observedEnv = optionalStringArray(config, "Env", "Docker inspect Config")
+  if (!sameStringArray(observedEnv, imagePreflight.env)) throw new TypeError("Docker inspect Config.Env does not match exact image preflight Config.Env")
+  const observedWorkingDir = optionalString(config, "WorkingDir", "Docker inspect Config")
+  if (observedWorkingDir !== imagePreflight.workingDir) throw new TypeError("Docker inspect Config.WorkingDir does not match exact image preflight Config.WorkingDir")
   const tty = requiredBoolean(config, "Tty", "Docker inspect Config")
   const labelsRecord = requiredRecord(config, "Labels", "Docker inspect Config")
   const expectedLabels: Record<string, string> = { ...prepared.labels, [KDO_H4_R4B_B1_LABELS.bindingVersion]: KDO_H4_R3F_BINDING_VERSION }
