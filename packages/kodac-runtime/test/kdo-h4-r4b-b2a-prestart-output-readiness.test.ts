@@ -211,7 +211,7 @@ test("H4-R4B-B2A durable failure enum excludes indeterminate replay pseudo-failu
   }
   for (const forbidden of ["indeterminate", "owner-already-claimed", "owner-lost-indeterminate"]) {
     const failure = createSandboxPrestartFailure(fixture.prepared, "attaching", "aborted", null)
-    const hostile = clone(failure) as Record<string, unknown>
+    const hostile = clone(failure) as unknown as Record<string, unknown>
     hostile.failureCode = forbidden
     assert.throws(() => validateSandboxPrestartFailure(hostile, fixture.prepared), /failureCode/)
   }
