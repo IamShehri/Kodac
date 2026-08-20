@@ -373,7 +373,13 @@ async function rootPhysicalProof(): Promise<void> {
     assert.equal(endpoint.uid, "0"); assert.equal(endpoint.gid, "0"); assert.equal(Number(stats.mode & 0o777n), 0o600)
     const lineage = b1Lineage(permit, endpoint)
     const store = durableStore()
-    const runtime = createGvisorDockerPrestartOutputRuntime({ socketPath: fake.socketPath, ...store })
+    const runtime = createGvisorDockerPrestartOutputRuntime({
+      socketPath: fake.socketPath,
+      commitPreparationTransaction: store.commitPreparationTransaction,
+      readStateFence: store.readStateFence,
+      commitOwnershipClaimTransaction: store.commitOwnershipClaimTransaction,
+      commitFailureTransaction: store.commitFailureTransaction,
+    })
     const gateway = new GvisorDockerPrestartOutputGateway(runtime)
     rootStage("before-prepare")
     const result = await gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
