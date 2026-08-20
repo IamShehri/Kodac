@@ -501,6 +501,8 @@ function dockerCreatePayload(permit: SandboxAdmissionPermit, prepared: SandboxDo
     Entrypoint: [prepared.entrypointExecutable],
     Cmd: [...requirement.workload.entrypoint.args],
     AttachStdin: false,
+    AttachStdout: true,
+    AttachStderr: true,
     Tty: false,
     OpenStdin: false,
     StdinOnce: false,
@@ -711,8 +713,6 @@ function requireNoUnadmittedHostAuthority(inspect: Record<string, unknown>, conf
   optionalStringIn(hostConfig, "CgroupParent", [""], "Docker inspect HostConfig")
   optionalStringIn(hostConfig, "VolumeDriver", [""], "Docker inspect HostConfig")
 
-  optionalFalse(config, "AttachStdin", "Docker inspect Config")
-  optionalFalse(config, "OpenStdin", "Docker inspect Config")
   optionalFalse(config, "StdinOnce", "Docker inspect Config")
   optionalFalse(config, "NetworkDisabled", "Docker inspect Config")
   optionalEmptyRecord(config, "Volumes", "Docker inspect Config")
@@ -866,6 +866,10 @@ async function getExactDormantInspect(
   if (!sameStringArray(observedEnv, imagePreflight.env)) throw new TypeError("Docker inspect Config.Env does not match exact image preflight Config.Env")
   const observedWorkingDir = optionalString(config, "WorkingDir", "Docker inspect Config")
   if (observedWorkingDir !== imagePreflight.workingDir) throw new TypeError("Docker inspect Config.WorkingDir does not match exact image preflight Config.WorkingDir")
+  if (requiredBoolean(config, "AttachStdout", "Docker inspect Config") !== true) throw new TypeError("Docker inspect Config.AttachStdout must be exactly true")
+  if (requiredBoolean(config, "AttachStderr", "Docker inspect Config") !== true) throw new TypeError("Docker inspect Config.AttachStderr must be exactly true")
+  if (requiredBoolean(config, "AttachStdin", "Docker inspect Config") !== false) throw new TypeError("Docker inspect Config.AttachStdin must be exactly false")
+  if (requiredBoolean(config, "OpenStdin", "Docker inspect Config") !== false) throw new TypeError("Docker inspect Config.OpenStdin must be exactly false")
   const tty = requiredBoolean(config, "Tty", "Docker inspect Config")
   const labelsRecord = requiredRecord(config, "Labels", "Docker inspect Config")
   const expectedLabels: Record<string, string> = { ...prepared.labels, [KDO_H4_R4B_B1_LABELS.bindingVersion]: KDO_H4_R3F_BINDING_VERSION }
