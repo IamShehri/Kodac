@@ -142,9 +142,9 @@ function canonicalSocketPath(value: unknown): string {
   return value
 }
 
-function trustedCallback(value: unknown, label: string): GvisorDockerDormantCreateRuntimeConfig["commitReservation"] {
+function trustedCallback<T>(value: unknown, label: string): T {
   if (typeof value !== "function" || utilTypes.isProxy(value)) throw new TypeError(`${label} must be a non-proxy function`)
-  return value as GvisorDockerDormantCreateRuntimeConfig["commitReservation"]
+  return value as T
 }
 
 function snapshotSocketEndpoint(socketPath: string): DockerSocketEndpointIdentity {
@@ -175,9 +175,9 @@ export function createGvisorDockerDormantCreateRuntime(value: unknown): TrustedG
     version: KDO_H4_R4B_B1_RUNTIME_VERSION,
     socketPath,
     socketEndpoint: snapshotSocketEndpoint(socketPath),
-    commitReservation: trustedCallback(record.commitReservation, "commitReservation") as GvisorDockerDormantCreateRuntimeConfig["commitReservation"],
-    commitCreatePrepared: trustedCallback(record.commitCreatePrepared, "commitCreatePrepared") as GvisorDockerDormantCreateRuntimeConfig["commitCreatePrepared"],
-    commitCreatedAdmission: trustedCallback(record.commitCreatedAdmission, "commitCreatedAdmission") as GvisorDockerDormantCreateRuntimeConfig["commitCreatedAdmission"],
+    commitReservation: trustedCallback<GvisorDockerDormantCreateRuntimeConfig["commitReservation"]>(record.commitReservation, "commitReservation"),
+    commitCreatePrepared: trustedCallback<GvisorDockerDormantCreateRuntimeConfig["commitCreatePrepared"]>(record.commitCreatePrepared, "commitCreatePrepared"),
+    commitCreatedAdmission: trustedCallback<GvisorDockerDormantCreateRuntimeConfig["commitCreatedAdmission"]>(record.commitCreatedAdmission, "commitCreatedAdmission"),
   })
   trustedRuntimes.add(runtime)
   return runtime
