@@ -493,8 +493,8 @@ async function posixAclPhysicalProof(): Promise<void> {
     sudo(["setfacl", "-m", `u:${actor.fsuid}:rw,m:---`, "--", extDenySocket])
 
     const extSocketAcl = getfacl(extDenySocket); const extDirAcl = getfacl(extDenyDir)
-    assert.match(extSocketAcl, new RegExp(`^user:${actor.fsuid}:rw-$`, "m")); assert.match(extSocketAcl, /^mask::---$/m)
-    assert.match(extDirAcl, new RegExp(`^user:${actor.fsuid}:rwx$`, "m")); assert.match(extDirAcl, /^mask::r-x$/m)
+    assert.match(extSocketAcl, new RegExp(`^user:${actor.fsuid}:rw-\\s+#effective:---$`, "m")); assert.match(extSocketAcl, /^mask::---$/m)
+    assert.match(extDirAcl, new RegExp(`^user:${actor.fsuid}:rwx\\s+#effective:r-x$`, "m")); assert.match(extDirAcl, /^mask::r-x$/m)
     assert.equal(Number(lstatSync(extDenyDir, { bigint: true }).mode & 0o1000n), 0)
     assert.equal(Number(lstatSync(extDenySocket, { bigint: true }).mode & 0o777n), 0o600)
     await connectUnix(extControlSocket); await expectConnectEacces(extDenySocket)
@@ -525,7 +525,7 @@ async function posixAclPhysicalProof(): Promise<void> {
 if (process.env.KODAC_B2A_ROOT_CHILD !== "1") {
   test("H4-R4B-B2A Linux physical root proof reaches PRESTART_READY without start", { skip: process.platform !== "linux" }, () => {
     const script = fileURLToPath(import.meta.url)
-    const result = spawnSync("sudo", ["-n", process.execPath, "--experimental-strip-types", script], { env: { ...process.env, KODAC_B2A_ROOT_CHILD: "1" }, encoding: "utf8", timeout: 30_000 })
+    const result = spawnSync("sudo", ["-n", "/usr/bin/env", "KODAC_B2A_ROOT_CHILD=1", process.execPath, "--experimental-strip-types", script], { encoding: "utf8", timeout: 30_000 })
     if (process.env.GITHUB_ACTIONS === "true") {
       assert.equal(result.status, 0, `root B2A proof failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
       assert.match(result.stdout, /B2A_ROOT_PROOF_PASS/)
