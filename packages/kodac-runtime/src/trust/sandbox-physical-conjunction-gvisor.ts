@@ -705,12 +705,24 @@ export function createGvisorPhysicalConjunctionRecord(input: {
   const requirement = validateSandboxExecutionRequirement(record.requirement)
   const resolution = validateGvisorPhysicalEvidenceResolution(record.resolution, requirement)
   const coherence = validateGvisorPhysicalSubjectCoherence(record.coherence, requirement, resolution)
-  const mint = record.mint as GvisorPhysicalProofMint
+  const mintRecord = asPlainRecord(record.mint, "R3G-F conjunction record mint")
+  exactKeys(mintRecord, [
+    "capability", "observation", "evidence",
+    "conjunctionImplementationIdentity", "conjunctionObserverIdentity", "executionInstanceIdentity",
+  ], "R3G-F conjunction record mint")
+  const mint = Object.freeze({
+    capability: validateSandboxBackendCapabilityDeclaration(mintRecord.capability),
+    observation: validateSandboxBackendObservation(mintRecord.observation),
+    evidence: validateSandboxExecutionEvidence(mintRecord.evidence),
+    conjunctionImplementationIdentity: identity(mintRecord.conjunctionImplementationIdentity, "conjunctionImplementationIdentity"),
+    conjunctionObserverIdentity: identity(mintRecord.conjunctionObserverIdentity, "conjunctionObserverIdentity"),
+    executionInstanceIdentity: identity(mintRecord.executionInstanceIdentity, "executionInstanceIdentity"),
+  })
   const canonicalMint = mintGvisorPhysicalProof(requirement, resolution, coherence)
   if (
-    mint.capability?.capabilityIdentity !== canonicalMint.capability.capabilityIdentity ||
-    mint.observation?.observationIdentity !== canonicalMint.observation.observationIdentity ||
-    mint.evidence?.evidenceIdentity !== canonicalMint.evidence.evidenceIdentity ||
+    mint.capability.capabilityIdentity !== canonicalMint.capability.capabilityIdentity ||
+    mint.observation.observationIdentity !== canonicalMint.observation.observationIdentity ||
+    mint.evidence.evidenceIdentity !== canonicalMint.evidence.evidenceIdentity ||
     mint.conjunctionImplementationIdentity !== canonicalMint.conjunctionImplementationIdentity ||
     mint.conjunctionObserverIdentity !== canonicalMint.conjunctionObserverIdentity ||
     mint.executionInstanceIdentity !== canonicalMint.executionInstanceIdentity
@@ -808,7 +820,15 @@ export function createGvisorPhysicalConjunctionCommit(recordValue: GvisorPhysica
     evidenceBundleIdentity: record.evidenceBundleIdentity,
     recordIdentity: record.recordIdentity,
   })
-  return Object.freeze({ ...base, commitIdentity: hash("CONJUNCTION_COMMIT", base) })
+  return Object.freeze({
+    ...base,
+    commitIdentity: hash("CONJUNCTION_COMMIT", [
+      base.version,
+      base.executionAttemptIdentity,
+      base.evidenceBundleIdentity,
+      base.recordIdentity,
+    ]),
+  })
 }
 
 export function validateGvisorPhysicalConjunctionCommit(value: unknown, expectedRecord: GvisorPhysicalConjunctionRecord): GvisorPhysicalConjunctionCommit {
