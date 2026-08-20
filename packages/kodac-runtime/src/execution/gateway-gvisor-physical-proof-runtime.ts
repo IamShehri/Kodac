@@ -234,7 +234,7 @@ async function boundedDurableCommit(
     }
     const mutation = asynchronousMutationResult(started, label)
     if (mutation === null) {
-      if (controller.signal.aborted) throw new Error(`${label} trusted callback returned success after abort`)
+      if (controller.signal.aborted) throw new GvisorPhysicalCommitAbortError(`${label} trusted callback returned success after abort`)
       return started
     }
     const mutationOutcome = mutation.then(
@@ -242,14 +242,17 @@ async function boundedDurableCommit(
       (error: unknown) => ({ kind: "rejected" as const, error }),
     )
     const first = await Promise.race([mutationOutcome, abortOutcome])
-    if (first.kind === "fulfilled") return first.value
+    if (first.kind === "fulfilled") {
+      if (controller.signal.aborted) throw new GvisorPhysicalCommitAbortError(`${label} trusted callback settled successfully after abort`)
+      return first.value
+    }
     if (first.kind === "rejected") {
       if (first.error instanceof Error) throw first.error
       throw new Error(`${label} failed: ${String(first.error)}`)
     }
     const final = await mutationOutcome
     if (final.kind === "rejected") throw new GvisorPhysicalCommitAbortError(`${label} aborted before durable completion`)
-    throw new Error(`${label} trusted callback settled successfully after abort`)
+    throw new GvisorPhysicalCommitAbortError(`${label} trusted callback settled successfully after abort`)
   } finally {
     if (timer !== undefined) clearTimeout(timer)
     callerSignal?.removeEventListener("abort", onCallerAbort)
