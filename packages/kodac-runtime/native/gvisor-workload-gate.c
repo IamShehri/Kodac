@@ -14,7 +14,6 @@
  */
 
 #include <errno.h>
-#include <string.h>
 #include <unistd.h>
 
 #define KODAC_GATE_FAILURE_EXIT 125
@@ -25,7 +24,6 @@ static void fail_closed(void) {
 }
 
 static void require_exact_permit(void) {
-  static const char expected[] = "GO\n";
   char permit[KODAC_GATE_PERMIT_MAX_BYTES];
   size_t used = 0;
 
@@ -47,8 +45,7 @@ static void require_exact_permit(void) {
     used += (size_t)count;
   }
 
-  if (used != sizeof expected - 1 ||
-      memcmp(permit, expected, sizeof expected - 1) != 0) {
+  if (used != 3 || permit[0] != 'G' || permit[1] != 'O' || permit[2] != '\n') {
     fail_closed();
   }
 }
