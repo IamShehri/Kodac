@@ -535,6 +535,19 @@ async function rootPhysicalProof(): Promise<void> {
     const endpoint = createDockerSocketEndpointIdentity({ device: stats.dev.toString(10), inode: stats.ino.toString(10), uid: stats.uid.toString(10), gid: stats.gid.toString(10), mode: stats.mode.toString(10) })
     assert.equal(endpoint.uid, "0"); assert.equal(endpoint.gid, "0"); assert.equal(Number(stats.mode & 0o777n), 0o600)
     const lineage = b1Lineage(permit, endpoint)
+
+    const requestsBeforeUntrustedPreflight = fake.requests.length
+    chmodSync(fake.socketPath, 0o660)
+    try {
+      await assert.rejects(
+        new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, durableStore())).preparePrestartOutput(permit, lineage.created, lineage.createdCommit),
+        /B2A pre-I\/O host trust rejected/,
+      )
+      assert.equal(fake.requests.length, requestsBeforeUntrustedPreflight, "B2A initial host-trust rejection must occur before any Docker request")
+    } finally {
+      chmodSync(fake.socketPath, 0o600)
+    }
+
     const store = durableStore()
     const runtime = runtimeFromStore(fake.socketPath, store)
     const gateway = new GvisorDockerPrestartOutputGateway(runtime)
