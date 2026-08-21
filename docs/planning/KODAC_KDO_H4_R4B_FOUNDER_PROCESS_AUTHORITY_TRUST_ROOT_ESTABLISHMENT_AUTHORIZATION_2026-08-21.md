@@ -132,6 +132,7 @@ BOOTSTRAP_APPROVAL_RECORD_BINDS_EXACT_HEAD=YES
 BOOTSTRAP_APPROVAL_RECORD_BINDS_TRUST_ROOT_ID=YES
 BOOTSTRAP_APPROVAL_RECORD_BINDS_SPKI_SHA256=YES
 BOOTSTRAP_APPROVAL_RECORD_BINDS_ESTABLISHMENT_PREIMAGE_SHA256=YES
+BOOTSTRAP_APPROVAL_RECORD_BINDS_NONCE_DISPOSITION_SHA256=YES
 BOOTSTRAP_REPOSITORY=TheHalfMoon/Kodac
 BOOTSTRAP_PREDECESSOR_COMMIT=13559f7397561d62078af94b4717b5f887033369
 ```
@@ -149,12 +150,13 @@ EXACT_HEAD=<exact reviewed trust-root candidate head SHA>
 TRUST_ROOT_ID_SHA256=<64 lowercase hex chars>
 PUBLIC_KEY_SPKI_DER_SHA256=<64 lowercase hex chars>
 ESTABLISHMENT_PREIMAGE_SHA256=<64 lowercase hex chars>
+ESTABLISHMENT_NONCE_DISPOSITION_SHA256=<64 lowercase hex chars>
 ```
 
-4. evidence that the comment author login, comment ID/URL, timestamp, exact head, trust-root ID, SPKI digest, and establishment-preimage digest all match the candidate; and
+4. evidence that the comment author login, comment ID/URL, timestamp, exact head, trust-root ID, SPKI digest, establishment-preimage digest, and nonce-disposition digest all match the candidate; and
 5. expected-head fenced canonical merge of that exact candidate.
 
-The approval comment is the one-time governance bootstrap binding of the public key to founder authority. It does not replace the Ed25519 signature or prove later process authority.
+The approval comment is the one-time governance bootstrap binding of the public key to founder authority. It does not replace the Ed25519 signatures or prove later process authority.
 
 After the trust root becomes canonical, GitHub authorship, comments, PR ownership, hashes, or merge status alone are never sufficient for process authority; later authority records must verify under the canonical Ed25519 key.
 
@@ -192,19 +194,6 @@ signatureAlgorithm=Ed25519
 
 `challengeNonceHex` is exactly 64 lowercase hexadecimal characters generated out of band for this establishment attempt.
 
-The establishment nonce lifecycle is fail-closed and single-use:
-
-```text
-ESTABLISHMENT_NONCE_SINGLE_USE=REQUIRED
-ESTABLISHMENT_NONCE_SCOPE=ONE_EXACT_ESTABLISHMENT_PREIMAGE_ONLY
-ESTABLISHMENT_NONCE_CONSUMED_AT=FIRST_ESTABLISHMENT_SIGNATURE_CREATION
-ESTABLISHMENT_NONCE_REUSE_WITH_DIFFERENT_PREIMAGE=FORBIDDEN
-ABANDONED_OR_FAILED_ESTABLISHMENT_NONCE_REUSE=FORBIDDEN
-CANONICALIZED_ESTABLISHMENT_NONCE_REUSE=FORBIDDEN
-```
-
-A consumed nonce may remain attached to the exact same signed establishment preimage while an otherwise unrelated candidate-head repair is reviewed, but it may never authenticate a different establishment preimage. If the trust-root record's signed `establishment` object changes for any reason, a fresh nonce and fresh Ed25519 signature are required. If an establishment attempt is abandoned or fails before canonical merge, its nonce is retired permanently.
-
 `issuedAtUtc` is RFC 3339 UTC with `Z` and second precision.
 
 Normative preimage:
@@ -231,6 +220,90 @@ ESTABLISHMENT_SIGNATURE_HEX_CASE=LOWERCASE
 
 The Ed25519 signature authenticates the exact `ESTABLISHMENT_PREIMAGE` bytes, not an alternate serialization or only its digest.
 
+### 8.1 Authoritative atomic establishment-nonce disposition
+
+Single-use nonce semantics are represented by a separate signed public disposition record. Prose, timestamps, an in-memory set, or the presence of the establishment signature alone are not sufficient nonce state.
+
+The disposition object contains exactly these **ten string fields**:
+
+```text
+schemaVersion
+repository
+authorizationCommit
+trustRootIdSha256
+establishmentPreimageSha256
+challengeNonceHex
+disposition
+sequence
+previousDispositionSha256
+recordedAtUtc
+```
+
+Fixed fields:
+
+```text
+schemaVersion=kodac-founder-process-authority-establishment-nonce-disposition-v1
+repository=TheHalfMoon/Kodac
+authorizationCommit=<canonical merge commit of this authorization PR>
+trustRootIdSha256=<exact trust-root identity from the signed establishment object>
+establishmentPreimageSha256=<exact ESTABLISHMENT_PREIMAGE_SHA256>
+challengeNonceHex=<exact nonce from the signed establishment object>
+```
+
+Allowed state transitions are exactly:
+
+```text
+INITIAL -> CONSUMED_FOR_PREIMAGE
+CONSUMED_FOR_PREIMAGE -> RETIRED_ABANDONED
+CONSUMED_FOR_PREIMAGE -> RETIRED_SUPERSEDED
+```
+
+No other transition is valid. `CONSUMED_FOR_PREIMAGE` is sequence `1` with `previousDispositionSha256` equal to 64 lowercase zeroes. A terminal retirement is sequence `2` and must set `previousDispositionSha256` to the SHA-256 identity of the exact sequence-1 disposition preimage.
+
+Disposition preimage and signature:
+
+```text
+ESTABLISHMENT_NONCE_DISPOSITION_DOMAIN=kodac-founder-process-authority-establishment-nonce-disposition-v1
+ESTABLISHMENT_NONCE_DISPOSITION_JCS=UTF8(RFC8785_JCS(<strict disposition object>))
+ESTABLISHMENT_NONCE_DISPOSITION_PREIMAGE=
+  UTF8(ESTABLISHMENT_NONCE_DISPOSITION_DOMAIN)
+  || 0x00
+  || ESTABLISHMENT_NONCE_DISPOSITION_JCS
+ESTABLISHMENT_NONCE_DISPOSITION_SHA256=sha256(ESTABLISHMENT_NONCE_DISPOSITION_PREIMAGE)
+ESTABLISHMENT_NONCE_DISPOSITION_SIGNATURE=Ed25519_sign(EXACT_PREIMAGE)
+```
+
+The same founder private key used for the establishment possession proof signs each disposition record under this distinct domain. The signature is 64 bytes / 128 lowercase hexadecimal characters.
+
+The out-of-band signer must enforce a durable atomic state machine keyed by:
+
+```text
+(authorizationCommit, trustRootIdSha256, challengeNonceHex)
+```
+
+Before the first establishment signature is released, it must atomically create the sequence-1 `CONSUMED_FOR_PREIMAGE` state only if that key is absent. If the key already exists, signing fails closed. A retirement must be an atomic compare-and-set from the exact sequence-1 digest to exactly one terminal sequence-2 state. Missing state, duplicate creation, competing terminal states, a broken previous-digest link, or any conflicting record is invalid.
+
+Candidate-head lifecycle is explicit:
+
+```text
+HEAD_REPAIR_WITH_IDENTICAL_ESTABLISHMENT_PREIMAGE=KEEP_SEQUENCE_1_CONSUMED_RECORD
+HEAD_REPAIR_CHANGING_ESTABLISHMENT_PREIMAGE=RETIRE_OLD_AS_RETIRED_SUPERSEDED_AND_USE_FRESH_NONCE
+ABANDONED_OR_FAILED_ESTABLISHMENT=RETIRE_AS_RETIRED_ABANDONED
+RETRY_AFTER_RETIREMENT=FRESH_NONCE_AND_FRESH_SEQUENCE_1_RECORD
+CANONICAL_MERGE=SEQUENCE_1_CONSUMED_RECORD_REMAINS_BOUND_TO_CANONICAL_PREIMAGE
+```
+
+A positive trust-root candidate must present exactly one valid sequence-1 `CONSUMED_FOR_PREIMAGE` record for its current nonce/preimage and no terminal retirement for that same key. If a terminal retirement exists, that attempt is permanently ineligible for merge. Retirement records for earlier attempts in the same establishment effort must be retained in evidence and must not conflict with the current fresh nonce.
+
+If disposition state is absent, cannot be atomically proven, has conflicting records, has an invalid transition, is bound to another authorization commit/trust-root ID/preimage/nonce, or indicates retirement of the current attempt:
+
+```text
+TRUST_ROOT_ESTABLISHMENT_NONCE_DISPOSITION_PROOF=FAIL
+TRUST_ROOT_ESTABLISHMENT_NONCE_SINGLE_USE_PROOF=FAIL
+FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT=NOT_PROVEN
+ARTIFACT_PROCESS_EXECUTION=FORBIDDEN
+```
+
 ---
 
 ## 9. Canonical trust-root record
@@ -250,12 +323,26 @@ The future committed trust-root JSON must contain exactly:
     "trustRootIdSha256": "<64 lowercase hex chars>",
     "trustRootScheme": "kodac-founder-process-authority-ed25519-v1"
   },
+  "establishmentNonceDisposition": {
+    "authorizationCommit": "<same canonical authorization merge SHA>",
+    "challengeNonceHex": "<same nonce>",
+    "disposition": "CONSUMED_FOR_PREIMAGE",
+    "establishmentPreimageSha256": "<same preimage digest>",
+    "previousDispositionSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "recordedAtUtc": "<RFC3339 UTC Z second precision>",
+    "repository": "TheHalfMoon/Kodac",
+    "schemaVersion": "kodac-founder-process-authority-establishment-nonce-disposition-v1",
+    "sequence": "1",
+    "trustRootIdSha256": "<same trust-root ID>"
+  },
+  "establishmentNonceDispositionSha256": "<64 lowercase hex chars>",
+  "establishmentNonceDispositionSignatureHex": "<128 lowercase hex chars>",
   "establishmentPreimageSha256": "<64 lowercase hex chars>",
   "establishmentSignatureHex": "<128 lowercase hex chars>"
 }
 ```
 
-Unknown fields are forbidden. The digest and signature remain detached from the signed `establishment` object, preventing self-reference.
+Unknown fields are forbidden. The establishment digest/signature and nonce-disposition digest/signature remain detached from their respective signed objects, preventing self-reference.
 
 ---
 
@@ -295,8 +382,16 @@ TRUST_ROOT_ID_PROOF=PASS
 TRUST_ROOT_ESTABLISHMENT_JCS_PROOF=PASS
 TRUST_ROOT_ESTABLISHMENT_PREIMAGE_PROOF=PASS
 TRUST_ROOT_ESTABLISHMENT_SIGNATURE_PROOF=PASS
+TRUST_ROOT_NONCE_DISPOSITION_SCHEMA_PROOF=PASS
+TRUST_ROOT_NONCE_DISPOSITION_BINDING_PROOF=PASS
+TRUST_ROOT_NONCE_DISPOSITION_SIGNATURE_PROOF=PASS
+TRUST_ROOT_NONCE_DISPOSITION_TRANSITION_PROOF=PASS
+TRUST_ROOT_NONCE_DISPOSITION_ATOMIC_STATE_PROOF=PASS
+TRUST_ROOT_ESTABLISHMENT_NONCE_SINGLE_USE_PROOF=PASS
 TRUST_ROOT_PRIVATE_MATERIAL_ABSENCE_PROOF=PASS
 ```
+
+For a positive current candidate, `verifyTrustRootRecord` must require the sequence-1 `CONSUMED_FOR_PREIMAGE` record embedded in the trust-root JSON, verify its detached signature and digest, verify exact binding to the signed establishment object, and reject any supplied terminal record or conflicting disposition history. Terminal retirement records from earlier failed/superseded attempts are verified as evidence inputs and may never authorize the current candidate.
 
 `verifyProcessAuthorityEnvelope` must implement canonical PR #144 without widening it. It must at minimum:
 
@@ -318,9 +413,9 @@ The verifier consumes explicitly supplied bytes only at its external trust bound
 
 No new JSON-canonicalization dependency is authorized. The verifier may implement only the exact RFC 8785 subset required by these contracts.
 
-The outer trust-root record may contain the single nested `establishment` object defined in Section 9. Duplicate-member rejection applies recursively to the complete raw JSON input before any nested object is trusted.
+The outer trust-root record may contain the nested `establishment` and `establishmentNonceDisposition` objects defined in Section 9. Duplicate-member rejection applies recursively to the complete raw JSON input before any nested object is trusted.
 
-For each **signed flat object** (`establishment` and the canonical PR #144 authority object):
+For each **signed flat object** (`establishment`, `establishmentNonceDisposition`, and the canonical PR #144 authority object):
 
 ```text
 JSON_OBJECT_ONLY=YES
@@ -364,7 +459,7 @@ SIGNING_BY_CHATGPT=0
 SIGNING_BY_AGENT=0
 ```
 
-The founder generates and retains the private key out of band using a trusted local/hardware process. Only the public SPKI DER and public signature may enter the future PR.
+The founder generates and retains the private key out of band using a trusted local/hardware process. Only public SPKI DER, public signatures, and public disposition records may enter the future PR.
 
 Loss or suspected compromise requires a separately authorized rotation/revocation slice. Silent replacement is forbidden.
 
@@ -455,9 +550,22 @@ wrong JSON value type -> FAIL
 alternate key ordering -> SAME_CANONICAL_PREIMAGE
 RFC8785 UTF-16 property ordering test vector -> PASS
 private-key-shaped field present -> FAIL
-same establishment nonce + exact same establishment preimage -> SAME_SIGNED_RECORD_ONLY
-same establishment nonce + different establishment preimage -> FAIL
-retired/abandoned establishment nonce reused -> FAIL
+valid sequence-1 CONSUMED_FOR_PREIMAGE disposition -> PASS
+missing nonce disposition -> FAIL
+disposition signature mutation -> FAIL
+disposition authorizationCommit mismatch -> FAIL
+disposition trustRootId mismatch -> FAIL
+disposition establishmentPreimage mismatch -> FAIL
+disposition challenge nonce mismatch -> FAIL
+sequence-1 nonzero previous digest -> FAIL
+duplicate atomic consumption for same nonce key -> FAIL
+candidate-head repair + identical establishment preimage -> SAME_CONSUMED_RECORD_VALID
+candidate-head repair + changed establishment preimage + old nonce -> FAIL
+changed establishment preimage + RETIRED_SUPERSEDED old nonce + fresh nonce -> PASS
+abandoned attempt + RETIRED_ABANDONED -> TERMINAL_NOT_PROVEN
+retired current nonce presented for positive candidate -> FAIL
+competing terminal dispositions -> FAIL
+broken retirement previous-digest link -> FAIL
 process-authority signature valid under wrong key -> FAIL
 process-authority signature mutation -> FAIL
 process-authority wrong repository -> FAIL
@@ -485,15 +593,22 @@ public SPKI DER hex
 public SPKI DER SHA-256
 trustRootIdSha256
 establishment challenge nonce hex
-establishment nonce single-use/retirement disposition
 establishment preimage SHA-256
 establishment signature hex
+current nonce disposition object
+current nonce disposition preimage SHA-256
+current nonce disposition signature hex
+atomic nonce state key
+atomic sequence/previous-digest proof
+terminal retirement records and signatures for any earlier abandoned/superseded attempt
+candidate-head repair versus abandonment disposition classification
 founder bootstrap approval comment author login
 founder bootstrap approval comment ID/URL/timestamp
 founder bootstrap approval exact-head binding
 founder bootstrap approval trust-root-ID binding
 founder bootstrap approval SPKI-digest binding
 founder bootstrap approval establishment-preimage binding
+founder bootstrap approval nonce-disposition binding
 Node version used for verification
 focused trust-root test result
 full required runtime test result
@@ -504,7 +619,7 @@ final main/head diff fence
 expected-head SHA merge fence
 ```
 
-The evidence must state that the public key/signature are public verification artifacts and that repository tooling accessed no private key.
+The evidence must state that the public key/signatures/disposition records are public verification artifacts and that repository tooling accessed no private key.
 
 ---
 
@@ -531,8 +646,13 @@ TRUST_ROOT_ID_PROOF=PASS
 TRUST_ROOT_ESTABLISHMENT_JCS_PROOF=PASS
 TRUST_ROOT_ESTABLISHMENT_PREIMAGE_PROOF=PASS
 TRUST_ROOT_ESTABLISHMENT_SIGNATURE_PROOF=PASS
-TRUST_ROOT_PRIVATE_MATERIAL_ABSENCE_PROOF=PASS
+TRUST_ROOT_NONCE_DISPOSITION_SCHEMA_PROOF=PASS
+TRUST_ROOT_NONCE_DISPOSITION_BINDING_PROOF=PASS
+TRUST_ROOT_NONCE_DISPOSITION_SIGNATURE_PROOF=PASS
+TRUST_ROOT_NONCE_DISPOSITION_TRANSITION_PROOF=PASS
+TRUST_ROOT_NONCE_DISPOSITION_ATOMIC_STATE_PROOF=PASS
 TRUST_ROOT_ESTABLISHMENT_NONCE_SINGLE_USE_PROOF=PASS
+TRUST_ROOT_PRIVATE_MATERIAL_ABSENCE_PROOF=PASS
 PROCESS_AUTHORITY_VERIFIER_CONTRACT_TESTS=PASS
 FOUNDER_BOOTSTRAP_APPROVAL_PROOF=PASS
 FOCUSED_LOCAL_TESTS=PASS
@@ -543,7 +663,9 @@ FINAL_MAIN_HEAD_DIFF_FENCE=PASS
 EXPECTED_HEAD_SHA_MERGE_FENCE=PASS
 ```
 
-`PROCESS_AUTHORITY_VERIFIER_CONTRACT_TESTS=PASS` additionally requires the raw-UTF-8 duplicate-rejecting input theorem and the RFC 8785 UTF-16 ordering test vector to pass; it may not be used to hide or substitute for any explicit trust-root predicate listed above.
+`PROCESS_AUTHORITY_VERIFIER_CONTRACT_TESTS=PASS` additionally requires the raw-UTF-8 duplicate-rejecting input theorem, RFC 8785 UTF-16 ordering test vector, and disposition-state adversarial tests to pass; it may not hide or substitute for any explicit trust-root predicate listed above.
+
+Missing or conflicting nonce disposition state, more than one initial consumption, a broken transition chain, or a terminal retirement of the current attempt always forces `NOT_PROVEN`.
 
 If any predicate is absent or fails:
 
