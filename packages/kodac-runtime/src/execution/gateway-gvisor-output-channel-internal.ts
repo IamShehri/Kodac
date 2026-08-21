@@ -10,6 +10,23 @@ import {
 export const KDO_H4_R4B_B2A_ATTACH_MEDIA_TYPE = "application/vnd.docker.multiplexed-stream" as const
 export const KDO_H4_R4B_B2A_ATTACH_PATH_SUFFIX = "attach?logs=0&stream=1&stdin=0&stdout=1&stderr=1" as const
 
+export type InternalGvisorAttachFailureKind =
+  | "aborted"
+  | "timeout"
+  | "protocol-invalid"
+  | "socket-identity-changed"
+  | "transport-failed"
+
+export class InternalGvisorAttachError extends Error {
+  readonly kind: InternalGvisorAttachFailureKind
+
+  constructor(kind: InternalGvisorAttachFailureKind, message: string) {
+    super(message)
+    this.name = "InternalGvisorAttachError"
+    this.kind = kind
+  }
+}
+
 export interface InternalGvisorAttachChannel {
   readonly socket: Socket
   readonly head: Buffer
@@ -30,6 +47,10 @@ function exactContainerId(value: string): string {
   return value
 }
 
+function attachError(kind: InternalGvisorAttachFailureKind, message: string): InternalGvisorAttachError {
+  return new InternalGvisorAttachError(kind, message)
+}
+
 export async function openExactGvisorDockerAttach(input: {
   readonly socketPath: string
   readonly endpoint: DockerSocketEndpointIdentity
@@ -38,9 +59,13 @@ export async function openExactGvisorDockerAttach(input: {
   readonly timeoutMs: number
   readonly requireSameSocketEndpoint: () => void
 }): Promise<InternalGvisorAttachChannel> {
-  if (input.signal.aborted) throw new Error("B2A Docker attach aborted before dispatch")
+  if (input.signal.aborted) throw attachError("aborted", "B2A Docker attach aborted before dispatch")
   if (input.endpoint.endpointIdentity.length !== 64) throw new TypeError("B2A Docker endpoint identity is invalid")
-  input.requireSameSocketEndpoint()
+  try {
+    input.requireSameSocketEndpoint()
+  } catch {
+    throw attachError("socket-identity-changed", "B2A Docker socket namespace identity changed before attach")
+  }
   const containerId = exactContainerId(input.containerId)
   return await new Promise<InternalGvisorAttachChannel>((resolve, reject) => {
     let settled = false
@@ -54,13 +79,13 @@ export async function openExactGvisorDockerAttach(input: {
     }
     const onAbort = () => {
       if (settled) return
-      const error = new Error("B2A Docker attach aborted")
+      const error = attachError("aborted", "B2A Docker attach aborted")
       finishReject(error)
       request.destroy(error)
     }
     const onTimeout = () => {
       if (settled) return
-      const error = new Error("B2A Docker attach handshake timed out")
+      const error = attachError("timeout", "B2A Docker attach handshake timed out")
       finishReject(error)
       request.destroy(error)
     }
@@ -77,7 +102,7 @@ export async function openExactGvisorDockerAttach(input: {
       }),
     })
     request.once("response", (response) => {
-      const error = new Error(`B2A Docker attach refused protocol upgrade with HTTP ${String(response.statusCode ?? "unknown")}`)
+      const error = attachError("protocol-invalid", `B2A Docker attach refused protocol upgrade with HTTP ${String(response.statusCode ?? "unknown")}`)
       response.resume()
       finishReject(error)
       request.destroy(error)
@@ -86,16 +111,20 @@ export async function openExactGvisorDockerAttach(input: {
       try {
         const socket = socketValue as Socket
         const headerBytes = response.rawHeaders.reduce((total, item) => total + byteLength(item) + 2, 0)
-        if (headerBytes > KDO_H4_R3F_LIMITS.maxResponseHeaderBytes) throw new Error("B2A Docker attach response headers exceed bound")
-        if (response.statusCode !== 101) throw new Error(`B2A Docker attach expected HTTP 101; received ${String(response.statusCode ?? "unknown")}`)
-        if ((response.headers.connection ?? "").toLowerCase() !== "upgrade") throw new Error("B2A Docker attach Connection header mismatch")
-        if ((response.headers.upgrade ?? "").toLowerCase() !== "tcp") throw new Error("B2A Docker attach Upgrade header mismatch")
+        if (headerBytes > KDO_H4_R3F_LIMITS.maxResponseHeaderBytes) throw attachError("protocol-invalid", "B2A Docker attach response headers exceed bound")
+        if (response.statusCode !== 101) throw attachError("protocol-invalid", `B2A Docker attach expected HTTP 101; received ${String(response.statusCode ?? "unknown")}`)
+        if ((response.headers.connection ?? "").toLowerCase() !== "upgrade") throw attachError("protocol-invalid", "B2A Docker attach Connection header mismatch")
+        if ((response.headers.upgrade ?? "").toLowerCase() !== "tcp") throw attachError("protocol-invalid", "B2A Docker attach Upgrade header mismatch")
         const mediaType = String(response.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase()
-        if (mediaType !== KDO_H4_R4B_B2A_ATTACH_MEDIA_TYPE) throw new Error(`B2A Docker attach media type must be ${KDO_H4_R4B_B2A_ATTACH_MEDIA_TYPE}`)
-        input.requireSameSocketEndpoint()
+        if (mediaType !== KDO_H4_R4B_B2A_ATTACH_MEDIA_TYPE) throw attachError("protocol-invalid", `B2A Docker attach media type must be ${KDO_H4_R4B_B2A_ATTACH_MEDIA_TYPE}`)
+        try {
+          input.requireSameSocketEndpoint()
+        } catch {
+          throw attachError("socket-identity-changed", "B2A Docker socket namespace identity changed during attach")
+        }
         if (input.signal.aborted || settled) {
           socket.destroy()
-          if (!settled) finishReject(new Error("B2A Docker attach invalidated before upgrade ownership"))
+          if (!settled) finishReject(attachError("aborted", "B2A Docker attach invalidated before upgrade ownership"))
           return
         }
         settled = true
@@ -108,7 +137,10 @@ export async function openExactGvisorDockerAttach(input: {
         finishReject(error)
       }
     })
-    request.on("error", finishReject)
+    request.on("error", (error) => {
+      if (settled) return
+      finishReject(error instanceof InternalGvisorAttachError ? error : attachError("transport-failed", `B2A Docker attach transport failed: ${error.message}`))
+    })
     request.setTimeout(input.timeoutMs, onTimeout)
     input.signal.addEventListener("abort", onAbort, { once: true })
     if (input.signal.aborted) {
