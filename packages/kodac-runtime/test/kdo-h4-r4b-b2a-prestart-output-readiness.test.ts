@@ -13,10 +13,11 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs"
-import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http"
+import { ClientRequest, createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http"
 import { createConnection, createServer as createNetServer, type Server as NetServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { performance } from "node:perf_hooks"
 import { fileURLToPath } from "node:url"
 import type { Duplex } from "node:stream"
 import test from "node:test"
@@ -86,6 +87,7 @@ import {
   GvisorDockerPrestartOutputGateway,
   KDO_H4_R4B_B2A_RUNTIME_LIMITS,
   SandboxPrestartIndeterminateError,
+  SandboxPrestartTerminalError,
   createGvisorDockerPrestartOutputRuntime,
   validateGvisorDockerPrestartHostIdMappingForTest,
 } from "../src/execution/gateway-gvisor-docker-prestart-output-runtime.ts"
@@ -281,10 +283,19 @@ test("H4-R4B-B2A atomic fence orderings permit at most one owner or one terminal
   assert.equal(failureFirst.state()?.state, "FAILED_TERMINAL")
 })
 
+interface FakeDockerOptions {
+  readonly autoUpgrade?: boolean
+  readonly upgradeHead?: Buffer
+  readonly holdReadNumber?: number
+}
 interface FakeDocker {
   readonly socketPath: string
   readonly requests: string[]
   readonly server: HttpServer
+  pendingUpgrade(): boolean
+  pendingRead(): boolean
+  releaseUpgrade(): void
+  releaseHeldRead(): void
   close(): Promise<void>
 }
 
@@ -329,29 +340,54 @@ function inspectBody(prepared: SandboxDormantCreatePrepared): Record<string, unk
   }
 }
 
-async function startFakeDocker(root: string, prepared: SandboxDormantCreatePrepared): Promise<FakeDocker> {
+async function startFakeDocker(root: string, prepared: SandboxDormantCreatePrepared, options: FakeDockerOptions = {}): Promise<FakeDocker> {
   const socketPath = join(root, "docker.sock")
   const requests: string[] = []
   const sockets = new Set<Duplex>()
+  let readNumber = 0
+  let heldRead: (() => void) | undefined
+  let heldUpgrade: (() => void) | undefined
+  const dispatchRead = (send: () => void) => {
+    readNumber += 1
+    if (options.holdReadNumber === readNumber) {
+      assert.equal(heldRead, undefined, "only one controlled Docker read may be held")
+      heldRead = () => { heldRead = undefined; send() }
+      return
+    }
+    send()
+  }
   const server = createHttpServer((request: IncomingMessage, response: ServerResponse) => {
     const method = request.method ?? ""; const url = request.url ?? ""; requests.push(`${method} ${url}`)
     if (method === "GET" && url === `/v1.48/images/${encodeURIComponent(prepared.sourceReference)}/json`) {
-      response.writeHead(200, { "Content-Type": "application/json" })
-      response.end(JSON.stringify({ Id: IMAGE_ID, Descriptor: { digest: prepared.sourceDigest }, Config: { User: IMAGE_USER, Env: [...IMAGE_ENV], WorkingDir: IMAGE_WORKING_DIR, Volumes: {} } }))
+      dispatchRead(() => { response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify({ Id: IMAGE_ID, Descriptor: { digest: prepared.sourceDigest }, Config: { User: IMAGE_USER, Env: [...IMAGE_ENV], WorkingDir: IMAGE_WORKING_DIR, Volumes: {} } })) })
       return
     }
     if (method === "GET" && url === `/v1.48/containers/${CONTAINER_ID}/json`) {
-      response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify(inspectBody(prepared))); return
+      dispatchRead(() => { response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify(inspectBody(prepared))) })
+      return
     }
     response.writeHead(404); response.end("{}")
   })
   server.on("upgrade", (request, socket) => {
     sockets.add(socket); socket.once("close", () => sockets.delete(socket)); requests.push(`UPGRADE ${request.url ?? ""}`)
-    socket.write(["HTTP/1.1 101 UPGRADED", "Content-Type: application/vnd.docker.multiplexed-stream", "Connection: Upgrade", "Upgrade: tcp", "", ""].join("\r\n"))
+    const sendUpgrade = () => {
+      if (socket.destroyed) return
+      const headers = Buffer.from(["HTTP/1.1 101 UPGRADED", "Content-Type: application/vnd.docker.multiplexed-stream", "Connection: Upgrade", "Upgrade: tcp", "", ""].join("\r\n"), "utf8")
+      socket.write(Buffer.concat([headers, options.upgradeHead ?? Buffer.alloc(0)]))
+    }
+    if (options.autoUpgrade === false) heldUpgrade = () => { heldUpgrade = undefined; sendUpgrade() }
+    else sendUpgrade()
   })
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socketPath, () => { server.off("error", reject); resolve() }) })
   chmodSync(socketPath, 0o600)
-  return { socketPath, requests, server, async close() { for (const socket of sockets) socket.destroy(); server.closeAllConnections(); if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve())) } }
+  return {
+    socketPath, requests, server,
+    pendingUpgrade: () => heldUpgrade !== undefined,
+    pendingRead: () => heldRead !== undefined,
+    releaseUpgrade: () => heldUpgrade?.(),
+    releaseHeldRead: () => heldRead?.(),
+    async close() { for (const socket of sockets) socket.destroy(); server.closeAllConnections(); if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve())) },
+  }
 }
 
 function durableStore() {
@@ -404,6 +440,60 @@ function runtimeFromStore(socketPath: string, store: ReturnType<typeof durableSt
 }
 
 function rootStage(stage: string): void { process.stderr.write(`B2A_ROOT_STAGE=${stage}\n`) }
+function assertZeroStart(fake: FakeDocker): void { assert.equal(fake.requests.some((entry) => /\/start|\/exec|\/restart|\/stop|\/kill|DELETE/.test(entry)), false) }
+function upgradeCount(fake: FakeDocker): number { return fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length }
+async function waitUntil(predicate: () => boolean, label: string): Promise<void> { for (let index = 0; index < 2_000; index += 1) { if (predicate()) return; await new Promise<void>((resolve) => setImmediate(resolve)) } throw new Error(`timed out waiting for ${label}`) }
+
+async function withRootFakeDocker(options: FakeDockerOptions, run: (input: { permit: SandboxAdmissionPermit; lineage: ReturnType<typeof b1Lineage>; fake: FakeDocker; store: ReturnType<typeof durableStore> }) => Promise<void>): Promise<void> {
+  const root = mkdtempSync("/run/kodac-b2a-timing-")
+  const permit = fixedPermit()
+  const preparedForName = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  let fake: FakeDocker | undefined
+  try {
+    fake = await startFakeDocker(root, preparedForName, options)
+    const stats = lstatSync(fake.socketPath, { bigint: true })
+    const endpoint = createDockerSocketEndpointIdentity({ device: stats.dev.toString(10), inode: stats.ino.toString(10), uid: stats.uid.toString(10), gid: stats.gid.toString(10), mode: stats.mode.toString(10) })
+    const lineage = b1Lineage(permit, endpoint)
+    await run({ permit, lineage, fake, store: durableStore() })
+  } finally { await fake?.close(); rmSync(root, { recursive: true, force: true }) }
+}
+
+async function withCapturedAttachTimeout<T>(run: (getTimeout: () => (() => void) | undefined) => Promise<T>): Promise<T> {
+  const original = ClientRequest.prototype.setTimeout
+  let attachTimeout: (() => void) | undefined
+  ClientRequest.prototype.setTimeout = function(this: ClientRequest, msecs: number, callback?: () => void): ClientRequest {
+    if (this.method === "POST" && this.path.includes("/attach?")) { assert.equal(msecs, 5000); attachTimeout = callback; return this }
+    return original.call(this, msecs, callback)
+  } as typeof ClientRequest.prototype.setTimeout
+  try { return await run(() => attachTimeout) } finally { ClientRequest.prototype.setTimeout = original }
+}
+
+type CapturedTimer = { readonly delay: number; readonly callback: () => void; cleared: boolean }
+async function withCapturedB2ATimers<T>(run: (timers: CapturedTimer[]) => Promise<T>): Promise<T> {
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  const timers: CapturedTimer[] = []
+  globalThis.setTimeout = ((callback: (...args: any[]) => void, delay?: number, ...args: any[]) => {
+    if (delay === 5000 || delay === 15000) {
+      const timer: CapturedTimer = { delay, callback: () => callback(...args), cleared: false }
+      timers.push(timer)
+      return timer as unknown as ReturnType<typeof setTimeout>
+    }
+    return originalSetTimeout(callback, delay, ...args)
+  }) as typeof globalThis.setTimeout
+  globalThis.clearTimeout = ((handle: any) => {
+    const captured = timers.find((timer) => timer === handle)
+    if (captured !== undefined) { captured.cleared = true; return }
+    originalClearTimeout(handle)
+  }) as typeof globalThis.clearTimeout
+  try { return await run(timers) } finally { globalThis.setTimeout = originalSetTimeout; globalThis.clearTimeout = originalClearTimeout }
+}
+
+async function withFakeMonotonic<T>(now: () => number, run: () => Promise<T>): Promise<T> {
+  const own = Object.getOwnPropertyDescriptor(performance, "now")
+  Object.defineProperty(performance, "now", { configurable: true, value: now })
+  try { return await run() } finally { if (own !== undefined) Object.defineProperty(performance, "now", own); else delete (performance as unknown as { now?: unknown }).now }
+}
 
 async function rootPhysicalProof(): Promise<void> {
   rootStage("begin")
@@ -434,23 +524,29 @@ async function rootPhysicalProof(): Promise<void> {
     if (result.status !== "PRESTART_READY") throw new Error("unexpected unavailable result")
     assert.equal(store.state()?.state, "OWNER_CLAIMED")
     assert.equal(store.writes(), 2)
-    assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, 1)
-    assert.equal(fake.requests.some((entry) => /\/start|\/exec|\/restart|\/stop|\/kill|DELETE/.test(entry)), false)
+    assert.equal(upgradeCount(fake), 1)
+    assertZeroStart(fake)
     assert.ok(fake.requests.every((entry) => entry.startsWith("GET ") || entry === `UPGRADE /v1.48/containers/${CONTAINER_ID}/attach?logs=0&stream=1&stdin=0&stdout=1&stderr=1`))
 
+    await assert.rejects(gateway.invalidatePrestartOutput({ version: result.readiness.version }), /not trusted/)
+    await assert.rejects(gateway.invalidatePrestartOutput(JSON.parse(JSON.stringify(result.readiness))), /not trusted/)
+    await assert.rejects(gateway.invalidatePrestartOutput(structuredClone(result.readiness)), /not trusted/)
+    await assert.rejects(gateway.invalidatePrestartOutput(new Proxy(result.readiness, {})), /not trusted/)
+
     const writesBeforeReplay = store.writes()
-    const upgradesBeforeReplay = fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length
+    const upgradesBeforeReplay = upgradeCount(fake)
     const replay = await gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
     assert.deepEqual(replay, { status: "OWNER_CLAIMED_UNAVAILABLE", classification: "INDETERMINATE", reusable: false })
     assert.equal(store.writes(), writesBeforeReplay)
-    assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, upgradesBeforeReplay)
+    assert.equal(upgradeCount(fake), upgradesBeforeReplay)
 
     const otherRuntime = runtimeFromStore(fake.socketPath, store)
     const otherGateway = new GvisorDockerPrestartOutputGateway(otherRuntime)
     const hardLossAmbiguity = await otherGateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
     assert.deepEqual(hardLossAmbiguity, { status: "OWNER_CLAIMED_UNAVAILABLE", classification: "INDETERMINATE", reusable: false })
     assert.equal(store.writes(), writesBeforeReplay)
-    assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, upgradesBeforeReplay)
+    assert.equal(upgradeCount(fake), upgradesBeforeReplay)
+    await assert.rejects(otherGateway.invalidatePrestartOutput(result.readiness), /not trusted/)
 
     const orphanRuntime = createGvisorDockerPrestartOutputRuntime({
       socketPath: fake.socketPath,
@@ -459,9 +555,8 @@ async function rootPhysicalProof(): Promise<void> {
       commitOwnershipClaimTransaction: () => { throw new Error("owner claim must not run") },
       commitFailureTransaction: () => { throw new Error("failure repair must not run") },
     })
-    const orphanGateway = new GvisorDockerPrestartOutputGateway(orphanRuntime)
-    await assert.rejects(orphanGateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
-    assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, upgradesBeforeReplay)
+    await assert.rejects(new GvisorDockerPrestartOutputGateway(orphanRuntime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
+    assert.equal(upgradeCount(fake), upgradesBeforeReplay)
 
     const unknownPrepareRuntime = createGvisorDockerPrestartOutputRuntime({
       socketPath: fake.socketPath,
@@ -471,7 +566,7 @@ async function rootPhysicalProof(): Promise<void> {
       commitFailureTransaction: () => { throw new Error("must not settle") },
     })
     await assert.rejects(new GvisorDockerPrestartOutputGateway(unknownPrepareRuntime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
-    assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, upgradesBeforeReplay)
+    assert.equal(upgradeCount(fake), upgradesBeforeReplay)
 
     const claimUnknownStore = durableStore()
     const claimUnknownRuntime = createGvisorDockerPrestartOutputRuntime({
@@ -483,14 +578,15 @@ async function rootPhysicalProof(): Promise<void> {
     })
     await assert.rejects(new GvisorDockerPrestartOutputGateway(claimUnknownRuntime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
     assert.equal(claimUnknownStore.state()?.state, "PREPARED")
-    assert.equal(fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length, upgradesBeforeReplay)
+    assert.equal(upgradeCount(fake), upgradesBeforeReplay)
 
     rootStage("before-invalidate")
     await gateway.invalidatePrestartOutput(result.readiness)
     rootStage("after-invalidate")
     assert.equal(store.state()?.state, "FAILED_TERMINAL")
     assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
-    assert.equal(fake.requests.some((entry) => entry.includes("/start")), false)
+    await assert.rejects(gateway.invalidatePrestartOutput(result.readiness), /not trusted/)
+    assertZeroStart(fake)
   } finally {
     rootStage("before-close")
     await fake?.close()
@@ -499,9 +595,181 @@ async function rootPhysicalProof(): Promise<void> {
   }
 }
 
+async function timingInterleavingProof(): Promise<void> {
+  assert.equal(process.platform, "linux")
+  assert.equal(process.geteuid?.(), 0)
+  assert.equal(process.getegid?.(), 0)
+
+  await withRootFakeDocker({ upgradeHead: Buffer.from([1]) }, async ({ permit, lineage, fake, store }) => {
+    const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+    await assert.rejects(gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartTerminalError)
+    assert.equal(store.failure()?.failureCode, "payload-before-start")
+    assertZeroStart(fake)
+  })
+
+  await withRootFakeDocker({}, async ({ permit, lineage, fake, store }) => {
+    const abort = new AbortController()
+    const runtime = createGvisorDockerPrestartOutputRuntime({
+      socketPath: fake.socketPath,
+      commitPreparationTransaction: store.commitPreparationTransaction,
+      readStateFence: store.readStateFence,
+      commitOwnershipClaimTransaction: (input: Parameters<typeof store.commitOwnershipClaimTransaction>[0]) => { const result = store.commitOwnershipClaimTransaction(input); abort.abort(); return result },
+      commitFailureTransaction: store.commitFailureTransaction,
+    })
+    await assert.rejects(new GvisorDockerPrestartOutputGateway(runtime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit, { signal: abort.signal }), SandboxPrestartTerminalError)
+    assert.equal(store.failure()?.failureCode, "aborted")
+    assert.equal(upgradeCount(fake), 0)
+    assertZeroStart(fake)
+  })
+
+  await withRootFakeDocker({ autoUpgrade: false }, async ({ permit, lineage, fake, store }) => {
+    await withCapturedAttachTimeout(async (getTimeout) => {
+      const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+      const preparation = gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+      await waitUntil(() => fake.pendingUpgrade() && getTimeout() !== undefined, "held attach and captured 5000ms timeout")
+      getTimeout()!()
+      await assert.rejects(preparation, SandboxPrestartTerminalError)
+      assert.equal(store.failure()?.failureCode, "attach-timeout")
+      fake.releaseUpgrade()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      assert.equal(store.state()?.state, "FAILED_TERMINAL")
+      assertZeroStart(fake)
+    })
+  })
+
+  await withRootFakeDocker({ autoUpgrade: false }, async ({ permit, lineage, fake, store }) => {
+    await withCapturedAttachTimeout(async (getTimeout) => {
+      const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+      const preparation = gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+      await waitUntil(() => fake.pendingUpgrade() && getTimeout() !== undefined, "held boundary upgrade")
+      fake.releaseUpgrade()
+      const result = await preparation
+      assert.equal(result.status, "PRESTART_READY")
+      if (result.status !== "PRESTART_READY") throw new Error("boundary upgrade did not reach readiness")
+      getTimeout()!()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await gateway.invalidatePrestartOutput(result.readiness)
+      assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
+      assertZeroStart(fake)
+    })
+  })
+
+  for (const [delta, shouldReady] of [[4999, true], [5000, true], [5001, false]] as const) {
+    await withRootFakeDocker({}, async ({ permit, lineage, fake, store }) => {
+      const values = [0, 0, 0, delta, delta]
+      let index = 0
+      await withFakeMonotonic(() => values[index++] ?? delta, async () => {
+        const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+        const preparation = gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+        if (shouldReady) {
+          const result = await preparation
+          assert.equal(result.status, "PRESTART_READY")
+          if (result.status !== "PRESTART_READY") throw new Error("reader boundary should be ready")
+          await gateway.invalidatePrestartOutput(result.readiness)
+          assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
+        } else {
+          await assert.rejects(preparation, SandboxPrestartTerminalError)
+          assert.equal(store.failure()?.failureCode, "reader-activation-timeout")
+        }
+        assertZeroStart(fake)
+      })
+    })
+  }
+
+  for (const ordering of ["before", "at", "after"] as const) {
+    await withRootFakeDocker({ holdReadNumber: 5 }, async ({ permit, lineage, fake, store }) => {
+      await withCapturedB2ATimers(async (timers) => {
+        const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+        const preparation = gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+        await waitUntil(() => fake.pendingRead() && timers.some((timer) => timer.delay === 5000), `post-attach revalidation ${ordering}`)
+        const phaseTimer = timers.find((timer) => timer.delay === 5000)!
+        if (ordering === "before") {
+          fake.releaseHeldRead()
+          const result = await preparation
+          assert.equal(result.status, "PRESTART_READY")
+          if (result.status !== "PRESTART_READY") throw new Error("revalidation-before-deadline should be ready")
+          assert.equal(phaseTimer.cleared, true)
+          phaseTimer.callback()
+          await gateway.invalidatePrestartOutput(result.readiness)
+          assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
+        } else {
+          phaseTimer.callback()
+          if (ordering === "after") await new Promise<void>((resolve) => setImmediate(resolve))
+          fake.releaseHeldRead()
+          await assert.rejects(preparation, SandboxPrestartTerminalError)
+          assert.equal(store.failure()?.failureCode, "dormant-revalidation-timeout")
+        }
+        assertZeroStart(fake)
+      })
+    })
+  }
+
+  await withRootFakeDocker({ holdReadNumber: 5 }, async ({ permit, lineage, fake, store }) => {
+    await withCapturedB2ATimers(async (timers) => {
+      let now = 0
+      await withFakeMonotonic(() => now, async () => {
+        const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+        const preparation = gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+        await waitUntil(() => fake.pendingRead() && timers.some((timer) => timer.delay === 15000), "absolute owner-to-ready deadline")
+        now = 15000
+        timers.find((timer) => timer.delay === 15000)!.callback()
+        fake.releaseHeldRead()
+        await assert.rejects(preparation, SandboxPrestartTerminalError)
+        assert.equal(store.failure()?.failureCode, "prestart-total-timeout")
+        assertZeroStart(fake)
+      })
+    })
+  })
+
+  await withRootFakeDocker({}, async ({ permit, lineage, fake, store }) => {
+    await withCapturedB2ATimers(async (timers) => {
+      const values = [0, 14999, 14999, 14999, 14999]
+      let index = 0
+      await withFakeMonotonic(() => values[index++] ?? 14999, async () => {
+        const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+        const result = await gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+        assert.equal(result.status, "PRESTART_READY")
+        if (result.status !== "PRESTART_READY") throw new Error("14999ms owner-to-ready path should be ready")
+        const absolute = timers.find((timer) => timer.delay === 15000)!
+        assert.equal(absolute.cleared, true)
+        absolute.callback()
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        await gateway.invalidatePrestartOutput(result.readiness)
+        assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
+        assertZeroStart(fake)
+      })
+    })
+  })
+
+  await withRootFakeDocker({ holdReadNumber: 5 }, async ({ permit, lineage, fake, store }) => {
+    await withCapturedB2ATimers(async (timers) => {
+      const runtime = createGvisorDockerPrestartOutputRuntime({
+        socketPath: fake.socketPath,
+        commitPreparationTransaction: store.commitPreparationTransaction,
+        readStateFence: store.readStateFence,
+        commitOwnershipClaimTransaction: store.commitOwnershipClaimTransaction,
+        commitFailureTransaction: () => { throw new Error("settlement store timed out") },
+      })
+      const preparation = new GvisorDockerPrestartOutputGateway(runtime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+      await waitUntil(() => fake.pendingRead() && timers.some((timer) => timer.delay === 5000), "phase timeout before settlement timeout")
+      timers.find((timer) => timer.delay === 5000)!.callback()
+      fake.releaseHeldRead()
+      await assert.rejects(preparation, SandboxPrestartIndeterminateError)
+      assert.equal(store.state()?.state, "OWNER_CLAIMED")
+      assert.equal(store.failure(), undefined)
+      assertZeroStart(fake)
+    })
+  })
+}
+
 if (process.env.KODAC_B2A_ROOT_CHILD === "1") {
   await rootPhysicalProof()
   process.stdout.write("B2A_ROOT_PROOF_PASS\n")
+  process.exit(0)
+}
+if (process.env.KODAC_B2A_TIMING_CHILD === "1") {
+  await timingInterleavingProof()
+  process.stdout.write("B2A_TIMING_PROOF_PASS\n")
   process.exit(0)
 }
 
@@ -622,13 +890,22 @@ async function posixAclPhysicalProof(): Promise<void> {
   }
 }
 
-if (process.env.KODAC_B2A_ROOT_CHILD !== "1") {
+if (process.env.KODAC_B2A_ROOT_CHILD !== "1" && process.env.KODAC_B2A_TIMING_CHILD !== "1") {
   test("H4-R4B-B2A Linux physical root replay and ambiguity proof stays zero-start", { skip: process.platform !== "linux" }, () => {
     const script = fileURLToPath(import.meta.url)
     const result = spawnSync("sudo", ["-n", "/usr/bin/env", "KODAC_B2A_ROOT_CHILD=1", process.execPath, "--experimental-strip-types", script], { encoding: "utf8", timeout: 30_000 })
     if (process.env.GITHUB_ACTIONS === "true") {
       assert.equal(result.status, 0, `root B2A proof failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
       assert.match(result.stdout, /B2A_ROOT_PROOF_PASS/)
+    }
+  })
+
+  test("H4-R4B-B2A deterministic deadline cancellation payload and late-success interleavings stay zero-start", { skip: process.platform !== "linux" }, () => {
+    const script = fileURLToPath(import.meta.url)
+    const result = spawnSync("sudo", ["-n", "/usr/bin/env", "KODAC_B2A_TIMING_CHILD=1", process.execPath, "--experimental-strip-types", script], { encoding: "utf8", timeout: 30_000 })
+    if (process.env.GITHUB_ACTIONS === "true") {
+      assert.equal(result.status, 0, `timing B2A proof failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
+      assert.match(result.stdout, /B2A_TIMING_PROOF_PASS/)
     }
   })
 
@@ -653,6 +930,8 @@ if (process.env.KODAC_B2A_ROOT_CHILD !== "1") {
     assert.match(runtimeSource, /readFileSync\("\/proc\/self\/uid_map", "utf8"\)/)
     assert.match(runtimeSource, /readFileSync\("\/proc\/self\/gid_map", "utf8"\)/)
     assert.match(runtimeSource, /4294967295/)
+    assert.match(channelSource, /socket\.setTimeout\(0\)/)
+    assert.match(channelSource, /socket\.removeListener\("timeout", onTimeout\)/)
   })
 
   test("H4-R4B-B2A package-root negative space withholds raw attach, store mutation, owner and readiness constructors", () => {
