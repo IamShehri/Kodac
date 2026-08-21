@@ -169,6 +169,7 @@ The future package must use exactly one package format version:
 
 ```text
 KODAC_GATE_PACKAGE_FORMAT_VERSION=kodac-gate-oci-layout-v1
+USTAR_CANONICALIZATION_PROFILE=kodac-ustar-v1
 ```
 
 The format is a deterministic single-platform OCI image layout with exactly one uncompressed payload layer and no runnable defaults.
@@ -230,23 +231,33 @@ one exact layer descriptor
 
 The image config must contain only the structural fields required to bind the target platform and one rootfs layer, with executable defaults absent. `Entrypoint`, `Cmd`, `Env`, `WorkingDir`, `User`, `Volumes`, `StopSignal`, `Healthcheck`, `Shell`, `OnBuild`, and history-derived behavior are forbidden.
 
-The payload layer is an uncompressed POSIX ustar archive with exactly one fixed payload subtree and one regular executable payload. Canonical layer/archive rules:
+The payload layer is an uncompressed POSIX ustar archive with exactly one regular executable payload and **no explicit directory entries**. The outer package is an uncompressed POSIX ustar archive containing only the five OCI-layout files listed above and **no explicit directory entries**.
+
+Both archives must obey the exact `kodac-ustar-v1` byte profile below:
 
 ```text
 USTAR_ONLY=YES
 PAX_HEADERS=FORBIDDEN
 GNU_TAR_EXTENSIONS=FORBIDDEN
+BASE256_NUMERIC_FIELDS=FORBIDDEN
 SPARSE_ENTRIES=FORBIDDEN
 XATTRS=FORBIDDEN
 ACL_ENTRIES=FORBIDDEN
 CAPABILITY_XATTRS=FORBIDDEN
+DIRECTORY_ENTRIES=FORBIDDEN
+PATHS_ARE_RELATIVE=YES
+LEADING_SLASH=FORBIDDEN
+DOT_OR_DOTDOT_PATH_COMPONENTS=FORBIDDEN
+NAME_FIELD_UTF8_BYTES_MAX=100
+PREFIX_FIELD=ALL_NUL_BYTES
+USTAR_NAME_PREFIX_SPLITTING=FORBIDDEN
 UID=0
 GID=0
 UNAME=""
 GNAME=""
 MTIME=0
-DIRECTORY_MODE=0755
 GATE_FILE_MODE=0755
+OUTER_REGULAR_FILE_MODE=0644
 LEXICOGRAPHIC_ENTRY_ORDER=REQUIRED
 SYMLINKS=FORBIDDEN
 HARDLINKS=FORBIDDEN
@@ -254,14 +265,69 @@ DEVICE_NODES=FORBIDDEN
 FIFO_SOCKET_ENTRIES=FORBIDDEN
 ```
 
-The outer offline package is also an uncompressed POSIX ustar archive over the OCI layout directory, with the same canonical ownership/time/header rules and lexicographic path order.
+Every archive pathname must fit completely in the 100-byte `name` field. The 155-byte `prefix` field must therefore be all NUL bytes. Path ordering is lexicographic over the exact UTF-8 pathname bytes. The one-entry payload layer consequently has exactly one header; the outer package has exactly five regular-file headers in lexicographic pathname-byte order.
+
+For each 512-byte ustar header:
+
+```text
+name       = pathname bytes followed by NUL padding to 100 bytes
+mode       = 7 ASCII octal digits followed by NUL
+uid        = 7 ASCII octal digits followed by NUL
+gid        = 7 ASCII octal digits followed by NUL
+size       = 11 ASCII octal digits followed by NUL
+mtime      = 11 ASCII octal digits followed by NUL
+chksum     = 6 ASCII octal digits followed by NUL then ASCII space
+typeflag   = ASCII '0'
+linkname   = 100 NUL bytes
+magic      = bytes "ustar\0"
+version    = bytes "00"
+uname      = 32 NUL bytes
+gname      = 32 NUL bytes
+devmajor   = 8 NUL bytes
+devminor   = 8 NUL bytes
+prefix     = 155 NUL bytes
+header_pad = 12 NUL bytes
+```
+
+Numeric values must be left-zero-padded ASCII octal and must fit the field widths above. Alternative space-padding, base-256 encoding, signed numeric encoding, or alternate terminators are forbidden.
+
+Checksum calculation is normative:
+
+```text
+1. Construct the complete 512-byte header with bytes 148..155 set to ASCII space (0x20).
+2. Sum all 512 bytes as unsigned 8-bit byte values into an unsigned integer.
+3. Encode that value as exactly six left-zero-padded ASCII octal digits.
+4. Store those six digits at bytes 148..153, NUL at byte 154, ASCII space at byte 155.
+```
+
+For each regular file, the exact file bytes immediately follow its 512-byte header and are padded with zero bytes to the next 512-byte boundary. No padding bytes may appear between a header and its file bytes. Each archive terminates with **exactly two** all-zero 512-byte blocks and no trailing bytes after the second zero block.
+
+The layer contains exactly the gate executable file and no explicit directories. The outer package contains exactly:
+
+```text
+blobs/sha256/<exact config digest>
+blobs/sha256/<exact manifest digest>
+blobs/sha256/<exact uncompressed layer digest>
+index.json
+oci-layout
+```
+
+No directory entry, additional blob, annotation sidecar, signature sidecar, provenance sidecar, or extra padding record may enter the trusted package bytes.
 
 The future release manifest must record and the `implementationIdentity` must bind:
 
 ```text
 KODAC_GATE_PACKAGE_FORMAT_VERSION
+USTAR_CANONICALIZATION_PROFILE
 all four media-type literals
 JSON canonicalization identity
+exact ustar numeric-field encoding
+exact ustar checksum encoding/calculation
+name/prefix policy
+regular-file typeflag policy
+directory-entry exclusion policy
+file-data block-padding policy
+exact two-block end-of-archive policy
 layer archive format/header policy
 outer package archive format/header policy
 compression policy
@@ -270,7 +336,7 @@ platform identity
 payload path policy
 ```
 
-Any alternate JSON encoding, archive header mode, compression mode, descriptor order, or package layout is a different artifact format and is not authorized by this v1 document.
+Any alternate JSON encoding, ustar numeric/checksum encoding, path split, directory-entry policy, block padding, end-of-archive policy, archive header mode, compression mode, descriptor order, or package layout is a different artifact format and is not authorized by this v1 document.
 
 ---
 
@@ -528,9 +594,10 @@ binary SHA-256
 binary byte size
 ELF/static proof identity
 KODAC_GATE_PACKAGE_FORMAT_VERSION
+USTAR_CANONICALIZATION_PROFILE
 media-type literals
 JSON canonicalization identity
-archive/header/compression policies
+exact ustar numeric/checksum/path/padding/end-of-archive policy
 payload layer digest
 image config digest
 image manifest digest
@@ -585,19 +652,32 @@ DNS_EGRESS=DISABLED
 TELEMETRY_EGRESS=DISABLED
 LICENSE_CHECK_EGRESS=DISABLED
 CREDENTIAL_NETWORK_ACCESS=DISABLED
+AMBIENT_UNIX_DOMAIN_SOCKETS=FORBIDDEN
+INHERITED_SOCKET_FDS=0
+DOCKER_SOCKET_PRESENT=NO
 ```
 
 The proof environment must use an isolated network namespace or purpose-equivalent OS-enforced boundary with no route capable of external egress. Loopback must be disabled or outbound communication must be denied by an equivalent fail-closed policy.
 
-The future evidence must include an audit proving that build/test/package processes performed no network-family socket or outbound connection activity. At minimum the audit must account for:
+Host-local IPC is part of the no-egress theorem. Before the first proof process starts, the evidence must establish that no Unix-domain socket FD is inherited and that ambient service sockets (including Docker/container-engine sockets, SSH-agent sockets, package-manager daemon sockets, telemetry/update sockets, and proxy sockets) are unavailable inside the proof boundary. `/var/run/docker.sock`, `/run/docker.sock`, and purpose-equivalent container-engine endpoints must be absent or inaccessible.
+
+The proof boundary must deny creation or connection of `AF_UNIX`/`AF_LOCAL` sockets by the proof processes unless a future authorization explicitly names an endpoint. This v1 authorization names **no** allowed Unix-domain endpoint.
+
+The future evidence must include an audit proving that build/test/package processes performed no network-family or Unix-domain socket activity. At minimum the audit must account for:
 
 ```text
 socket(AF_INET)
 socket(AF_INET6)
 socket(AF_PACKET)
-connect
+socket(AF_UNIX)
+socket(AF_LOCAL)
+connect(AF_INET/AF_INET6)
+connect(AF_UNIX/AF_LOCAL)
 sendto
 sendmsg
+sendmmsg
+write/writev to socket FDs
+inherited socket FDs
 DNS resolver activity
 HTTP/HTTPS activity
 registry client activity
@@ -609,11 +689,15 @@ Required verdicts:
 ```text
 NO_EGRESS_BOUNDARY_PROOF=PASS
 NETWORK_SOCKET_AUDIT=PASS
+UNIX_SOCKET_AUDIT=PASS
+INHERITED_SOCKET_FD_PROOF=PASS
 REGISTRY_NETWORK_CALLS=0
 GATE_IMAGE_PULL_CALLS=0
 GATE_IMAGE_PUSH_CALLS=0
 CREDENTIAL_REQUESTS=0
 ```
+
+`NO_EGRESS_BOUNDARY_PROOF=PASS` is forbidden unless both `NETWORK_SOCKET_AUDIT=PASS` and `UNIX_SOCKET_AUDIT=PASS` and `INHERITED_SOCKET_FD_PROOF=PASS` are established on the same exact-head proof run.
 
 If any required toolchain/dependency is absent, the proof blocks rather than fetching it.
 
@@ -621,13 +705,26 @@ If any required toolchain/dependency is absent, the proof blocks rather than fet
 
 ## 18. Future implementation allowlist after canonical authorization
 
-Only after this authorization PR is canonical, the future offline artifact implementation/evidence slice may modify exactly these three new paths:
+Only after this authorization PR is canonical, the future offline artifact implementation/evidence slice must modify and contain **exactly these three** new paths:
 
 ```text
 1. packages/kodac-runtime/native/gvisor-workload-gate.release.json
 2. packages/kodac-runtime/test/kdo-h4-r4b-gate-offline-artifact.test.ts
 3. docs/planning/KODAC_KDO_H4_R4B_TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_EVIDENCE_2026-08-21.md
 ```
+
+A positive artifact verdict requires all of:
+
+```text
+REQUIRED_FUTURE_PATHS_PRESENT=PASS
+CHANGED_PATHS=EXACTLY_3_ALLOWLISTED_PATHS
+NO_UNEXPECTED_PATHS=PASS
+RELEASE_MANIFEST_PATH_PRESENT=PASS
+OFFLINE_ARTIFACT_TEST_PATH_PRESENT=PASS
+OFFLINE_ARTIFACT_EVIDENCE_PATH_PRESENT=PASS
+```
+
+A subset of the three paths is not a complete artifact-proof candidate and must not receive `TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_PROVEN`.
 
 The canonical G0 source and G0 test are frozen read-only inputs:
 
@@ -678,6 +775,30 @@ GVISOR_EXECUTION=NO
 WORKLOAD_EXECUTION=NO
 ```
 
+Before any future build/test/package process executes, the future evidence record must contain a strict process-authority attestation with these semantic fields:
+
+```text
+PROCESS_AUTHORITY_STATUS=EXPLICITLY_GRANTED
+PROCESS_AUTHORITY_SCOPE=OFFLINE_ARTIFACT_BUILD_TEST_PACKAGE_ONLY
+PROCESS_AUTHORITY_PROVENANCE=FOUNDER_CURRENT_SESSION
+PROCESS_AUTHORITY_RECORD_SHA256=<sha256 of the exact retained authorization record>
+```
+
+The offline artifact test must reject a missing, malformed, broader-than-authorized, or non-founder/current-session process-authority record. The attestation is authorization provenance only; it is excluded from `implementationIdentity` because session metadata is not artifact identity.
+
+The required machine-checkable gate is:
+
+```text
+CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
+```
+
+That verdict may be emitted only after the strict authority record is validated. If the authority record is absent or the authorized scope does not include the exact offline build/test/package processes used by the proof, then:
+
+```text
+CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=FAIL
+ARTIFACT_RELEASE=BLOCKED
+```
+
 If process execution is prohibited, the future artifact PR must remain unmerged rather than fabricate evidence or weaken the theorem.
 
 ---
@@ -689,9 +810,13 @@ A future offline artifact candidate must prove at least:
 ```text
 canonical source blob/hash exact match
 canonical G0 test blob/hash unchanged
+REQUIRED_FUTURE_PATHS_PRESENT=PASS
+CHANGED_PATHS=EXACTLY_3_ALLOWLISTED_PATHS
+NO_UNEXPECTED_PATHS=PASS
 release manifest strict validation
 unknown release-manifest fields rejected
 invalid/mutable identity fields rejected
+CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
 PACKAGE_FORMAT_CANONICALIZATION_PROOF=PASS
 MEDIA_TYPE_AND_DESCRIPTOR_PROOF=PASS
 CANONICAL_JSON_BYTES_PROOF=PASS
@@ -715,6 +840,8 @@ implementationIdentity deterministic
 source-byte mutation rejected
 NO_EGRESS_BOUNDARY_PROOF=PASS
 NETWORK_SOCKET_AUDIT=PASS
+UNIX_SOCKET_AUDIT=PASS
+INHERITED_SOCKET_FD_PROOF=PASS
 network/registry acquisition absent
 Docker daemon interaction absent
 ```
@@ -728,6 +855,7 @@ All positive evidence must bind one exact repository head.
 The future proof must explicitly defend against:
 
 - rebuilding from source/test bytes different from canonical G0;
+- omitting one of the three required artifact-proof paths while claiming a complete verdict;
 - unpinned compiler/linker/static runtime inputs;
 - ambient compiler/include/library override variables;
 - hidden timestamps, locale, timezone, umask, PATH, working directory, or TMPDIR dependence;
@@ -736,13 +864,16 @@ The future proof must explicitly defend against:
 - executable image config fields becoming hidden authority;
 - ambiguous/noncanonical JSON encoding;
 - alternate media types or descriptor order;
-- archive-header, ownership, timestamp, path-order, PAX, GNU-extension, or compression nondeterminism;
+- ustar numeric-field, checksum, pathname split, directory-entry, block-padding, end-of-archive, ownership, timestamp, path-order, PAX, GNU-extension, or compression nondeterminism;
 - symlink/hardlink path substitution;
 - caller-selected payload paths or mount targets;
 - mutable tags or registry names becoming trust identity;
 - DNS, telemetry, update, license-check, registry, or other build-time egress;
+- ambient AF_UNIX/AF_LOCAL endpoints or inherited socket FDs bypassing the IP no-egress boundary;
+- Docker/container-engine daemon access through a host-local socket;
 - artifact digest computed over bytes different from inspected bytes;
 - one-build-only reproducibility claims;
+- process execution performed without explicit founder/current-session scope authority;
 - confusing an offline digest with an observed local Docker image ID;
 - treating artifact proof as B1-v2/B2A-v2/B2B authority.
 
@@ -778,13 +909,19 @@ H4_COMPLETE
 
 ## 23. Merge gate for the future offline artifact implementation PR
 
-A future implementation/evidence PR may merge only if all applicable gates are proven on its exact head:
+A future implementation/evidence PR may merge only if all gates are proven on its exact head:
 
 ```text
-CHANGED_PATHS=EXACTLY_3_ALLOWLISTED_PATHS_OR_FEWER
+REQUIRED_FUTURE_PATHS_PRESENT=PASS
+CHANGED_PATHS=EXACTLY_3_ALLOWLISTED_PATHS
 NO_OUT_OF_SCOPE_PATHS=PASS
+NO_UNEXPECTED_PATHS=PASS
+RELEASE_MANIFEST_PATH_PRESENT=PASS
+OFFLINE_ARTIFACT_TEST_PATH_PRESENT=PASS
+OFFLINE_ARTIFACT_EVIDENCE_PATH_PRESENT=PASS
 CANONICAL_G0_SOURCE_BYTES_UNCHANGED=PASS
 CANONICAL_G0_TEST_BYTES_UNCHANGED=PASS
+CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
 PACKAGE_FORMAT_CANONICALIZATION_PROOF=PASS
 BUILD_CONTEXT_POLICY_PROOF=PASS
 TOOLCHAIN_IDENTITY_PROOF=PASS
@@ -796,6 +933,8 @@ CONTENT_DIGEST_PROOF=PASS
 IMPLEMENTATION_IDENTITY_PROOF=PASS
 NO_EGRESS_BOUNDARY_PROOF=PASS
 NETWORK_SOCKET_AUDIT=PASS
+UNIX_SOCKET_AUDIT=PASS
+INHERITED_SOCKET_FD_PROOF=PASS
 NETWORK_REGISTRY_ZERO_PROOF=PASS
 DOCKER_DAEMON_ZERO_PROOF=PASS
 EXACT_HEAD_CI=PASS
@@ -805,7 +944,7 @@ FINAL_MAIN_HEAD_DIFF_FENCE=PASS
 EXPECTED_HEAD_SHA_MERGE_FENCE=PASS
 ```
 
-No gate may be waived because the artifact is "only packaging".
+The merge gate must fail closed if the process-authority evidence is absent, if any of the three required paths is absent, or if any unexpected path is present. No gate may be waived because the artifact is "only packaging".
 
 ---
 
@@ -870,12 +1009,15 @@ If and only if this docs-only authorization becomes canonical:
 NEXT_POST_G0_SLICE=
 TRUSTED GATE OFFLINE ARTIFACT PACKAGE PROOF
 
-FUTURE_RELEASE_PATH_ALLOWLIST=3_PATHS
+FUTURE_RELEASE_PATH_ALLOWLIST=EXACTLY_3_REQUIRED_PATHS
 CANONICAL_G0_SOURCE_MUTATION=FORBIDDEN
 CANONICAL_G0_TEST_MUTATION=FORBIDDEN
 KODAC_GATE_PACKAGE_FORMAT_VERSION=kodac-gate-oci-layout-v1
+USTAR_CANONICALIZATION_PROFILE=kodac-ustar-v1
 DOCKER_DAEMON_USE_IN_OFFLINE_SLICE=FORBIDDEN
 NETWORK_EGRESS_IN_OFFLINE_SLICE=FORBIDDEN
+UNIX_DOMAIN_SOCKET_USE_IN_OFFLINE_SLICE=FORBIDDEN
+CURRENT_SESSION_PROCESS_AUTHORITY=SEPARATE_REQUIRED_GATE
 
 MAX_FUTURE_RESULT=TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_PROVEN
 
@@ -891,4 +1033,4 @@ R3G_F_E4=NO
 H4_COMPLETE=NO
 ```
 
-This slice keeps post-G0 progression fail-closed: first prove exact canonical offline artifact bytes, then separately prove local Docker provisioning/identity, and only after those prerequisites may a future B1-v2 authorization be considered.
+This slice keeps post-G0 progression fail-closed: first prove exact canonical offline artifact bytes under explicit process authority, then separately prove local Docker provisioning/identity, and only after those prerequisites may a future B1-v2 authorization be considered.
