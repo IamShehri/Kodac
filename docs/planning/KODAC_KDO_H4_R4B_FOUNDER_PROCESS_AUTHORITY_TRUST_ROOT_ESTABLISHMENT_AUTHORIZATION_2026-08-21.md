@@ -7,7 +7,7 @@ Status: AUTHORIZATION_CANDIDATE / DOCS_ONLY / NO_KEY_MATERIAL / NO_PROCESS_EXECU
 
 Authorize the smallest safe predecessor required by the canonical H4-R4B offline-artifact authorization before any offline artifact build/test/package process may execute.
 
-This document authorizes a later, separate trust-root establishment slice only. It does **not** establish a trust root itself, does not generate or receive a private key, does not sign an authority record, and does not authorize the offline artifact proof.
+This document authorizes a later, separate trust-root establishment slice only. It does **not** establish a trust root itself, generate or receive a private key, sign an authority record, or authorize the offline artifact proof.
 
 Maximum result of this docs-only PR if merged:
 
@@ -15,7 +15,7 @@ Maximum result of this docs-only PR if merged:
 FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT_ESTABLISHMENT_AUTHORIZATION=CANONICAL
 ```
 
-It is **not** equivalent to:
+It is not equivalent to:
 
 ```text
 FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT=ESTABLISHED
@@ -29,29 +29,22 @@ H4_COMPLETE=YES
 
 ## 2. Canonical predecessor
 
-This authorization is based on canonical `main`:
-
 ```text
 MAIN_COMMIT=13559f7397561d62078af94b4717b5f887033369
 MAIN_TREE=aa0d94a6b54de92b12d232c1a2b8a086cc9d8a2c
 PR_144=MERGED_CANONICAL
 PR_144_REVIEWED_HEAD=0a85084b24a7f3c238872b1c4c00f442aca0e94d
-```
-
-Canonical PR #144 established:
-
-```text
 TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_AUTHORIZATION=CANONICAL
 TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_PROVEN=NO
 ```
 
-Its process-authority theorem requires a separately canonical predecessor that establishes an external founder-authentication trust root and verification mechanism before any build/test/package process executes.
+Canonical PR #144 requires a separately canonical predecessor that establishes an external founder-authentication trust root and verification mechanism before any build/test/package process executes.
 
 ---
 
 ## 3. Why this slice exists
 
-The canonical offline-artifact authorization deliberately rejects authority derived from:
+The canonical artifact authorization rejects process authority derived from:
 
 ```text
 self-authored candidate records
@@ -61,15 +54,11 @@ candidate-controlled verifier replacement
 unauthenticated current-session text
 ```
 
-Therefore the next safe action is **not** artifact implementation and is **not** process execution.
-
-The next safe action is to establish a dedicated public verification root whose private half remains solely outside the repository, CI, agents, and ChatGPT, and to canonically freeze the verifier before any artifact candidate exists.
+Therefore the next safe action is not artifact implementation or process execution. It is a dedicated public verification root whose private half remains outside the repository, CI, agents, and ChatGPT, plus a verifier frozen before any artifact candidate exists.
 
 ---
 
 ## 4. Selected trust mechanism
-
-The selected mechanism is:
 
 ```text
 TRUST_ROOT_SCHEME=kodac-founder-process-authority-ed25519-v1
@@ -84,23 +73,13 @@ NEW_RUNTIME_DEPENDENCY=FORBIDDEN
 NETWORK_VERIFICATION=FORBIDDEN
 ```
 
-Rationale:
-
-1. `packages/kodac-runtime/package.json` already requires Node.js `>=24`.
-2. Node's built-in cryptographic API supports Ed25519 public-key import and signature verification.
-3. Verification can therefore remain offline and dependency-free.
-4. Only public verification material needs to become canonical.
-5. The private key never needs to enter the repository or automated execution environment.
-
-No alternative algorithm may be substituted in the establishment slice without a new authorization.
+`packages/kodac-runtime/package.json` already requires Node.js `>=24`, and the selected verifier uses only the built-in cryptographic API. No alternative algorithm may be substituted without a new authorization.
 
 ---
 
 ## 5. Exact Ed25519 public-key encoding
 
-The canonical public key must be an Ed25519 RFC 8410 SubjectPublicKeyInfo DER object.
-
-The accepted DER encoding is exactly 44 bytes:
+The canonical public key must be an Ed25519 RFC 8410 SubjectPublicKeyInfo DER object exactly 44 bytes long:
 
 ```text
 302a300506032b6570032100 || RAW_ED25519_PUBLIC_KEY_32_BYTES
@@ -119,15 +98,11 @@ PUBLIC_KEY_HEX_PREFIX=FORBIDDEN
 WHITESPACE_IN_KEY_HEX=FORBIDDEN
 ```
 
-The verifier must import the exact DER bytes as `format=der`, `type=spki`, confirm the resulting asymmetric key type is Ed25519, re-export the key as DER/SPKI, and require byte-for-byte equality with the committed bytes.
-
-Malformed DER, algorithm substitution, unexpected parameters, non-canonical re-encoding, or any key length mismatch must fail closed.
+The verifier must import the exact bytes as DER/SPKI, confirm `asymmetricKeyType=ed25519`, re-export DER/SPKI, and require byte-for-byte equality. Malformed DER, algorithm substitution, unexpected parameters, non-canonical re-encoding, or length mismatch fails closed.
 
 ---
 
 ## 6. Trust-root identity
-
-The trust-root identity is content-addressed and domain separated:
 
 ```text
 TRUST_ROOT_ID_DOMAIN=kodac-founder-process-authority-trust-root-id-v1
@@ -138,41 +113,60 @@ TRUST_ROOT_ID_PREIMAGE=
 TRUST_ROOT_ID_SHA256=sha256(TRUST_ROOT_ID_PREIMAGE)
 ```
 
-`TRUST_ROOT_ID_SHA256` is represented as exactly 64 lowercase hexadecimal characters.
+`TRUST_ROOT_ID_SHA256` is exactly 64 lowercase hexadecimal characters.
 
-The trust-root ID is an integrity identity only. Founder binding is established by the one-time bootstrap procedure below plus canonical founder approval of the establishment PR.
+The ID proves content identity only. Founder binding comes from the one-time bootstrap theorem plus private-key possession proof.
 
 ---
 
 ## 7. One-time founder bootstrap theorem
 
-There is intentionally no earlier Kodac founder signing key that can authenticate the first trust root without circularity.
-
-Therefore the one-time bootstrap rule is explicit:
+There is no earlier Kodac founder signing key that can authenticate the first trust root without circularity. The bootstrap exception is therefore explicit and one-time:
 
 ```text
 BOOTSTRAP_AUTHORITY=FOUNDER_EXPLICIT_CANONICAL_APPROVAL
+BOOTSTRAP_FOUNDER_GITHUB_LOGIN=TheHalfMoon
 BOOTSTRAP_PRIVATE_KEY_POSSESSION_PROOF=REQUIRED
+BOOTSTRAP_APPROVAL_RECORD=REQUIRED
+BOOTSTRAP_APPROVAL_RECORD_BINDS_EXACT_HEAD=YES
+BOOTSTRAP_APPROVAL_RECORD_BINDS_TRUST_ROOT_ID=YES
+BOOTSTRAP_APPROVAL_RECORD_BINDS_SPKI_SHA256=YES
+BOOTSTRAP_APPROVAL_RECORD_BINDS_ESTABLISHMENT_PREIMAGE_SHA256=YES
 BOOTSTRAP_REPOSITORY=TheHalfMoon/Kodac
 BOOTSTRAP_PREDECESSOR_COMMIT=13559f7397561d62078af94b4717b5f887033369
 ```
 
-The future trust-root establishment PR must satisfy both:
+The future trust-root establishment PR must satisfy all of the following:
 
-1. cryptographic proof that the publisher possesses the private key corresponding to the committed public key; and
-2. explicit founder approval and canonical merge of that exact reviewed trust-root candidate.
+1. cryptographic proof of possession of the private key corresponding to the committed public key;
+2. exact-head CI and independent review on the trust-root candidate;
+3. after the candidate head is frozen, a top-level PR comment authored by GitHub login `TheHalfMoon` containing exactly these binding lines:
 
-After that establishment merge, future process-authority records **must** authenticate through the canonical Ed25519 trust root. GitHub authorship, PR ownership, comments, hashes, or merge status alone are not sufficient substitutes for the Ed25519 authority proof.
+```text
+FOUNDER_TRUST_ROOT_BOOTSTRAP_APPROVAL=EXPLICIT
+REPOSITORY=TheHalfMoon/Kodac
+EXACT_HEAD=<exact reviewed trust-root candidate head SHA>
+TRUST_ROOT_ID_SHA256=<64 lowercase hex chars>
+PUBLIC_KEY_SPKI_DER_SHA256=<64 lowercase hex chars>
+ESTABLISHMENT_PREIMAGE_SHA256=<64 lowercase hex chars>
+```
 
-This bootstrap exception applies only to initial trust-root establishment. It may not be reused to authorize artifact execution.
+4. evidence that the comment author login, comment ID/URL, timestamp, exact head, trust-root ID, SPKI digest, and establishment-preimage digest all match the candidate; and
+5. expected-head fenced canonical merge of that exact candidate.
+
+The approval comment is the one-time governance bootstrap binding of the public key to founder authority. It does not replace the Ed25519 signature or prove later process authority.
+
+After the trust root becomes canonical, GitHub authorship, comments, PR ownership, hashes, or merge status alone are never sufficient for process authority; later authority records must verify under the canonical Ed25519 key.
+
+This bootstrap exception may not be reused for artifact execution or trust-root rotation.
 
 ---
 
 ## 8. Establishment possession-proof preimage
 
-The future trust-root record must contain a public possession proof signed outside the repository with the corresponding private key.
+The future trust-root record must contain a public possession proof signed out of band with the corresponding private key.
 
-The establishment object contains exactly these string fields:
+The establishment object contains exactly **nine** string fields:
 
 ```text
 schemaVersion
@@ -186,7 +180,7 @@ challengeNonceHex
 issuedAtUtc
 ```
 
-Required fixed values:
+Fixed values:
 
 ```text
 schemaVersion=kodac-founder-process-authority-trust-root-record-v1
@@ -196,15 +190,15 @@ trustRootScheme=kodac-founder-process-authority-ed25519-v1
 signatureAlgorithm=Ed25519
 ```
 
-`challengeNonceHex` must be exactly 64 lowercase hexadecimal characters generated out of band for this establishment attempt and never reused.
+`challengeNonceHex` is exactly 64 lowercase hexadecimal characters, generated out of band for this establishment attempt and never reused.
 
-`issuedAtUtc` must be an RFC 3339 UTC timestamp with `Z` and second precision.
+`issuedAtUtc` is RFC 3339 UTC with `Z` and second precision.
 
-The possession-proof preimage is:
+Normative preimage:
 
 ```text
 ESTABLISHMENT_SIGNATURE_DOMAIN=kodac-founder-process-authority-trust-root-establishment-v1
-ESTABLISHMENT_OBJECT=<strict object containing exactly the eight fields above>
+ESTABLISHMENT_OBJECT=<strict object containing exactly the nine fields above>
 ESTABLISHMENT_JCS=UTF8(RFC8785_JCS(ESTABLISHMENT_OBJECT))
 ESTABLISHMENT_PREIMAGE=
   UTF8(ESTABLISHMENT_SIGNATURE_DOMAIN)
@@ -213,7 +207,7 @@ ESTABLISHMENT_PREIMAGE=
 ESTABLISHMENT_PREIMAGE_SHA256=sha256(ESTABLISHMENT_PREIMAGE)
 ```
 
-The detached establishment signature is:
+Detached signature:
 
 ```text
 ESTABLISHMENT_SIGNATURE_ALGORITHM=Ed25519
@@ -222,13 +216,13 @@ ESTABLISHMENT_SIGNATURE_HEX_CHARS=128
 ESTABLISHMENT_SIGNATURE_HEX_CASE=LOWERCASE
 ```
 
-The Ed25519 signature authenticates **the exact `ESTABLISHMENT_PREIMAGE` bytes**, not a textual display, alternate JSON serialization, or only the SHA-256 digest.
+The Ed25519 signature authenticates the exact `ESTABLISHMENT_PREIMAGE` bytes, not an alternate serialization or only its digest.
 
 ---
 
 ## 9. Canonical trust-root record
 
-The future committed trust-root JSON must use RFC 8785 canonical JSON for validation and must contain exactly:
+The future committed trust-root JSON must contain exactly:
 
 ```json
 {
@@ -248,26 +242,22 @@ The future committed trust-root JSON must use RFC 8785 canonical JSON for valida
 }
 ```
 
-Unknown fields are forbidden.
-
-The signature and preimage digest are detached from the signed `establishment` object, preventing self-reference.
-
-The verifier must recompute both content identities from bytes and reject any mismatch.
+Unknown fields are forbidden. The digest and signature remain detached from the signed `establishment` object, preventing self-reference.
 
 ---
 
 ## 10. Future verifier contract
 
-The canonical verifier created by the establishment slice must be test-support code only. It must not change product/runtime behavior.
+The verifier created by the establishment slice is test-support code only and must not change product/runtime behavior.
 
-It must provide fail-closed verification functions for:
+Required functions:
 
 ```text
 verifyTrustRootRecord(...)
 verifyProcessAuthorityEnvelope(...)
 ```
 
-`verifyTrustRootRecord` must prove at least:
+`verifyTrustRootRecord` must prove:
 
 ```text
 TRUST_ROOT_SCHEMA_PROOF=PASS
@@ -281,30 +271,30 @@ TRUST_ROOT_ESTABLISHMENT_SIGNATURE_PROOF=PASS
 TRUST_ROOT_PRIVATE_MATERIAL_ABSENCE_PROOF=PASS
 ```
 
-`verifyProcessAuthorityEnvelope` must implement the canonical PR #144 process-authority theorem without widening it. At minimum it must:
+`verifyProcessAuthorityEnvelope` must implement canonical PR #144 without widening it. It must at minimum:
 
-1. accept the canonical trust-root record as an immutable input;
+1. accept the canonical trust-root record as immutable input;
 2. reconstruct the exact `kodac-offline-artifact-process-authority-v1` preimage;
-3. require the strict authority object field set from canonical PR #144;
-4. verify repository, exact-head, scope, trust-root ID, trust-root commit, session ID, nonce, timestamps, and command-manifest digest syntax;
-5. verify the detached Ed25519 signature using the canonical trust-root public key;
-6. reject unknown fields and alternate serializations;
-7. expose no signing or private-key API;
+3. require the exact authority field set from canonical PR #144;
+4. validate repository, exact head, scope, trust-root ID/commit, session ID, nonce, timestamps, and command-manifest digest syntax;
+5. verify the detached Ed25519 signature using the canonical public key;
+6. reject unknown fields and alternate semantic field sets;
+7. expose no signing/private-key API; and
 8. perform no network, Docker, registry, subprocess, shell, or filesystem discovery.
 
-The verifier may consume explicitly supplied bytes/objects only.
+The verifier consumes explicitly supplied bytes/objects only.
 
 ---
 
-## 11. Restricted canonicalization profile
+## 11. Restricted RFC 8785 profile
 
-To avoid requiring a new JSON-canonicalization dependency, the verifier may implement only the exact RFC 8785 subset needed by these contracts.
+No new JSON-canonicalization dependency is authorized. The verifier may implement only the exact RFC 8785 subset required by these contracts.
 
-All signed authority objects are restricted to:
+For each signed flat object:
 
 ```text
 JSON_OBJECT_ONLY=YES
-NESTING_IN_SIGNED_AUTHORITY_OBJECT=NO
+NESTING_IN_SIGNED_OBJECT=NO
 VALUE_TYPES=STRING_ONLY
 DUPLICATE_KEYS=FORBIDDEN
 UNKNOWN_KEYS=FORBIDDEN
@@ -316,17 +306,13 @@ ARRAY_VALUES=FORBIDDEN
 OBJECT_VALUES=FORBIDDEN
 ```
 
-Canonical field ordering must be Unicode-code-point lexicographic ordering as required by RFC 8785. String escaping must match JSON serialization rules. The implementation must include adversarial tests proving reordered keys canonicalize identically while duplicate/unknown/wrong-type inputs fail closed.
-
-No generic JSON canonicalizer is authorized beyond this bounded contract.
+Keys are ordered by Unicode code point per RFC 8785 and strings use JSON escaping rules. Adversarial tests must prove reordered keys produce the same canonical preimage while duplicate, unknown, or wrong-type inputs fail closed.
 
 ---
 
 ## 12. Private-key boundary
 
-The future establishment slice is allowed to commit **public** trust-root and public possession-proof material only.
-
-Strict prohibitions:
+Only public trust-root and public possession-proof material may enter the future establishment PR.
 
 ```text
 PRIVATE_KEY_FILE_IN_REPO=0
@@ -346,15 +332,15 @@ SIGNING_BY_CHATGPT=0
 SIGNING_BY_AGENT=0
 ```
 
-The founder must generate and retain the private key out of band using a trusted local/hardware process outside this authorization. Only the public SPKI DER and public signature may enter the future PR.
+The founder generates and retains the private key out of band using a trusted local/hardware process. Only the public SPKI DER and public signature may enter the future PR.
 
-Loss or suspected compromise of the private key requires a separately authorized trust-root rotation/revocation slice. Silent replacement is forbidden.
+Loss or suspected compromise requires a separately authorized rotation/revocation slice. Silent replacement is forbidden.
 
 ---
 
 ## 13. Exact future establishment path allowlist
 
-If this authorization becomes canonical, the later trust-root establishment candidate must change **exactly these four paths**:
+If this authorization becomes canonical, the later establishment candidate must change exactly these four paths:
 
 ```text
 1. provenance/kdo-h4-r4b-founder-process-authority-trust-root-v1.json
@@ -376,13 +362,13 @@ REQUIRED_FUTURE_PATH_GITLINKS=0
 REQUIRED_FUTURE_PATH_RESOLUTION_PROOF=PASS
 ```
 
-No subset is sufficient for a positive establishment verdict.
+A subset is insufficient.
 
 ---
 
-## 14. Explicit non-allowed paths and mutations
+## 14. Forbidden mutations in the establishment slice
 
-The trust-root establishment slice may not modify:
+The later trust-root establishment slice may not modify:
 
 ```text
 packages/kodac-runtime/src/**
@@ -398,22 +384,21 @@ Dockerfiles or container configuration
 canonical G0 source
 canonical G0 test
 PR #144 canonical authorization document
+the three artifact-proof paths authorized by PR #144
 ```
 
-Specifically frozen canonical G0 inputs remain:
+Frozen G0 inputs remain:
 
 ```text
 packages/kodac-runtime/native/gvisor-workload-gate.c
 packages/kodac-runtime/test/kdo-h4-r4b-g0-gvisor-workload-gate.test.ts
 ```
 
-The three future artifact-proof paths authorized by canonical PR #144 are also **not** part of the trust-root establishment slice and must remain untouched.
-
 ---
 
 ## 15. Required establishment tests
 
-The future test must exercise at least:
+The future test must cover at least:
 
 ```text
 valid canonical trust-root record -> PASS
@@ -439,10 +424,10 @@ process-authority signature mutation -> FAIL
 process-authority wrong repository -> FAIL
 process-authority wrong trust-root ID -> FAIL
 process-authority unknown field -> FAIL
-process-authority alternate serialization -> SAME_CANONICAL_PREIMAGE
+process-authority alternate key ordering -> SAME_CANONICAL_PREIMAGE
 ```
 
-Tests must use only public values. No test fixture may contain founder private-key material.
+Tests use public values only. No fixture may contain founder private-key material.
 
 ---
 
@@ -454,18 +439,20 @@ The future evidence document must retain at least:
 canonical predecessor main SHA/tree
 trust-root candidate exact head SHA/tree
 all four changed-path identities
-trust-root JSON Git blob SHA
-trust-root JSON SHA-256 and byte size
-verifier Git blob SHA
-verifier SHA-256 and byte size
-test Git blob SHA
-test SHA-256 and byte size
-evidence Git blob SHA when stable/pre-merge form permits
+trust-root JSON Git blob SHA/SHA-256/bytes
+verifier Git blob SHA/SHA-256/bytes
+test Git blob SHA/SHA-256/bytes
 public SPKI DER hex
 public SPKI DER SHA-256
 trustRootIdSha256
 establishment preimage SHA-256
 establishment signature hex
+founder bootstrap approval comment author login
+founder bootstrap approval comment ID/URL/timestamp
+founder bootstrap approval exact-head binding
+founder bootstrap approval trust-root-ID binding
+founder bootstrap approval SPKI-digest binding
+founder bootstrap approval establishment-preimage binding
 Node version used for verification
 focused trust-root test result
 full required runtime test result
@@ -476,19 +463,19 @@ final main/head diff fence
 expected-head SHA merge fence
 ```
 
-The evidence document must state clearly that the public key and signature are public verification artifacts and that no private key was accessed or retained by repository tooling.
+The evidence must state that the public key/signature are public verification artifacts and that repository tooling accessed no private key.
 
 ---
 
-## 17. Establishment verdict
+## 17. Future establishment verdict
 
-The future trust-root establishment candidate may emit the maximum verdict:
+The later trust-root candidate may emit:
 
 ```text
 FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT=CANONICAL_PROVEN
 ```
 
-only when all of the following pass on the exact reviewed head:
+only when all predicates pass on the exact reviewed head:
 
 ```text
 REQUIRED_FUTURE_PATHS_PRESENT=PASS
@@ -503,6 +490,7 @@ TRUST_ROOT_ESTABLISHMENT_PREIMAGE_PROOF=PASS
 TRUST_ROOT_ESTABLISHMENT_SIGNATURE_PROOF=PASS
 TRUST_ROOT_PRIVATE_MATERIAL_ABSENCE_PROOF=PASS
 PROCESS_AUTHORITY_VERIFIER_CONTRACT_TESTS=PASS
+FOUNDER_BOOTSTRAP_APPROVAL_PROOF=PASS
 FOCUSED_LOCAL_TESTS=PASS
 EXACT_HEAD_CI=PASS
 FRESH_INDEPENDENT_EXACT_HEAD_REVIEW=PASS
@@ -520,11 +508,11 @@ ARTIFACT_PROCESS_EXECUTION=FORBIDDEN
 
 ---
 
-## 18. Authority after trust-root establishment
+## 18. Authority after establishment
 
-Even after a trust root is canonical, artifact execution does **not** become automatically authorized.
+Even after the trust root is canonical, artifact execution is not automatically authorized.
 
-A later artifact candidate still requires a fresh, single-use, founder-signed current-session process-authority envelope bound to:
+A later artifact candidate requires a fresh single-use founder-signed authority envelope bound to:
 
 ```text
 repository=TheHalfMoon/Kodac
@@ -538,13 +526,11 @@ canonical trust-root ID
 canonical trust-root commit
 ```
 
-The canonical verifier must validate that envelope before the first process launches. Post-execution process-tree conformance remains separately required exactly as defined by canonical PR #144.
+The canonical verifier validates that envelope before the first process launch. Post-execution process-tree conformance remains required exactly as canonical PR #144 defines it.
 
 ---
 
-## 19. Explicit non-grants in this authorization PR
-
-This docs-only PR grants none of the following:
+## 19. Explicit non-grants in this docs-only PR
 
 ```text
 TRUST_ROOT_KEY_GENERATION=NO
@@ -577,9 +563,9 @@ H4_COMPLETE=NO
 
 ---
 
-## 20. Merge gate for this docs-only authorization
+## 20. Merge gate for this authorization PR
 
-This authorization PR may merge only if:
+This docs-only authorization may merge only if:
 
 ```text
 CHANGED_PATHS=EXACTLY_1_DOC
@@ -596,9 +582,7 @@ FINAL_MAIN_HEAD_DIFF_FENCE=PASS
 EXPECTED_HEAD_SHA_MERGE_FENCE=PASS
 ```
 
-If `main` moves, stop and reconcile the exact predecessor before merge.
-
-No positive trust-root establishment claim may be made from this docs-only authorization alone.
+If `main` moves, stop and reconcile the exact predecessor. No positive trust-root establishment claim may be made from this authorization alone.
 
 ---
 
@@ -608,7 +592,7 @@ If and only if this document becomes canonical, the next bounded slice may estab
 
 The private key remains exclusively out of band and outside all repository/CI/agent/ChatGPT authority.
 
-Until the later establishment slice itself is exact-head reviewed, proven, and canonically merged:
+Until the later establishment slice is exact-head reviewed, proven, founder-bootstrap approved, and canonically merged:
 
 ```text
 FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT=NOT_PROVEN
