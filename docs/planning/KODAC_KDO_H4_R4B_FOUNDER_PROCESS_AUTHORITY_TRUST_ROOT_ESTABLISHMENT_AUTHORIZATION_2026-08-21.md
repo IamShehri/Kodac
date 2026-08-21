@@ -293,7 +293,7 @@ RETRY_AFTER_RETIREMENT=FRESH_NONCE_AND_FRESH_SEQUENCE_1_RECORD
 CANONICAL_MERGE=SEQUENCE_1_CONSUMED_RECORD_REMAINS_BOUND_TO_CANONICAL_PREIMAGE
 ```
 
-A positive trust-root candidate must present exactly one valid sequence-1 `CONSUMED_FOR_PREIMAGE` record for its current nonce/preimage and no terminal retirement for that same key. If a terminal retirement exists, that attempt is permanently ineligible for merge. Retirement records for earlier attempts in the same establishment effort must be retained in evidence and must not conflict with the current fresh nonce.
+A positive trust-root candidate must present exactly one valid sequence-1 `CONSUMED_FOR_PREIMAGE` record for its current nonce/preimage and no terminal retirement for that same atomic-state key. If a terminal retirement exists for the current key, that attempt is permanently ineligible for merge. Retirement records for earlier attempts in the same establishment effort must be retained as **separate retirement-evidence inputs** under Section 8.2 and must use a different nonce-state key from the current positive candidate.
 
 If disposition state is absent, cannot be atomically proven, has conflicting records, has an invalid transition, is bound to another authorization commit/trust-root ID/preimage/nonce, or indicates retirement of the current attempt:
 
@@ -304,11 +304,63 @@ FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT=NOT_PROVEN
 ARTIFACT_PROCESS_EXECUTION=FORBIDDEN
 ```
 
+### 8.2 Canonical terminal-retirement evidence envelope
+
+Terminal retirement records are **not fields of the current canonical trust-root JSON** and are never passed to `verifyTrustRootRecord` as part of that current record. They are separate historical evidence inputs verified by `verifyRetirementEvidenceEnvelope`.
+
+Each terminal retirement evidence item is one standalone UTF-8 JSON document containing exactly three top-level fields:
+
+```json
+{
+  "establishmentNonceDisposition": {
+    "authorizationCommit": "<canonical authorization merge SHA>",
+    "challengeNonceHex": "<retired attempt nonce>",
+    "disposition": "RETIRED_ABANDONED|RETIRED_SUPERSEDED",
+    "establishmentPreimageSha256": "<retired attempt preimage digest>",
+    "previousDispositionSha256": "<exact sequence-1 disposition preimage SHA-256>",
+    "recordedAtUtc": "<RFC3339 UTC Z second precision>",
+    "repository": "TheHalfMoon/Kodac",
+    "schemaVersion": "kodac-founder-process-authority-establishment-nonce-disposition-v1",
+    "sequence": "2",
+    "trustRootIdSha256": "<same trust-root ID>"
+  },
+  "establishmentNonceDispositionSha256": "<64 lowercase hex chars>",
+  "establishmentNonceDispositionSignatureHex": "<128 lowercase hex chars>"
+}
+```
+
+Normative encoding and ingestion rules:
+
+```text
+TERMINAL_RETIREMENT_EVIDENCE_FORMAT=kodac-establishment-nonce-retirement-evidence-v1
+TERMINAL_RETIREMENT_EVIDENCE_INPUT=ORIGINAL_UTF8_JSON_BYTES
+TERMINAL_RETIREMENT_EVIDENCE_TOP_LEVEL_FIELDS=EXACTLY_3
+TERMINAL_RETIREMENT_EVIDENCE_UNKNOWN_FIELDS=FORBIDDEN
+TERMINAL_RETIREMENT_EVIDENCE_DUPLICATE_MEMBERS=FORBIDDEN_AT_ALL_DEPTHS
+TERMINAL_RETIREMENT_EVIDENCE_DISPOSITION=RETIRED_ABANDONED_OR_RETIRED_SUPERSEDED_ONLY
+TERMINAL_RETIREMENT_EVIDENCE_SEQUENCE=2
+TERMINAL_RETIREMENT_EVIDENCE_MULTIPLE_ITEMS=ALLOWED
+```
+
+The nested disposition object is the signed object and uses exactly the Section 8.1 preimage/domain/signature theorem. The two detached top-level fields must equal the recomputed disposition preimage SHA-256 and Ed25519 signature. The envelope itself is not additionally signed; its only semantics are the exact signed nested object plus detached digest/signature.
+
+When more than one historical terminal record exists, each is supplied as a separate raw UTF-8 envelope. Verification treats the set as unordered and keys each verified item by:
+
+```text
+(authorizationCommit, trustRootIdSha256, challengeNonceHex, sequence)
+```
+
+Duplicate keys with byte-identical envelopes are forbidden rather than deduplicated. Duplicate keys with differing envelopes, conflicting dispositions, broken sequence-1 links, or multiple terminal states for one atomic-state key fail closed.
+
+The evidence document must retain each envelope as an exact canonical JSON code block plus its UTF-8 byte SHA-256, or retain an equivalent exact-byte attachment if a later separately authorized evidence format permits it. The current four-path establishment allowlist is unchanged; this subsection does not authorize a fifth repository path.
+
+A historical terminal envelope is valid evidence only when it refers to an **earlier abandoned or superseded attempt**. If any terminal envelope has the same `(authorizationCommit, trustRootIdSha256, challengeNonceHex)` as the current positive candidate, the current candidate is retired and must fail. Historical terminal envelopes with distinct retired nonces are expected evidence and do **not** cause `verifyTrustRootRecord` to reject the current record.
+
 ---
 
 ## 9. Canonical trust-root record
 
-The future committed trust-root JSON must contain exactly:
+The future committed trust-root JSON represents only the **current positive establishment attempt** and must contain exactly:
 
 ```json
 {
@@ -325,9 +377,9 @@ The future committed trust-root JSON must contain exactly:
   },
   "establishmentNonceDisposition": {
     "authorizationCommit": "<same canonical authorization merge SHA>",
-    "challengeNonceHex": "<same nonce>",
+    "challengeNonceHex": "<same current nonce>",
     "disposition": "CONSUMED_FOR_PREIMAGE",
-    "establishmentPreimageSha256": "<same preimage digest>",
+    "establishmentPreimageSha256": "<same current preimage digest>",
     "previousDispositionSha256": "0000000000000000000000000000000000000000000000000000000000000000",
     "recordedAtUtc": "<RFC3339 UTC Z second precision>",
     "repository": "TheHalfMoon/Kodac",
@@ -342,7 +394,7 @@ The future committed trust-root JSON must contain exactly:
 }
 ```
 
-Unknown fields are forbidden. The establishment digest/signature and nonce-disposition digest/signature remain detached from their respective signed objects, preventing self-reference.
+Unknown fields are forbidden. The establishment digest/signature and current nonce-disposition digest/signature remain detached from their respective signed objects, preventing self-reference. Historical retirement envelopes are deliberately excluded from this canonical current-record schema.
 
 ---
 
@@ -354,10 +406,11 @@ Required functions:
 
 ```text
 verifyTrustRootRecord(...)
+verifyRetirementEvidenceEnvelope(...)
 verifyProcessAuthorityEnvelope(...)
 ```
 
-For every JSON trust record or authority envelope arriving from repository/file/evidence bytes, the authoritative verifier input is the **original UTF-8 JSON byte sequence**, not an ordinary pre-parsed JavaScript object. Duplicate-member detection must occur while parsing those source bytes and before any object materialization is trusted for schema validation or canonicalization.
+For every JSON trust record, retirement-evidence envelope, or authority envelope arriving from repository/file/evidence bytes, the authoritative verifier input is the **original UTF-8 JSON byte sequence**, not an ordinary pre-parsed JavaScript object. Duplicate-member detection must occur while parsing those source bytes and before any object materialization is trusted for schema validation or canonicalization.
 
 Required input theorem:
 
@@ -391,7 +444,30 @@ TRUST_ROOT_ESTABLISHMENT_NONCE_SINGLE_USE_PROOF=PASS
 TRUST_ROOT_PRIVATE_MATERIAL_ABSENCE_PROOF=PASS
 ```
 
-For a positive current candidate, `verifyTrustRootRecord` must require the sequence-1 `CONSUMED_FOR_PREIMAGE` record embedded in the trust-root JSON, verify its detached signature and digest, verify exact binding to the signed establishment object, and reject any supplied terminal record or conflicting disposition history. Terminal retirement records from earlier failed/superseded attempts are verified as evidence inputs and may never authorize the current candidate.
+For a positive current candidate, `verifyTrustRootRecord` requires the sequence-1 `CONSUMED_FOR_PREIMAGE` record embedded in the current trust-root JSON, verifies its detached signature/digest and exact binding to the signed establishment object, and rejects any terminal disposition **embedded in or substituted for the current trust-root record**. It does not reject separately supplied historical terminal evidence merely because that evidence exists.
+
+`verifyRetirementEvidenceEnvelope` must accept exactly one original raw UTF-8 envelope defined by Section 8.2 and prove:
+
+```text
+RETIREMENT_EVIDENCE_SCHEMA_PROOF=PASS
+RETIREMENT_EVIDENCE_UNKNOWN_FIELDS_ZERO_PROOF=PASS
+RETIREMENT_EVIDENCE_DISPOSITION_SCHEMA_PROOF=PASS
+RETIREMENT_EVIDENCE_DIGEST_PROOF=PASS
+RETIREMENT_EVIDENCE_SIGNATURE_PROOF=PASS
+RETIREMENT_EVIDENCE_SEQUENCE_PROOF=PASS
+RETIREMENT_EVIDENCE_PREVIOUS_LINK_PROOF=PASS
+RETIREMENT_EVIDENCE_BINDING_PROOF=PASS
+```
+
+For a collection of historical envelopes, the verifier/test must additionally prove:
+
+```text
+RETIREMENT_EVIDENCE_DUPLICATE_KEY_ZERO_PROOF=PASS
+RETIREMENT_EVIDENCE_CONFLICT_ZERO_PROOF=PASS
+RETIREMENT_EVIDENCE_CURRENT_NONCE_NOT_RETIRED_PROOF=PASS
+```
+
+A valid historical retirement under a distinct nonce is evidence of a closed prior attempt, not a reason to reject the current trust-root record. A retirement matching the current nonce-state key makes the current candidate invalid.
 
 `verifyProcessAuthorityEnvelope` must implement canonical PR #144 without widening it. It must at minimum:
 
@@ -413,9 +489,9 @@ The verifier consumes explicitly supplied bytes only at its external trust bound
 
 No new JSON-canonicalization dependency is authorized. The verifier may implement only the exact RFC 8785 subset required by these contracts.
 
-The outer trust-root record may contain the nested `establishment` and `establishmentNonceDisposition` objects defined in Section 9. Duplicate-member rejection applies recursively to the complete raw JSON input before any nested object is trusted.
+The outer current trust-root record may contain the nested `establishment` and `establishmentNonceDisposition` objects defined in Section 9. Each terminal-retirement envelope may contain only its nested `establishmentNonceDisposition` object plus the two detached fields defined in Section 8.2. Duplicate-member rejection applies recursively to every complete raw JSON input before any nested object is trusted.
 
-For each **signed flat object** (`establishment`, `establishmentNonceDisposition`, and the canonical PR #144 authority object):
+For each **signed flat object** (`establishment`, every `establishmentNonceDisposition`, and the canonical PR #144 authority object):
 
 ```text
 JSON_OBJECT_ONLY=YES
@@ -563,9 +639,18 @@ candidate-head repair + identical establishment preimage -> SAME_CONSUMED_RECORD
 candidate-head repair + changed establishment preimage + old nonce -> FAIL
 changed establishment preimage + RETIRED_SUPERSEDED old nonce + fresh nonce -> PASS
 abandoned attempt + RETIRED_ABANDONED -> TERMINAL_NOT_PROVEN
-retired current nonce presented for positive candidate -> FAIL
-competing terminal dispositions -> FAIL
-broken retirement previous-digest link -> FAIL
+retired current nonce embedded in current trust-root record -> FAIL
+historical retired distinct nonce supplied as separate evidence envelope -> PASS
+terminal evidence envelope unknown top-level field -> FAIL
+terminal evidence envelope duplicate member -> FAIL
+terminal evidence digest mutation -> FAIL
+terminal evidence signature mutation -> FAIL
+terminal evidence sequence != 2 -> FAIL
+terminal evidence disposition not terminal -> FAIL
+terminal evidence broken previous-digest link -> FAIL
+terminal evidence matching current nonce-state key -> FAIL
+duplicate historical envelope key -> FAIL
+competing terminal dispositions for one retired key -> FAIL
 process-authority signature valid under wrong key -> FAIL
 process-authority signature mutation -> FAIL
 process-authority wrong repository -> FAIL
@@ -600,8 +685,12 @@ current nonce disposition preimage SHA-256
 current nonce disposition signature hex
 atomic nonce state key
 atomic sequence/previous-digest proof
-terminal retirement records and signatures for any earlier abandoned/superseded attempt
+for each earlier abandoned/superseded attempt: exact terminal-retirement evidence envelope UTF-8 bytes/canonical JSON, byte SHA-256, disposition SHA-256, and disposition signature hex
+verified terminal-retirement envelope key set
 candidate-head repair versus abandonment disposition classification
+RETIREMENT_EVIDENCE_DUPLICATE_KEY_ZERO_PROOF
+RETIREMENT_EVIDENCE_CONFLICT_ZERO_PROOF
+RETIREMENT_EVIDENCE_CURRENT_NONCE_NOT_RETIRED_PROOF
 founder bootstrap approval comment author login
 founder bootstrap approval comment ID/URL/timestamp
 founder bootstrap approval exact-head binding
@@ -618,6 +707,8 @@ unresolved actionable thread count
 final main/head diff fence
 expected-head SHA merge fence
 ```
+
+Historical retirement envelopes belong in the evidence document as separate exact-byte items; they are not added to `provenance/kdo-h4-r4b-founder-process-authority-trust-root-v1.json` and do not create new repository paths.
 
 The evidence must state that the public key/signatures/disposition records are public verification artifacts and that repository tooling accessed no private key.
 
@@ -652,6 +743,11 @@ TRUST_ROOT_NONCE_DISPOSITION_SIGNATURE_PROOF=PASS
 TRUST_ROOT_NONCE_DISPOSITION_TRANSITION_PROOF=PASS
 TRUST_ROOT_NONCE_DISPOSITION_ATOMIC_STATE_PROOF=PASS
 TRUST_ROOT_ESTABLISHMENT_NONCE_SINGLE_USE_PROOF=PASS
+RETIREMENT_EVIDENCE_SCHEMA_PROOF=PASS_IF_ANY_HISTORICAL_RETIREMENTS_EXIST
+RETIREMENT_EVIDENCE_SIGNATURE_PROOF=PASS_IF_ANY_HISTORICAL_RETIREMENTS_EXIST
+RETIREMENT_EVIDENCE_DUPLICATE_KEY_ZERO_PROOF=PASS
+RETIREMENT_EVIDENCE_CONFLICT_ZERO_PROOF=PASS
+RETIREMENT_EVIDENCE_CURRENT_NONCE_NOT_RETIRED_PROOF=PASS
 TRUST_ROOT_PRIVATE_MATERIAL_ABSENCE_PROOF=PASS
 PROCESS_AUTHORITY_VERIFIER_CONTRACT_TESTS=PASS
 FOUNDER_BOOTSTRAP_APPROVAL_PROOF=PASS
@@ -663,11 +759,13 @@ FINAL_MAIN_HEAD_DIFF_FENCE=PASS
 EXPECTED_HEAD_SHA_MERGE_FENCE=PASS
 ```
 
-`PROCESS_AUTHORITY_VERIFIER_CONTRACT_TESTS=PASS` additionally requires the raw-UTF-8 duplicate-rejecting input theorem, RFC 8785 UTF-16 ordering test vector, and disposition-state adversarial tests to pass; it may not hide or substitute for any explicit trust-root predicate listed above.
+If no historical retired attempt exists, the two `PASS_IF_ANY_HISTORICAL_RETIREMENTS_EXIST` predicates are `NOT_APPLICABLE_NO_HISTORICAL_RETIREMENTS`; this is not a bypass because duplicate/conflict/current-nonce-not-retired proofs remain mandatory and must inspect the complete supplied retirement-evidence set, including the empty-set case.
 
-Missing or conflicting nonce disposition state, more than one initial consumption, a broken transition chain, or a terminal retirement of the current attempt always forces `NOT_PROVEN`.
+`PROCESS_AUTHORITY_VERIFIER_CONTRACT_TESTS=PASS` additionally requires the raw-UTF-8 duplicate-rejecting input theorem, RFC 8785 UTF-16 ordering test vector, disposition-state adversarial tests, and terminal-retirement evidence-envelope adversarial tests to pass; it may not hide or substitute for any explicit trust-root predicate listed above.
 
-If any predicate is absent or fails:
+Missing or conflicting nonce disposition state, more than one initial consumption, a broken transition chain, a terminal retirement of the current attempt, or ambiguous/unverifiable historical retirement evidence always forces `NOT_PROVEN`.
+
+If any required predicate is absent or fails:
 
 ```text
 FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT=NOT_PROVEN
