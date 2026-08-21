@@ -125,7 +125,13 @@
         "failurePhase": { "enum": ["prepare", "owner-claim", "attaching", "upgrade-validation", "reader-activation", "post-attach-revalidation", "ready-invalidation"] },
         "failureCode": { "enum": ["aborted", "socket-namespace-untrusted", "socket-client-unauthorized", "socket-identity-changed", "attach-failed", "attach-timeout", "attach-protocol-invalid", "reader-failed", "reader-activation-timeout", "payload-before-start", "dormant-revalidation-failed", "dormant-revalidation-timeout", "prestart-total-timeout", "owner-lost-graceful"] },
         "failureIdentity": { "$ref": "#/$defs/sha256" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "failureCode": { "const": "owner-lost-graceful" } }, "required": ["failureCode"] },
+          "then": { "properties": { "ownerInstanceIdentity": { "$ref": "#/$defs/sha256" } } }
+        }
+      ]
     },
     "failureCommit": {
       "type": "object",
