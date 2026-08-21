@@ -9,7 +9,7 @@ Authorize the smallest safe design predecessor required by canonical PR #146 bef
 
 Canonical PR #146 proved that a client-side finalizer plus `expected_head_sha` cannot by itself make review/comment/thread metadata atomic with the merge operation. This document therefore selects a server-enforced architecture that moves merge-critical mutable predicates into GitHub's protected-branch / ruleset / merge-queue control plane and moves Kodac-specific founder/reviewer bindings into a candidate-independent GitHub App check.
 
-This document authorizes design and a later separately qualified implementation/configuration slice only. It does **not** mutate repository rules, install or create a GitHub App, modify workflows, enqueue or merge a trust-root candidate, access a founder private key, sign anything, establish the trust root, or execute artifact/runtime work.
+This document authorizes design and later separately qualified implementation/configuration slices only. It does **not** mutate repository rules, install or create a GitHub App, modify workflows, enqueue or merge a trust-root candidate, access a founder private key, sign anything, establish the trust root, or execute artifact/runtime work.
 
 Maximum result of this docs-only PR if merged:
 
@@ -64,9 +64,9 @@ The selected design relies only on documented GitHub server-side primitives:
 2. a required status check can require a specific GitHub App as the expected source;
 3. required status checks can be strict with respect to the current base branch;
 4. a repository-level rule can require merge queue;
-5. merge queue evaluates required checks on a `merge_group` built against the latest target-branch state;
+5. merge queue evaluates required checks on a `merge_group` built against current target-branch state;
 6. GitHub Apps can receive `merge_group.checks_requested` and report check results for the merge-group head SHA;
-7. merge queue can be configured to require all queue entries to pass required checks and to limit the maximum number of PRs merged together.
+7. merge queue can require all queue entries to pass required checks and can limit the maximum number of PRs merged together.
 
 Primary references:
 
@@ -82,7 +82,7 @@ If any required GitHub capability is unavailable for this repository at implemen
 
 ## 4. Selected architecture
 
-The authorized architecture is exactly two server-side enforcement layers plus immutable event receipts.
+The authorized architecture is exactly two server-side enforcement layers plus candidate-independent immutable event receipts.
 
 ### Layer A — GitHub repository ruleset / protected-branch enforcement
 
@@ -119,11 +119,27 @@ EXECUTION_CLASS=GITHUB_APP_SERVER_SIDE_CHECK
 CANDIDATE_REPOSITORY_CODE_AUTHORITY=NONE
 ```
 
-The App implementation, credentials, installation configuration, and signing material must not live in the trust-root candidate branch or in any path the trust-root candidate may modify.
+The App implementation, credentials, installation configuration, receipt store, reviewer allowlist, and any App signing/credential material must not live in the trust-root candidate branch or in any path the trust-root candidate may modify.
 
 The App must be the expected source of `kodac/phase-b-gate` in the repository rule.
 
-The App must evaluate both ordinary PR-head qualification and `merge_group.checks_requested`, but the merge-authoritative PASS is the check associated with the current merge-group head.
+The App must evaluate ordinary PR-head qualification and `merge_group.checks_requested`, but the merge-authoritative PASS is the check associated with the current merge-group head.
+
+### Receipt-store boundary
+
+The App's event receipts must use candidate-independent storage with these properties:
+
+```text
+RECEIPT_STORAGE_CLASS=CANDIDATE_INDEPENDENT
+RECEIPT_CONTENT_ADDRESSING=SHA256
+RECEIPT_APPEND_ONLY=REQUIRED
+RECEIPT_MUTATION_AFTER_ISSUANCE=FORBIDDEN
+RECEIPT_DELETION_AFTER_ISSUANCE=FORBIDDEN
+RECEIPT_AUDIT_RETRIEVAL=REQUIRED
+RECEIPT_DIGEST_BOUND_IN_PHASE_B_CHECK=REQUIRED
+```
+
+The later AG-1 proof must identify the concrete storage mechanism and show that the establishment candidate has no credentials or write path to it. If append-only semantics cannot be proven, the gate is not proven.
 
 ---
 
@@ -222,6 +238,8 @@ FOUNDER_BOOTSTRAP_RECEIPT_SHA256=sha256(FOUNDER_BOOTSTRAP_RECEIPT_PREIMAGE)
 
 Unknown fields and duplicate keys are forbidden.
 
+The complete canonical receipt bytes must be stored under the receipt digest in the candidate-independent receipt store. The Phase-B check must expose or bind that digest so an auditor can retrieve the exact receipt consumed by the gate.
+
 The receipt proves a historical founder approval event for one exact candidate head. Editing or deleting the source comment after a valid receipt is issued does not retroactively erase that already-observed event and is not used as a merge-time revocation channel.
 
 There is no comment-based revocation protocol. If the founder intends to stop the candidate after issuing approval, the supported actions are to close/remove the PR from the queue or change the candidate head, both of which invalidate merge eligibility through GitHub's own PR/head state.
@@ -234,7 +252,19 @@ This event-to-receipt conversion is the explicit semantic repair that prevents m
 
 A qualifying independent review remains mandatory.
 
-The App may recognize only an explicitly configured allowlist of independent reviewer identities established in the later gate-implementation proof. The trust-root candidate cannot modify this allowlist.
+The App may recognize only an explicitly configured allowlist of independent reviewer identities established in the later AG-1 proof. The trust-root candidate cannot modify this allowlist.
+
+A reviewer/provider is eligible for that allowlist only if the qualification proves:
+
+```text
+REVIEWER_IDENTITY_STABLE=YES
+EXACT_HEAD_BINDING_OBSERVABLE=YES
+TERMINAL_CLEAN_VERDICT_OBSERVABLE=YES
+ACTIONABLE_FINDINGS_SURFACE=INLINE_REVIEW_CONVERSATION
+TOP_LEVEL_ONLY_ACTIONABLE_FINDINGS=FORBIDDEN_FOR_QUALIFIED_PROVIDER
+```
+
+If a provider can emit a material actionable finding only as a top-level mutable summary with no merge-blocking review conversation, that provider is not sufficient for this gate unless a separately proven adapter converts such findings into a server-enforced blocking predicate.
 
 The App must issue a clean-review receipt only after all of the following are true for the exact candidate head:
 
@@ -269,9 +299,11 @@ Receipt identity uses the same domain-separated JCS + SHA-256 construction with 
 kodac-phase-b-independent-review-receipt-v1
 ```
 
+The complete receipt bytes must be stored under the receipt digest in the candidate-independent receipt store and bound by the Phase-B check.
+
 The review receipt is historical proof that a clean independent exact-head review completed. Later actionable findings must be represented as unresolved PR review conversations to be merge-blocking. `REQUIRE_CONVERSATION_RESOLUTION_BEFORE_MERGE=YES` is therefore mandatory and is not replaceable by the review receipt.
 
-A top-level summary update without an unresolved actionable review conversation does not retroactively invalidate an already-issued clean review receipt.
+A top-level non-actionable summary update without an unresolved actionable review conversation does not retroactively invalidate an already-issued clean review receipt.
 
 ---
 
@@ -293,8 +325,10 @@ ESTABLISHMENT_PR_BINDING_PROOF=PASS
 CANDIDATE_HEAD_BINDING_PROOF=PASS
 MERGE_GROUP_CONTAINS_EXPECTED_CANDIDATE_PROOF=PASS
 FOUNDER_BOOTSTRAP_RECEIPT_PROOF=PASS
+FOUNDER_BOOTSTRAP_RECEIPT_STORAGE_PROOF=PASS
 FOUNDER_BOOTSTRAP_EXACT_HEAD_PROOF=PASS
 INDEPENDENT_REVIEW_RECEIPT_PROOF=PASS
+INDEPENDENT_REVIEW_RECEIPT_STORAGE_PROOF=PASS
 INDEPENDENT_REVIEW_EXACT_HEAD_PROOF=PASS
 TRUST_ROOT_ID_BINDING_PROOF=PASS
 ESTABLISHMENT_PREIMAGE_BINDING_PROOF=PASS
@@ -305,6 +339,8 @@ REQUIRED_RULESET_IDENTITY_PROOF=PASS
 REQUIRED_RULESET_CONFIGURATION_PROOF=PASS
 EXPECTED_APP_SOURCE_PROOF=PASS
 ```
+
+The check output must bind the exact founder-receipt digest, independent-review-receipt digest, App identity, installation identity, establishment PR number, exact candidate head, and merge-group head.
 
 The App check must not claim the state of built-in GitHub predicates that GitHub itself enforces at merge time as a substitute for those rules. Redundant observation is allowed, but the server-side rule remains authoritative for conversation resolution and required status-check enforcement.
 
@@ -324,7 +360,9 @@ MAXIMUM_PULL_REQUESTS_TO_MERGE_TOGETHER=1
 MINIMUM_PULL_REQUESTS_TO_MERGE_TOGETHER=1
 ```
 
-`MAXIMUM_PULL_REQUESTS_TO_MERGE_TOGETHER=1` is required so the trust-root qualification theorem never has to infer which of multiple independently changing PRs produced a grouped landing decision.
+`MAXIMUM_PULL_REQUESTS_TO_MERGE_TOGETHER=1` is required to minimize ambiguity between independent landing decisions. It must not merely be assumed to make every synthetic merge-group object contain exactly one PR.
+
+The AG-4 qualification must empirically prove the exact merge-group membership semantics seen by the App. If a `merge_group` can include additional PR content in a way that prevents exact candidate/base attribution under this configuration, qualification fails and a new authorization is required.
 
 Build concurrency may be greater than one because it limits concurrent merge-group builds rather than the number of PRs merged together. It is not itself a security boundary.
 
@@ -397,18 +435,44 @@ The establishment candidate is forbidden from changing:
 .github/**
 repository rulesets / branch protection
 GitHub App installation or permissions
-GitHub App source/configuration
+GitHub App source/configuration/deployment
 required status-check expected source
 merge-queue configuration
 reviewer allowlists used by the App
-server-side receipt storage / receipt signing configuration
+server-side receipt storage
+App credentials or signing configuration
 ```
 
 Any such mutation belongs to a separate predecessor and invalidates establishment qualification until independently reconciled.
 
 ---
 
-## 13. Administrative control-plane trust boundary
+## 13. App provenance and credential boundary
+
+AG-1 must bind the candidate-independent App to an exact implementation/deployment identity before it can become a required check source.
+
+Required proof fields include:
+
+```text
+APP_GITHUB_ID
+APP_SLUG_OR_CANONICAL_NAME
+APP_INSTALLATION_ID
+APP_SOURCE_PROVENANCE_ID
+APP_SOURCE_EXACT_REVISION
+APP_DEPLOYMENT_IDENTITY
+APP_PERMISSION_SET
+APP_WEBHOOK_EVENT_SET
+APP_RECEIPT_STORAGE_IDENTITY
+APP_REVIEWER_ALLOWLIST_SHA256
+```
+
+Permissions must be least privilege and separately justified. The App's private key, webhook secret, deployment credentials, receipt-store credentials, or equivalent secrets are forbidden from the Kodac repository, PR comments, CI logs, ChatGPT/agent context, and test fixtures.
+
+No private App credential may be generated or handled by this docs-only authorization PR.
+
+---
+
+## 14. Administrative control-plane trust boundary
 
 No GitHub repository rule can make a malicious organization owner cryptographically unable to change repository settings.
 
@@ -429,23 +493,25 @@ This limitation must not be hidden behind an absolute claim that GitHub administ
 
 ---
 
-## 14. Future implementation/configuration slices
+## 15. Future implementation/configuration slices
 
 This authorization intentionally separates future work.
 
-### AG-1 — GitHub App identity and receipt-contract proof
+### AG-1 — GitHub App identity, provenance, and receipt-contract proof
 
 May establish and prove:
 
 ```text
 exact App identity
 installation identity
+exact source revision / deployment identity
 minimum required permissions
 webhook/event subscriptions
 receipt schemas
 receipt canonicalization
+append-only receipt storage
 candidate-head binding
-reviewer allowlist
+reviewer allowlist and reviewer behavioral contract
 fail-closed check semantics
 ```
 
@@ -455,7 +521,7 @@ It must not yet modify `main` merge rules unless separately included in the auth
 
 May configure only the exact server-side controls authorized by this document after AG-1 is proven.
 
-It must retain before/after configuration evidence and prove zero unexpected bypass actors.
+It must retain before/after configuration evidence and prove zero configured bypass actors.
 
 ### AG-3 — merge-group CI compatibility, only if required
 
@@ -469,7 +535,7 @@ The real trust-root establishment candidate is not the test fixture for the gate
 
 ---
 
-## 15. Required adversarial qualification matrix
+## 16. Required adversarial qualification matrix
 
 AG-4 must prove at least:
 
@@ -481,10 +547,15 @@ wrong PR number -> receipt FAIL
 wrong candidate head -> receipt FAIL
 malformed bootstrap body -> receipt FAIL
 bootstrap body hash mutation -> receipt FAIL
+receipt missing from append-only store -> gate FAIL
+receipt bytes not matching digest -> gate FAIL
+receipt overwrite attempt -> FAIL / NO MUTATION
 valid independent exact-head clean review -> receipt PASS
 wrong reviewer identity -> receipt FAIL
+unqualified reviewer provider -> receipt FAIL
 review bound to old head -> receipt FAIL
 review with actionable finding -> receipt FAIL
+provider that emits actionable finding only top-level -> NOT QUALIFIED
 missing Phase-B App check -> MERGE BLOCKED
 Phase-B App check pending -> MERGE BLOCKED
 Phase-B App check failure -> MERGE BLOCKED
@@ -497,7 +568,7 @@ main movement -> new merge-group evaluation REQUIRED
 direct merge outside merge queue -> BLOCKED
 force push to main -> BLOCKED
 main deletion -> BLOCKED
-multiple PR merge grouping -> FORBIDDEN_BY_MAX_GROUP_SIZE_1
+multiple-PR landing group -> BLOCKED / CONFIGURATION FAIL
 candidate change after receipts -> old receipts INVALID
 candidate attempts .github gate mutation -> establishment allowlist FAIL
 candidate attempts ruleset/config mutation -> establishment qualification FAIL
@@ -507,16 +578,21 @@ The qualification must include negative tests; a successful happy-path merge alo
 
 ---
 
-## 16. Gate proof artifact requirements
+## 17. Gate proof artifact requirements
 
 Before the real establishment candidate can start, a later canonical evidence package must bind at least:
 
 ```text
 GATE_AUTHORIZATION_COMMIT=<canonical merge commit of this authorization>
-GITHUB_APP_IDENTITY=<exact app identity>
+GITHUB_APP_IDENTITY=<exact App identity>
 GITHUB_APP_INSTALLATION_ID=<exact installation identity>
+GITHUB_APP_SOURCE_EXACT_REVISION=<exact source identity>
+GITHUB_APP_DEPLOYMENT_IDENTITY=<exact deployment identity>
 GITHUB_APP_PERMISSION_SET_SHA256=<canonical permission-set digest>
 GITHUB_APP_EVENT_SET_SHA256=<canonical event-set digest>
+GITHUB_APP_REVIEWER_ALLOWLIST_SHA256=<canonical reviewer allowlist digest>
+RECEIPT_STORE_IDENTITY=<candidate-independent store identity>
+RECEIPT_STORE_APPEND_ONLY_PROOF=PASS
 FOUNDER_BOOTSTRAP_RECEIPT_SCHEMA_SHA256=<schema digest>
 INDEPENDENT_REVIEW_RECEIPT_SCHEMA_SHA256=<schema digest>
 PHASE_B_CHECK_NAME=kodac/phase-b-gate
@@ -533,11 +609,11 @@ UNRESOLVED_CONVERSATION_BLOCK_PROOF=PASS
 MAIN_MOVEMENT_REEVALUATION_PROOF=PASS
 ```
 
-The evidence package must distinguish configuration that is stored in GitHub's control plane from ordinary repository Git blobs.
+The evidence package must distinguish configuration stored in GitHub's control plane, App-side state, and ordinary repository Git blobs.
 
 ---
 
-## 17. Prohibited shortcuts
+## 18. Prohibited shortcuts
 
 The following do not satisfy this authorization:
 
@@ -548,6 +624,8 @@ status check with expected source = any source
 candidate-controlled GitHub Actions workflow as the sole Phase-B gate
 checking founder comment live immediately before merge without receipt conversion
 using editable founder comment state as a continuous revocation mechanism
+mutable or candidate-controlled receipt storage
+review provider whose material findings do not become server-blocking conversations
 ignoring unresolved conversations because a clean review receipt exists
 merge without merge queue
 merge queue without merge_group Phase-B check
@@ -558,7 +636,7 @@ using the real trust-root establishment PR as the first gate test
 
 ---
 
-## 18. Public ceremony preservation
+## 19. Public ceremony preservation
 
 This gate work changes no signed founder preimage.
 
@@ -579,7 +657,7 @@ Delay caused by gate implementation/qualification does not itself invalidate the
 
 ---
 
-## 19. Explicit non-grants
+## 20. Explicit non-grants
 
 ```text
 GITHUB_APP_CREATION=NOT_AUTHORIZED_BY_THIS_PR
@@ -611,7 +689,7 @@ H4_COMPLETE=NO
 
 ---
 
-## 20. Authorization PR merge gate
+## 21. Authorization PR merge gate
 
 This docs-only authorization may merge only if:
 
@@ -639,7 +717,7 @@ If `main` moves, this authorization candidate must be reconciled before merge.
 
 ---
 
-## 21. Post-authorization state
+## 22. Post-authorization state
 
 If this document becomes canonical, the maximum claim is:
 
@@ -656,4 +734,4 @@ FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT=NOT_PROVEN
 ARTIFACT_PROCESS_EXECUTION=FORBIDDEN
 ```
 
-The next safe action after canonicalization is AG-1 discovery/proof planning for the candidate-independent GitHub App identity, permissions, webhook surface, receipt contracts, and server-side check source. It is **not** trust-root establishment.
+The next safe action after canonicalization is AG-1 discovery/proof planning for the candidate-independent GitHub App identity, provenance, permissions, webhook surface, append-only receipt store, reviewer behavioral contract, receipt contracts, and server-side check source. It is **not** trust-root establishment.
