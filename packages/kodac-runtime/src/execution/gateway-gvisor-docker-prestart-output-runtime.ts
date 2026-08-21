@@ -322,9 +322,13 @@ export class GvisorDockerPrestartOutputGateway {
     let reader: InternalGvisorPrestartMultiplexReader | undefined; let absoluteTimer: NodeJS.Timeout | undefined; let readinessRef: SandboxPrestartReadyCapability | undefined
     try {
       if (controller.signal.aborted) throw new SandboxPrestartBlockedError("B2A admission aborted before dormant revalidation")
+      let preReadGate: HostTrustSnapshot
+      try { preReadGate = snapshotHostTrust(this.#runtime) } catch (error) { throw new SandboxPrestartBlockedError(`B2A pre-I/O host trust rejected: ${error instanceof Error ? error.message : String(error)}`) }
+      if (preReadGate.socketEndpoint.endpointIdentity !== created.observation.socketEndpointIdentity) throw new SandboxPrestartBlockedError("B2A protected Docker socket does not match exact B1 observation before Docker read")
       try { await revalidatePristineDormant(this.#runtime, permit, created, controller.signal) } catch (error) { throw new SandboxPrestartBlockedError(`B2A initial pristine-dormant revalidation failed: ${error instanceof Error ? error.message : String(error)}`) }
       let gateA: HostTrustSnapshot
       try { gateA = snapshotHostTrust(this.#runtime) } catch (error) { throw new SandboxPrestartBlockedError(`B2A initial host trust rejected: ${error instanceof Error ? error.message : String(error)}`) }
+      if (!sameHostTrust(preReadGate, gateA)) throw new SandboxPrestartBlockedError("B2A protected Docker socket namespace changed during initial pristine-dormant revalidation")
       if (gateA.socketEndpoint.endpointIdentity !== created.observation.socketEndpointIdentity) throw new SandboxPrestartBlockedError("B2A protected Docker socket does not match exact B1 observation")
       let provider
       try { provider = createDockerControlPlaneBindingProvider({ socketPath: this.#runtime.socketPath, requirement }) } catch (error) { throw new SandboxPrestartBlockedError(`B2A canonical provider rejected: ${error instanceof Error ? error.message : String(error)}`) }
