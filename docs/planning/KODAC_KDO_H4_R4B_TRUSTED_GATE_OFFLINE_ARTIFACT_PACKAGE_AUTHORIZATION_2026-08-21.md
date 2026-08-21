@@ -820,7 +820,9 @@ PROCESS_AUTHORITY_RECORD_SHA256=sha256(PROCESS_AUTHORITY_RECORD_PREIMAGE)
 
 The command manifest bound by `PROCESS_AUTHORITY_COMMAND_MANIFEST_SHA256` must enumerate the exact executable identities/paths, argv, working-directory policy, environment policy, and every allowed child-process edge for the offline build/test/package proof. Undeclared executables, argv widening, shell indirection, extra children, daemonization, or execution outside that process tree is unauthorized.
 
-The offline artifact test must verify, not merely record, all of the following before process execution:
+### 19.1 Pre-execution authority phase
+
+Before launching any build/test/package process, the offline artifact test must verify, not merely record:
 
 ```text
 PROCESS_AUTHORITY_RECORD_PREIMAGE_PROOF=PASS
@@ -832,27 +834,90 @@ PROCESS_AUTHORITY_NONCE_REPLAY_PROOF=PASS
 PROCESS_AUTHORITY_REPOSITORY_BINDING_PROOF=PASS
 PROCESS_AUTHORITY_EXACT_HEAD_BINDING_PROOF=PASS
 PROCESS_AUTHORITY_COMMAND_SCOPE_PROOF=PASS
-PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF=PASS
+CURRENT_SESSION_PROCESS_AUTHORITY_GRANT_PROOF=PASS
 ```
+
+`PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF` is **not** a pre-execution predicate because the actual process tree does not yet exist. Claiming it before execution is forbidden.
 
 The trust root may not be supplied or replaced by the artifact candidate itself. If no separately canonical trust root/verifier exists, or if authenticated founder/current-session evidence cannot be verified offline, then process authority is **not proven** and the artifact proof remains blocked. This authorization does not choose, generate, install, rotate, or distribute a trust root.
 
 The attestation, detached envelope, and session metadata are authorization provenance only; they are excluded from `implementationIdentity` because authorization/session state is not artifact identity.
 
-The required machine-checkable gate is:
+If any required pre-execution authority field/proof is absent, stale, replayed, self-authored, scoped too broadly, bound to another repository/head, authenticates bytes other than the canonical preimage, or does not authorize the exact offline build/test/package command manifest, then:
+
+```text
+CURRENT_SESSION_PROCESS_AUTHORITY_GRANT_PROOF=FAIL
+CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=FAIL
+ARTIFACT_RELEASE=BLOCKED
+PROCESS_EXECUTION=FORBIDDEN
+```
+
+### 19.2 Post-execution process-tree conformance phase
+
+Every authorized proof attempt must retain an OS-observed process-execution trace or purpose-equivalent independently collected process-tree record covering the complete launched proof process tree. After the attempt terminates, but before any artifact release verdict or merge claim, the offline artifact test must compare the observed process tree against `PROCESS_AUTHORITY_COMMAND_MANIFEST_SHA256` and prove all of the following:
+
+```text
+PROCESS_TREE_OBSERVATION_COMPLETE_PROOF=PASS
+PROCESS_TREE_OBSERVED_EXECUTABLE_IDENTITY_PROOF=PASS
+PROCESS_TREE_OBSERVED_ARGV_PROOF=PASS
+PROCESS_TREE_OBSERVED_PARENT_CHILD_EDGE_PROOF=PASS
+PROCESS_TREE_NO_UNDECLARED_PROCESS_PROOF=PASS
+PROCESS_TREE_NO_DAEMONIZATION_PROOF=PASS
+PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF=PASS
+```
+
+Any missing observation, undeclared executable, argv widening, shell indirection, extra child, daemonization, incomplete trace, or parent/child edge not present in the authenticated command manifest makes the attempt non-conforming. In that case:
+
+```text
+PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF=FAIL
+CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=FAIL
+ARTIFACT_RELEASE=BLOCKED
+```
+
+Only after the pre-execution grant phase passed **and** the post-execution process-tree conformance phase passed may the final composite verdict be emitted:
 
 ```text
 CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
 ```
 
-That verdict may be emitted only when the canonical preimage/digest proofs and every authentication, freshness, exact-head, repository, command-scope, and process-tree proof above pass against the separately canonical trust root. If any required authority field/proof is absent, stale, replayed, self-authored, scoped too broadly, bound to another repository/head, authenticates bytes other than the canonical preimage, or does not include the exact offline build/test/package process tree used by the proof, then:
+### 19.3 Attempt lifecycle, interruption, cleanup, and retry are fail-closed
+
+One authenticated authority session/nonce authorizes at most one proof attempt. The nonce is consumed when the first authorized proof process launches, regardless of whether the attempt succeeds, fails, is interrupted, or times out.
+
+Required attempt semantics:
 
 ```text
-CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=FAIL
-ARTIFACT_RELEASE=BLOCKED
+PROCESS_AUTHORITY_NONCE_SINGLE_USE=REQUIRED
+PROOF_ATTEMPT_FRESH_PHYSICAL_DIRECTORIES=REQUIRED
+PROOF_ATTEMPT_OUTPUT_REUSE=FORBIDDEN
+FAILED_ATTEMPT_EVIDENCE_REUSE=FORBIDDEN
+PARTIAL_ARTIFACT_TRUST=NONE
+RETRY_REQUIRES_FRESH_SESSION_ID=YES
+RETRY_REQUIRES_FRESH_SESSION_NONCE=YES
+RETRY_REQUIRES_NEW_AUTHENTICATED_AUTHORITY_RECORD=YES
+RETRY_REQUIRES_FRESH_PHYSICAL_DIRECTORIES=YES
+RETRY_REQUIRES_NO_EGRESS_BOUNDARY_REPROOF=YES
+RETRY_REQUIRES_SOCKET_FD_REPROOF=YES
+CLEANUP_COMMANDS_MUST_BE_AUTHORITY_MANIFEST_BOUND=YES
 ```
 
-If process execution is prohibited or authenticated authority cannot be established, the future artifact PR must remain unmerged rather than fabricate evidence or weaken the theorem.
+A signal, timeout, non-zero required command result, observer/trace loss, authority expiry during the attempt, reproducibility mismatch, audit failure, or any other incomplete terminal state must mark the attempt failed. All outputs, manifests, digests, temporary directories, and evidence fragments from a failed/interrupted attempt are untrusted and may not seed, satisfy, or be copied into a retry.
+
+Cleanup may execute only if its exact executable/argv/process-tree edges were included in the authenticated command manifest. If cleanup cannot be completed and verified, retry in the same proof environment is forbidden; a newly established clean proof environment is required. Cleanup failure may never be converted into a positive proof by ignoring residual files.
+
+Before any retry starts, the proof must establish:
+
+```text
+ATTEMPT_TERMINAL_DISPOSITION_PROOF=PASS
+FAILED_ATTEMPT_REUSE_ZERO_PROOF=PASS
+RETRY_FRESHNESS_PROOF=PASS
+NO_EGRESS_BOUNDARY_PROOF=PASS_FOR_NEW_ATTEMPT
+INHERITED_SOCKET_FD_PROOF=PASS_FOR_NEW_ATTEMPT
+```
+
+Attempt/session identifiers, interruption metadata, and cleanup disposition are authorization/evidence provenance only and are excluded from `implementationIdentity`.
+
+If process execution is prohibited, authenticated authority cannot be established, post-execution process-tree conformance cannot be proven, or retry freshness/cleanup conditions cannot be proven, the future artifact PR must remain unmerged rather than fabricate evidence or weaken the theorem.
 
 ---
 
@@ -872,6 +937,7 @@ REQUIRED_FUTURE_PATH_RESOLUTION_PROOF=PASS
 release manifest strict validation
 unknown release-manifest fields rejected
 invalid/mutable identity fields rejected
+PRE_EXECUTION_AUTHORITY_PHASE=PASS
 PROCESS_AUTHORITY_RECORD_PREIMAGE_PROOF=PASS
 PROCESS_AUTHORITY_RECORD_DIGEST_PROOF=PASS
 PROCESS_AUTHORITY_TRUST_ROOT_PROOF=PASS
@@ -881,8 +947,7 @@ PROCESS_AUTHORITY_NONCE_REPLAY_PROOF=PASS
 PROCESS_AUTHORITY_REPOSITORY_BINDING_PROOF=PASS
 PROCESS_AUTHORITY_EXACT_HEAD_BINDING_PROOF=PASS
 PROCESS_AUTHORITY_COMMAND_SCOPE_PROOF=PASS
-PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF=PASS
-CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
+CURRENT_SESSION_PROCESS_AUTHORITY_GRANT_PROOF=PASS
 PACKAGE_FORMAT_CANONICALIZATION_PROOF=PASS
 MEDIA_TYPE_AND_DESCRIPTOR_PROOF=PASS
 CANONICAL_JSON_BYTES_PROOF=PASS
@@ -911,9 +976,17 @@ INHERITED_SOCKET_FD_PROOF=PASS
 DOCKER_ENGINE_ENDPOINT_UNAVAILABLE_PROOF=PASS
 network/registry acquisition absent
 Docker daemon interaction absent
+POST_EXECUTION_PROCESS_TREE_CONFORMANCE_PHASE=PASS
+PROCESS_TREE_OBSERVATION_COMPLETE_PROOF=PASS
+PROCESS_TREE_NO_UNDECLARED_PROCESS_PROOF=PASS
+PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF=PASS
+ATTEMPT_TERMINAL_DISPOSITION_PROOF=PASS
+FAILED_ATTEMPT_REUSE_ZERO_PROOF=PASS
+RETRY_FRESHNESS_PROOF=PASS
+CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
 ```
 
-All positive evidence must bind one exact repository head.
+All positive evidence must bind one exact repository head and one successful proof attempt. Evidence from a failed, interrupted, expired, or superseded attempt may not contribute to a positive verdict.
 
 ---
 
@@ -943,8 +1016,14 @@ The future proof must explicitly defend against:
 - one-build-only reproducibility claims;
 - self-authored, self-signed, stale, replayed, wrong-repository, or wrong-head process-authority records;
 - self-referential or ambiguously serialized process-authority digest/authentication preimages;
+- claiming process-tree conformance before an actual process tree exists;
 - process authority that does not bind the exact executable/argv/child-process tree;
+- incomplete or lost process observation being treated as a successful conformance proof;
 - process execution performed without authenticated founder/current-session scope authority;
+- replaying one authority nonce across multiple attempts;
+- reusing partial outputs, digests, manifests, or evidence from an interrupted or failed attempt;
+- cleanup commands escaping the authenticated command manifest;
+- retrying in a contaminated proof environment after cleanup failure;
 - confusing an offline digest with an observed local Docker image ID;
 - treating artifact proof as B1-v2/B2A-v2/B2B authority.
 
@@ -995,6 +1074,7 @@ REQUIRED_FUTURE_PATH_GIT_MODE=100644
 REQUIRED_FUTURE_PATH_RESOLUTION_PROOF=PASS
 CANONICAL_G0_SOURCE_BYTES_UNCHANGED=PASS
 CANONICAL_G0_TEST_BYTES_UNCHANGED=PASS
+PRE_EXECUTION_AUTHORITY_PHASE=PASS
 PROCESS_AUTHORITY_RECORD_PREIMAGE_PROOF=PASS
 PROCESS_AUTHORITY_RECORD_DIGEST_PROOF=PASS
 PROCESS_AUTHORITY_TRUST_ROOT_PROOF=PASS
@@ -1004,8 +1084,7 @@ PROCESS_AUTHORITY_NONCE_REPLAY_PROOF=PASS
 PROCESS_AUTHORITY_REPOSITORY_BINDING_PROOF=PASS
 PROCESS_AUTHORITY_EXACT_HEAD_BINDING_PROOF=PASS
 PROCESS_AUTHORITY_COMMAND_SCOPE_PROOF=PASS
-PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF=PASS
-CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
+CURRENT_SESSION_PROCESS_AUTHORITY_GRANT_PROOF=PASS
 PACKAGE_FORMAT_CANONICALIZATION_PROOF=PASS
 BUILD_CONTEXT_POLICY_PROOF=PASS
 TOOLCHAIN_IDENTITY_PROOF=PASS
@@ -1022,6 +1101,14 @@ INHERITED_SOCKET_FD_PROOF=PASS
 DOCKER_ENGINE_ENDPOINT_UNAVAILABLE_PROOF=PASS
 NETWORK_REGISTRY_ZERO_PROOF=PASS
 DOCKER_DAEMON_ZERO_PROOF=PASS
+POST_EXECUTION_PROCESS_TREE_CONFORMANCE_PHASE=PASS
+PROCESS_TREE_OBSERVATION_COMPLETE_PROOF=PASS
+PROCESS_TREE_NO_UNDECLARED_PROCESS_PROOF=PASS
+PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF=PASS
+ATTEMPT_TERMINAL_DISPOSITION_PROOF=PASS
+FAILED_ATTEMPT_REUSE_ZERO_PROOF=PASS
+RETRY_FRESHNESS_PROOF=PASS
+CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
 EXACT_HEAD_CI=PASS
 FRESH_INDEPENDENT_EXACT_HEAD_REVIEW=PASS
 UNRESOLVED_ACTIONABLE_THREADS=0
@@ -1029,7 +1116,7 @@ FINAL_MAIN_HEAD_DIFF_FENCE=PASS
 EXPECTED_HEAD_SHA_MERGE_FENCE=PASS
 ```
 
-The merge gate must fail closed if authenticated process-authority evidence is absent or invalid, if the separately canonical trust root cannot be verified, if the authority digest/authentication envelope does not bind the canonical non-self-referential preimage, if any of the three required paths is absent or is not a direct regular Git blob at the exact repository path, if any unexpected path is present, or if a Docker/container-engine endpoint remains usable. No gate may be waived because the artifact is "only packaging".
+The merge gate must fail closed if authenticated process-authority evidence is absent or invalid, if the separately canonical trust root cannot be verified, if the authority digest/authentication envelope does not bind the canonical non-self-referential preimage, if pre-execution grant proof is confused with post-execution process-tree conformance, if process observation is incomplete, if failed/interrupted-attempt material is reused, if retry freshness is not proven, if any of the three required paths is absent or is not a direct regular Git blob at the exact repository path, if any unexpected path is present, or if a Docker/container-engine endpoint remains usable. No gate may be waived because the artifact is "only packaging".
 
 ---
 
@@ -1104,6 +1191,8 @@ NETWORK_EGRESS_IN_OFFLINE_SLICE=FORBIDDEN
 UNIX_DOMAIN_SOCKET_USE_IN_OFFLINE_SLICE=FORBIDDEN
 AUTHENTICATED_PROCESS_AUTHORITY_TRUST_ROOT=SEPARATE_CANONICAL_PREREQUISITE
 CURRENT_SESSION_PROCESS_AUTHORITY=SEPARATE_REQUIRED_AUTHENTICATED_GATE
+PROCESS_TREE_CONFORMANCE=POST_EXECUTION_REQUIRED_GATE
+PROOF_ATTEMPT_RETRY_POLICY=FAIL_CLOSED_FRESH_AUTHORITY_AND_FRESH_ENVIRONMENT
 
 MAX_FUTURE_RESULT=TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_PROVEN
 
@@ -1119,4 +1208,4 @@ R3G_F_E4=NO
 H4_COMPLETE=NO
 ```
 
-This slice keeps post-G0 progression fail-closed: first establish a separately canonical founder-authentication trust root before any proof-process authority can be accepted, then prove exact canonical offline artifact bytes under authenticated exact-head/process-bound authority, then separately prove local Docker provisioning/identity, and only after those prerequisites may a future B1-v2 authorization be considered.
+This slice keeps post-G0 progression fail-closed: first establish a separately canonical founder-authentication trust root before any proof-process authority can be accepted, then require a fresh single-use authenticated grant for one exact proof attempt, then prove exact canonical offline artifact bytes and post-execution process-tree conformance without reusing failed-attempt material, then separately prove local Docker provisioning/identity, and only after those prerequisites may a future B1-v2 authorization be considered.
