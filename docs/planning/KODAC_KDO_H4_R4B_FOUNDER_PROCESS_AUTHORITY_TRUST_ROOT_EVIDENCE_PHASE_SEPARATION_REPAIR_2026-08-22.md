@@ -5,7 +5,7 @@ Status: REPAIR_CANDIDATE / DOCS_ONLY / NO_KEY_MATERIAL / NO_SIGNING / NO_PROCESS
 
 ## 1. Purpose
 
-Repair one self-referential evidence requirement in the canonical founder process-authority trust-root establishment authorization without changing its cryptographic establishment object, public-key identity, nonce, signed preimages, four-path establishment allowlist, or authority boundaries.
+Repair the self-referential evidence requirement discovered after canonical PR #145, and fail closed on a second discovered defect: an external pre-merge reconciliation plus `expected_head_sha` does not atomically protect Phase-B review/comment/thread state that can change without changing the candidate commit.
 
 Canonical predecessor:
 
@@ -20,15 +20,16 @@ Maximum result of this repair if merged:
 
 ```text
 FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT_EVIDENCE_PHASE_SEPARATION_REPAIR=CANONICAL
+PHASE_B_SERVER_SIDE_ATOMIC_GATE_PREREQUISITE=CANONICAL_REQUIRED
 ```
 
-It is not equivalent to trust-root establishment, process authority, artifact execution, B1-v2 authorization, or H4 completion.
+This repair does **not** establish the trust root and does **not** authorize the four-path establishment candidate to merge.
 
 ---
 
-## 2. Defect being repaired
+## 2. Defect A — in-repository final-head evidence is self-referential
 
-The canonical authorization requires the future in-repository establishment evidence document to retain, among other facts:
+Canonical PR #145 requires the future in-repository establishment evidence document to retain, among other facts:
 
 ```text
 trust-root candidate exact head SHA/tree
@@ -39,17 +40,15 @@ final main/head diff fence
 expected-head SHA merge fence
 ```
 
-The evidence document itself is one of the four files that form the candidate Git tree. Therefore embedding the final candidate commit SHA/tree in that file changes the Git blob, which changes the tree and commit SHA. Likewise, exact-head CI and independent review can exist only after the candidate head has already been created; writing those results back into the candidate evidence file creates a new head and invalidates the evidence just collected.
+The evidence document itself is one of the four files that form the candidate Git tree. Embedding the final candidate commit/tree in that file changes the file blob, tree, and commit again. Exact-head CI/review results also exist only after the head exists; writing them back creates a new head and makes those results stale.
 
-Interpreting those clauses as requiring literal final values inside the same final candidate bytes is therefore self-referential and cannot be satisfied by an ordinary Git commit workflow.
-
-Failing to repair this would force either:
+Literal same-head inclusion would therefore force one of:
 
 ```text
 stale-head evidence
 placeholder values
 post-review mutation
-or an unprovable self-referential fixed point
+or an unprovable Git fixed point
 ```
 
 All four are forbidden.
@@ -58,21 +57,21 @@ All four are forbidden.
 
 ## 3. Phase-separation theorem
 
-The establishment proof is divided into two evidence phases.
+Trust-root establishment evidence is split by when the evidence can exist.
 
 ### Phase A — in-repository pre-freeze evidence
 
-The allowlisted establishment evidence document is part of the candidate head and may retain only facts that are fully determined before that head is frozen, including:
+The allowlisted establishment evidence document may retain only facts determined before the candidate head freezes, including:
 
 ```text
 canonical predecessor main SHA/tree
 AUTHORIZATION_COMMIT
-all four allowlisted path names and object-mode requirements
+four allowlisted establishment paths and mode/object requirements
 public SPKI DER hex and SHA-256
 trustRootIdSha256
-establishment challenge nonce
+challenge nonce
 issuedAtUtc
-establishment canonical object/JCS/preimage SHA-256
+establishment object/JCS/preimage SHA-256
 establishment detached Ed25519 signature
 current sequence-1 nonce-disposition object/JCS/preimage SHA-256
 current nonce-disposition detached Ed25519 signature
@@ -80,277 +79,111 @@ atomic nonce-state key
 public durable-state evidence identity supplied by the founder ceremony
 historical retirement envelopes, if any
 Node verification version
-focused local test results that precede head freeze
+focused pre-freeze test results
 private-material absence assertions
 explicit non-grants
 ```
 
-The Phase-A document must not contain guessed or placeholder final-head values.
+The Phase-A evidence document must not contain guessed final-head values, anticipated workflow IDs, predicted review results, or predicted merge metadata.
 
-### Phase B — external post-freeze GitHub evidence
+### Phase B — post-freeze GitHub evidence
 
-After the exact candidate head is frozen, the following facts are obtained from live GitHub records and retained outside the candidate tree:
+After the exact head is frozen, these facts exist outside the candidate tree:
 
 ```text
-trust-root candidate exact head SHA/tree
-founder bootstrap approval comment author/login/ID/URL/timestamp/body
-founder bootstrap exact-head binding
-exact-head CI workflow run IDs/names/conclusions
-fresh independent exact-head review provider/record ID/timestamp/body/head binding
-review-thread snapshot and unresolved actionable thread count
-final canonical-main versus exact-head compare fence
-Phase-B reconciliation record and SHA-256
-Phase-B reconciliation PR comment ID/URL/timestamp
-expected-head SHA merge request/result
-canonical merge commit, message, tree, and ordered parents
+candidate exact head SHA/tree
+founder bootstrap approval comment metadata and exact body
+exact-head CI run IDs/conclusions
+fresh independent exact-head review record and verdict
+review-thread state
+canonical-main versus exact-head compare fence
+expected-head merge request/result
+canonical merge commit/tree/ordered parents
 ```
 
-These are `POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE`.
+They are `POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE` and must never be copied back into the candidate after head freeze.
 
-Any mutation to an allowlisted candidate file after Phase B begins invalidates every Phase-B head-bound record and requires a fresh Phase-B cycle.
+Any candidate-file mutation after Phase B begins invalidates all Phase-B evidence and requires a fresh Phase-B cycle.
 
 ---
 
-## 4. Authoritative Phase-B finalizer
+## 4. Defect B — `expected_head_sha` is not a composite Phase-B atomic gate
 
-Phase B is not satisfied by labels or prose. The only authorized merger path for the trust-root establishment PR is the fail-closed external protocol:
+A founder-session merger can read live GitHub state, validate Phase-B evidence, and then call the merge API with:
 
 ```text
-PHASE_B_FINALIZER_PROTOCOL=kodac-founder-trust-root-phase-b-finalizer-v1
-PHASE_B_FINALIZER_SOURCE_OF_TRUTH=LIVE_GITHUB_API
-PHASE_B_FINALIZER_CANDIDATE_MUTATION=FORBIDDEN
-PHASE_B_FINALIZER_NETWORK_SCOPE=GITHUB_ONLY
-PHASE_B_FINALIZER_DOCKER_ACCESS=FORBIDDEN
-PHASE_B_FINALIZER_PRIVATE_KEY_ACCESS=FORBIDDEN
-PHASE_B_FINALIZER_SIGNING=FORBIDDEN
+expected_head_sha=<frozen candidate head>
 ```
 
-The finalizer may be implemented by an authenticated founder-session GitHub API client. It is external governance tooling, not part of the Phase-A verifier. A normal merge-button action that does not first execute and retain this protocol is not an authorized establishment merge.
-
-### 4.1 Mandatory live GitHub reads
-
-Immediately before merge, the finalizer must fetch and validate all of these live records for `TheHalfMoon/Kodac`:
+That protects against candidate-head movement. It does **not** atomically protect GitHub metadata that can change while the candidate SHA stays constant, including:
 
 ```text
-1. canonical main branch ref and commit/tree
-2. establishment PR metadata
-3. exact PR head commit/tree
-4. canonical-main...exact-head compare result and changed paths
-5. pull-request-triggered workflow runs for the exact head
-6. PR review submissions and review-provider records
-7. PR inline review threads including resolved/outdated state
-8. PR top-level comments including the founder bootstrap approval
+founder bootstrap comment creation/edit/deletion
+independent review state or review record updates
+new unresolved review threads
+thread resolution/unresolution
+other required Phase-B governance state
 ```
 
-Equivalent GitHub REST/GraphQL reads are allowed, but every predicate below must be checked from live responses rather than copied from the Phase-A evidence file.
-
-Required PR/head predicates:
+Therefore:
 
 ```text
-REPOSITORY=TheHalfMoon/Kodac
-PR_STATE=OPEN
-PR_DRAFT=NO
-PR_BASE=main
-PR_HEAD=<one frozen 40-hex commit SHA>
-PR_HEAD_TREE=<tree resolved from that exact commit>
-MAIN_HEAD=<one observed canonical predecessor SHA>
-MAIN_TREE=<tree resolved from MAIN_HEAD>
-COMPARE_MERGE_BASE=MAIN_HEAD
-COMPARE_BEHIND_BY=0
-CHANGED_PATHS=EXACTLY_4_ALLOWLISTED_ESTABLISHMENT_PATHS
-NO_UNEXPECTED_PATHS=PASS
+EXTERNAL_DOUBLE_READ_PLUS_EXPECTED_HEAD_SHA=NECESSARY_BUT_NOT_SUFFICIENT
+PHASE_B_COMPOSITE_ATOMICITY_PROOF=NOT_ESTABLISHED
 ```
 
-Required exact-head CI predicates:
+This repair must not claim otherwise.
+
+---
+
+## 5. Required server-side atomic-gate predecessor
+
+Before the four-path trust-root establishment PR may merge, a **separate canonical predecessor** must establish and prove a server-side Phase-B gate that GitHub evaluates at merge time for the exact candidate head.
+
+Required high-level properties are:
 
 ```text
-GOVERNANCE_WORKFLOW_HEAD_SHA=PR_HEAD
-GOVERNANCE_WORKFLOW_EVENT=pull_request
-GOVERNANCE_WORKFLOW_CONCLUSION=success
-K2_RUNTIME_WORKFLOW_HEAD_SHA=PR_HEAD
-K2_RUNTIME_WORKFLOW_EVENT=pull_request
-K2_RUNTIME_WORKFLOW_CONCLUSION=success
+PHASE_B_SERVER_SIDE_ATOMIC_GATE=REQUIRED
+GATE_DEFINED_IN_CANONICAL_PREDECESSOR=YES
+CANDIDATE_CANNOT_MODIFY_GATE=YES
+GATE_BINDS_EXACT_HEAD=YES
+GATE_FAILS_CLOSED=YES
+GATE_BYPASS_FORBIDDEN=YES
+MAIN_MOVEMENT_PROTECTION=REQUIRED
+REQUIRED_CI_SERVER_SIDE_ENFORCEMENT=REQUIRED
+REVIEW_CONVERSATION_RESOLUTION_SERVER_SIDE_ENFORCEMENT=REQUIRED
+FOUNDER_BOOTSTRAP_BINDING_SERVER_SIDE_ENFORCEMENT=REQUIRED
+FRESH_INDEPENDENT_REVIEW_SERVER_SIDE_ENFORCEMENT=REQUIRED
 ```
 
-The actual workflow run IDs are mandatory Phase-B evidence.
+A valid design may combine immutable predecessor workflow/check logic with GitHub branch-protection/ruleset requirements, but the exact mechanism must be separately authorized, implemented, independently reviewed, and proven before establishment proceeds.
 
-Required independent-review predicates:
+The later atomic-gate design must explain how metadata changes that leave the commit SHA unchanged invalidate or fail the required gate before merge. Merely re-reading state in a client immediately before merge is insufficient.
 
-```text
-INDEPENDENT_REVIEW_PROVIDER!=TheHalfMoon
-INDEPENDENT_REVIEW_RECORD_ID=<GitHub review/comment record ID>
-INDEPENDENT_REVIEW_RECORD_UPDATED_AT=<observed GitHub timestamp>
-INDEPENDENT_REVIEW_EXACT_HEAD_BINDING=PR_HEAD
-INDEPENDENT_REVIEW_ACTIONABLE_FINDINGS=0
-```
+The gate must not depend on trust-root candidate-controlled workflow code or mutable candidate configuration.
 
-A generic success status without an exact-head-bound review record is insufficient. A stale review of an earlier candidate head is insufficient.
+---
 
-Required thread predicates:
+## 6. Current state after discovering Defect B
+
+Live repository evidence has not proven a server-side composite Phase-B gate satisfying Section 5.
+
+Therefore, even if this repair becomes canonical:
 
 ```text
-REVIEW_THREADS_SNAPSHOT=COMPLETE_FOR_PR
-UNRESOLVED_ACTIONABLE_THREADS=0
-```
-
-The finalizer must canonicalize the sorted thread snapshot as one LF-terminated line per thread:
-
-```text
-<thread-id>|resolved=<true|false>|outdated=<true|false>|path=<path-or-empty>|line=<line-or-empty>\n
-```
-
-sorted lexicographically by `thread-id`, and record:
-
-```text
-REVIEW_THREADS_SNAPSHOT_SHA256=sha256(UTF8(exact sorted snapshot bytes))
-```
-
-A new or changed thread after the snapshot invalidates reconciliation.
-
-### 4.2 Founder bootstrap comment verification
-
-The finalizer must locate exactly one qualifying top-level PR comment authored by GitHub login `TheHalfMoon` whose body contains exactly the bootstrap binding lines authorized by PR #145:
-
-```text
-FOUNDER_TRUST_ROOT_BOOTSTRAP_APPROVAL=EXPLICIT
-REPOSITORY=TheHalfMoon/Kodac
-EXACT_HEAD=<PR_HEAD>
-TRUST_ROOT_ID_SHA256=<Phase-A trust-root ID>
-PUBLIC_KEY_SPKI_DER_SHA256=<Phase-A SPKI digest>
-ESTABLISHMENT_PREIMAGE_SHA256=<Phase-A establishment preimage digest>
-ESTABLISHMENT_NONCE_DISPOSITION_SHA256=<Phase-A sequence-1 disposition digest>
-```
-
-The comment author login, numeric comment ID, URL, creation timestamp, update timestamp, and SHA-256 of the exact UTF-8 comment body are Phase-B inputs. A comment for another head or any mismatching Phase-A digest fails closed.
-
-### 4.3 Canonical Phase-B reconciliation record
-
-After all live checks pass, the finalizer constructs one exact LF-terminated UTF-8 record with lines in this fixed order:
-
-```text
-schemaVersion=kodac-founder-trust-root-phase-b-reconciliation-v1
-repository=TheHalfMoon/Kodac
-prNumber=<decimal PR number>
-baseBranch=main
-predecessorMainSha=<MAIN_HEAD>
-predecessorMainTree=<MAIN_TREE>
-exactHead=<PR_HEAD>
-exactHeadTree=<PR_HEAD_TREE>
-changedPathsSha256=<sha256 of sorted LF-terminated changed-path list>
-bootstrapCommentId=<decimal GitHub comment ID>
-bootstrapCommentBodySha256=<sha256 of exact UTF-8 comment body>
-governanceRunId=<decimal workflow run ID>
-k2RuntimeRunId=<decimal workflow run ID>
-independentReviewProvider=<exact GitHub login/app identity>
-independentReviewRecordId=<exact GitHub review/comment record ID>
-independentReviewRecordUpdatedAt=<GitHub timestamp>
-independentReviewRecordBodySha256=<sha256 of exact reviewed record body>
-reviewThreadsSnapshotSha256=<REVIEW_THREADS_SNAPSHOT_SHA256>
-unresolvedActionableThreads=0
-compareMergeBase=<MAIN_HEAD>
-compareBehindBy=0
-```
-
-The changed-path digest input is the four exact authorized path strings sorted lexicographically, each followed by one LF, with no other bytes.
-
-The reconciliation digest is:
-
-```text
-PHASE_B_RECONCILIATION_DOMAIN=kodac-founder-trust-root-phase-b-reconciliation-v1
-PHASE_B_RECONCILIATION_PREIMAGE=
-  UTF8(PHASE_B_RECONCILIATION_DOMAIN)
-  || 0x00
-  || UTF8(EXACT_PHASE_B_RECONCILIATION_RECORD)
-PHASE_B_RECONCILIATION_SHA256=sha256(PHASE_B_RECONCILIATION_PREIMAGE)
-```
-
-### 4.4 Reconciliation comment and second live read
-
-Before merge, the finalizer must post a top-level PR comment authored under the authenticated founder repository identity containing:
-
-```text
-PHASE_B_RECONCILIATION=PASS
-PHASE_B_RECONCILIATION_SHA256=<64 lowercase hex>
-
-<exact Phase-B reconciliation record>
-```
-
-The finalizer must re-fetch that comment and record its numeric ID, URL, author login, creation/update timestamp, and exact body SHA-256.
-
-Then it must repeat every live read in Section 4.1 and recompute the reconciliation record from the new responses. The second record and digest must be byte-for-byte identical to the posted record/digest except that the existence of the reconciliation comment itself is ignored when computing the predeclared PR-comment set. If main, head, tree, changed paths, workflow evidence, review evidence, bootstrap comment, or review-thread snapshot changed, merge is forbidden and a fresh Phase-B cycle is required.
-
-### 4.5 Only authorized merge write
-
-Only after the second live read matches may the finalizer call GitHub's pull-request merge API with all of:
-
-```text
-merge_method=merge
-expected_head_sha=<PR_HEAD>
-commit_title=<normal PR merge title>
-commit_message includes exactly these binding lines:
-PHASE_B_RECONCILIATION_SHA256=<digest>
-PHASE_B_RECONCILIATION_COMMENT_ID=<numeric comment ID>
-REVIEWED_EXACT_HEAD=<PR_HEAD>
-```
-
-A merge API that cannot enforce `expected_head_sha` is forbidden for this establishment slice.
-
-If GitHub rejects the expected-head fence, reports a changed base/head, or refuses mergeability:
-
-```text
+PHASE_B_SERVER_SIDE_ATOMIC_GATE=NOT_PROVEN
+FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT_ESTABLISHMENT_MERGE=BLOCKED
 FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT=NOT_PROVEN
-MERGE=FORBIDDEN
+ARTIFACT_PROCESS_EXECUTION=FORBIDDEN
 ```
 
-### 4.6 Post-merge canonicalization verification
-
-After GitHub reports a successful merge, the finalizer must fetch live `main`, the merge commit, and the PR again and prove:
-
-```text
-PR_STATE=CLOSED
-PR_MERGED=YES
-PR_MERGE_COMMIT=<returned merge SHA>
-MAIN_HEAD=PR_MERGE_COMMIT
-MERGE_COMMIT_PARENT_1=<pre-merge predecessorMainSha>
-MERGE_COMMIT_PARENT_2=<exactHead>
-MERGE_COMMIT_MESSAGE_BINDS_PHASE_B_RECONCILIATION_SHA256=PASS
-MERGE_COMMIT_MESSAGE_BINDS_PHASE_B_RECONCILIATION_COMMENT_ID=PASS
-MERGE_COMMIT_MESSAGE_BINDS_REVIEWED_EXACT_HEAD=PASS
-CANONICAL_DELTA_PATHS=EXACTLY_4_ALLOWLISTED_ESTABLISHMENT_PATHS
-```
-
-Only after this post-merge read may:
-
-```text
-PHASE_B_EXTERNAL_GITHUB_EVIDENCE=PASS
-```
-
-be emitted.
-
-If post-merge verification fails, the merge is reported as anomalous and the trust root remains `NOT_PROVEN`; no artifact process authority may consume it.
+The next bounded slice after this repair is **not** the four-path trust-root establishment implementation. It is a separate docs-only authorization/design slice for the server-side atomic Phase-B gate, followed by separately authorized implementation/configuration proof.
 
 ---
 
-## 5. Exact-head evidence rule
+## 7. Four-path establishment allowlist remains unchanged
 
-The final establishment verdict consumes a conjunction of:
-
-```text
-PHASE_A_IN_REPOSITORY_EVIDENCE=PASS
-PHASE_B_EXTERNAL_GITHUB_EVIDENCE=PASS
-```
-
-The absence of final-head/CI/review/merge values from the Phase-A evidence file is not a missing-proof bypass only when the Section 4 finalizer produces and verifies the exact Phase-B record and merge binding.
-
-The verifier/test suite itself remains part of Phase A and may not query GitHub, network services, filesystem discovery, Docker, or subprocesses to obtain Phase-B state.
-
-No actor may upgrade a Phase-A label such as `POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE` to PASS without executing Section 4 against live GitHub truth.
-
----
-
-## 6. Four-path establishment allowlist remains unchanged
-
-This repair does not widen or rename the future establishment paths. The establishment candidate must still change exactly:
+This repair does not widen or rename the future establishment paths. Once the Section 5 predecessor is canonical and proven, the establishment candidate must still change exactly:
 
 ```text
 1. provenance/kdo-h4-r4b-founder-process-authority-trust-root-v1.json
@@ -361,32 +194,36 @@ This repair does not widen or rename the future establishment paths. The establi
 
 A subset remains insufficient. A fifth establishment path remains forbidden.
 
-This repair document is a separate predecessor repair and is not an establishment-candidate path.
+This repair document and the future atomic-gate predecessor are separate predecessors, not establishment-candidate paths.
 
 ---
 
-## 7. Cryptographic ceremony preservation
+## 8. Cryptographic ceremony preservation
 
-This repair does not alter any field in the signed establishment object or current sequence-1 nonce-disposition object.
+This repair changes no field in the already-signed establishment object or sequence-1 nonce-disposition object.
 
-The canonical authorization commit remains exactly:
+The authorization commit remains:
 
 ```text
 AUTHORIZATION_COMMIT=ecd0e6687e91e627a73281dcc71678d8bf8152d0
 ```
 
-The founder ceremony already produced public outputs bound to that commit:
+Founder ceremony public outputs remain:
 
 ```text
+PUBLIC_KEY_SPKI_DER_HEX=302a300506032b6570032100d16cd6a0199f9069193ba199376c2d90a65355aabe9c9e769af2d5826b7be945
 PUBLIC_KEY_SPKI_DER_SHA256=a6980210aed896b19fbf97f87dfca2a9c253ebb3cc4eda626be2d17b8761af53
 TRUST_ROOT_ID_SHA256=d8a87fb2f17ecaeefd345f2d323b0776c0e51429f7a2dd7c78df6a6068535d98
 CHALLENGE_NONCE_HEX=9e10a505f26638a407caa41e09e4df798c2b12ed4b2b0a45b2058b70d7f3b2e1
 ISSUED_AT_UTC=2026-08-21T21:30:13Z
 ESTABLISHMENT_PREIMAGE_SHA256=e57222d6198eb00e2d795fc0c4a82fec3922ba8f22a49edb3fd0a5f0020b2d4f
 ESTABLISHMENT_NONCE_DISPOSITION_SHA256=074d1034172792aca9e071caf124c487adff2fb7f78fefd2c43ea6af8711cf71
+ATOMIC_STATE_FILE_SHA256=7e4600271b17bb8afa93a60e4fd87a47360c15a09c856a7450485b914814b45b
 ```
 
-This repair changes none of those values and does not modify the establishment preimage. Therefore:
+The public Ed25519 signatures remain bound to those exact preimages. This repair does not regenerate or consume a new nonce.
+
+Required preservation result:
 
 ```text
 ESTABLISHMENT_PREIMAGE_CHANGED=NO
@@ -397,15 +234,17 @@ FRESH_NONCE_REQUIRED_BY_THIS_REPAIR=NO
 RESIGNING_REQUIRED_BY_THIS_REPAIR=NO
 ```
 
+Delay while proving the server-side atomic gate does not itself alter the signed preimages.
+
 The private key remains exclusively out of band. This repair neither generates nor accesses a private key and performs no signing.
 
 ---
 
-## 8. Bootstrap approval remains post-freeze and external
+## 9. Bootstrap approval remains post-freeze
 
 The one-time founder bootstrap theorem from canonical PR #145 is unchanged.
 
-After the establishment candidate head is frozen, a top-level PR comment authored by GitHub login `TheHalfMoon` must still contain exactly the authorized binding lines:
+The bootstrap approval must not be posted until the later establishment candidate head is frozen, and it must bind exactly:
 
 ```text
 FOUNDER_TRUST_ROOT_BOOTSTRAP_APPROVAL=EXPLICIT
@@ -417,13 +256,13 @@ ESTABLISHMENT_PREIMAGE_SHA256=<exact establishment preimage SHA-256>
 ESTABLISHMENT_NONCE_DISPOSITION_SHA256=<exact sequence-1 disposition preimage SHA-256>
 ```
 
-The bootstrap comment is a distinct Phase-B input and must exist before the Section 4 reconciliation record is constructed. It must not be copied into the candidate evidence file after head freeze.
+No bootstrap approval is requested or accepted in this repair PR.
 
 ---
 
-## 9. Establishment evidence requirements after this repair
+## 10. Evidence-document interpretation after this repair
 
-The future allowlisted evidence document must retain all pre-freeze facts required by canonical PR #145, except that the following originally listed fields are phase-separated and must be recorded as contract labels rather than fabricated final values:
+Once the atomic-gate prerequisite is separately proven, the future allowlisted Phase-A evidence document must retain all pre-freeze facts required by PR #145. The self-referential fields are represented only as contract labels:
 
 ```text
 TRUST_ROOT_CANDIDATE_EXACT_HEAD=POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE
@@ -433,38 +272,39 @@ EXACT_HEAD_CI_RESULT=POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE
 FRESH_INDEPENDENT_EXACT_HEAD_REVIEW_RESULT=POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE
 UNRESOLVED_ACTIONABLE_THREAD_COUNT=POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE
 FINAL_MAIN_HEAD_DIFF_FENCE=POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE
-PHASE_B_RECONCILIATION_RECORD=POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE
-PHASE_B_RECONCILIATION_SHA256=POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE
-PHASE_B_RECONCILIATION_COMMENT_ID=POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE
 EXPECTED_HEAD_SHA_MERGE_FENCE=POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE
 CANONICAL_MERGE_COMMIT_AND_PARENTS=POST_FREEZE_EXTERNAL_GITHUB_EVIDENCE
 ```
 
-No placeholder SHA, fabricated run ID, anticipated review result, or predicted merge commit may appear in Phase A.
+These labels are never PASS predicates by themselves. They can be upgraded only by the later proven server-side atomic gate plus post-merge canonical verification.
 
 ---
 
-## 10. Final establishment verdict after this repair
+## 11. Future establishment verdict after all prerequisites
 
-`FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT=CANONICAL_PROVEN` remains available only if every original cryptographic/schema/test/private-material predicate passes and all phase-separated governance predicates also pass:
+Only after both this phase-separation repair **and** the separate server-side atomic-gate predecessor are canonical/proven may the later establishment candidate seek:
+
+```text
+FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT=CANONICAL_PROVEN
+```
+
+The verdict still requires every original PR #145 cryptographic/schema/test/private-material predicate plus:
 
 ```text
 PHASE_A_IN_REPOSITORY_EVIDENCE=PASS
+PHASE_B_SERVER_SIDE_ATOMIC_GATE_PROOF=PASS
 EXACT_CANDIDATE_HEAD_FROZEN=PASS
 FOUNDER_BOOTSTRAP_APPROVAL_PROOF=PASS
 EXACT_HEAD_CI=PASS
 FRESH_INDEPENDENT_EXACT_HEAD_REVIEW=PASS
 UNRESOLVED_ACTIONABLE_THREADS=0
 FINAL_MAIN_HEAD_DIFF_FENCE=PASS
-PHASE_B_RECONCILIATION_RECORD_PROOF=PASS
-PHASE_B_RECONCILIATION_SECOND_READ_PROOF=PASS
 EXPECTED_HEAD_SHA_MERGE_FENCE=PASS
 POST_MERGE_ORDERED_PARENT_PROOF=PASS
-POST_MERGE_MESSAGE_BINDING_PROOF=PASS
 PHASE_B_EXTERNAL_GITHUB_EVIDENCE=PASS
 ```
 
-If any Phase-B evidence is missing, stale, refers to another head, differs between the first and second live read, or becomes invalid due to a candidate mutation:
+If the server-side gate is absent, bypassable, stale, candidate-controlled, or unable to fail on relevant metadata changes while the head is unchanged:
 
 ```text
 FOUNDER_PROCESS_AUTHORITY_TRUST_ROOT=NOT_PROVEN
@@ -473,13 +313,17 @@ ARTIFACT_PROCESS_EXECUTION=FORBIDDEN
 
 ---
 
-## 11. Explicit non-grants
+## 12. Explicit non-grants
 
 ```text
 TRUST_ROOT_KEY_GENERATION=NO
 TRUST_ROOT_PRIVATE_KEY_ACCESS=NO
 TRUST_ROOT_SIGNING=NO
-TRUST_ROOT_ESTABLISHMENT=NOT_IN_THIS_REPAIR
+TRUST_ROOT_ESTABLISHMENT_IMPLEMENTATION=NOT_IN_THIS_REPAIR
+PHASE_B_SERVER_SIDE_ATOMIC_GATE_IMPLEMENTATION=NOT_IN_THIS_REPAIR
+REPOSITORY_RULESET_MUTATION=NO
+BRANCH_PROTECTION_MUTATION=NO
+WORKFLOW_MUTATION=NO
 CURRENT_SESSION_PROCESS_AUTHORITY=NOT_GRANTED
 OFFLINE_ARTIFACT_BUILD_EXECUTION=NO
 OFFLINE_ARTIFACT_TEST_EXECUTION=NO
@@ -497,9 +341,9 @@ H4_COMPLETE=NO
 
 ---
 
-## 12. Repair merge gate
+## 13. Repair merge gate
 
-This repair may merge only if:
+This docs-only repair may merge only if:
 
 ```text
 CHANGED_PATHS=EXACTLY_1_DOC
@@ -519,16 +363,19 @@ FINAL_MAIN_HEAD_DIFF_FENCE=PASS
 EXPECTED_HEAD_SHA_MERGE_FENCE=PASS
 ```
 
-This repair PR itself may use the existing exact-head governance merge procedure. The new Section 4 finalizer becomes mandatory only for the later trust-root establishment PR whose self-referential evidence requirements this repair fixes.
+This repair PR itself uses the existing exact-head governance merge procedure. It does not claim that procedure is sufficient for the later trust-root establishment merge.
 
 If `main` moves before merge, stop and reconcile before proceeding.
 
 ---
 
-## 13. Final repair statement
+## 14. Final repair statement
 
-This repair resolves the Git self-reference problem by separating evidence according to when it can exist and by defining a concrete fail-closed Phase-B GitHub finalizer rather than trusting labels.
+This repair does two things only:
 
-It preserves the already-consumed sequence-1 establishment nonce and both existing public signatures because their exact signed preimages are unchanged.
+1. makes final-head evidence non-self-referential by separating pre-freeze candidate evidence from post-freeze GitHub evidence; and
+2. records that the later establishment merge remains blocked until a separately canonical, server-side atomic Phase-B gate can enforce metadata-sensitive predicates at merge time.
 
-After this repair becomes canonical, the establishment branch may be fast-forwarded to the repair merge commit and the exact four-path trust-root candidate may proceed without regenerating, retiring, or re-signing the current establishment attempt.
+It preserves the already-consumed sequence-1 nonce and both public signatures because the exact signed preimages are unchanged.
+
+After this repair becomes canonical, the next safe slice is the server-side atomic Phase-B gate authorization/design. The four-path trust-root establishment implementation remains blocked until that prerequisite is proven.
