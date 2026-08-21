@@ -654,12 +654,13 @@ LICENSE_CHECK_EGRESS=DISABLED
 CREDENTIAL_NETWORK_ACCESS=DISABLED
 AMBIENT_UNIX_DOMAIN_SOCKETS=FORBIDDEN
 INHERITED_SOCKET_FDS=0
-DOCKER_SOCKET_PRESENT=NO
+DOCKER_ENGINE_ENDPOINT_STATE=ABSENT_OR_INACCESSIBLE
+DOCKER_ENGINE_ENDPOINT_USABLE=NO
 ```
 
 The proof environment must use an isolated network namespace or purpose-equivalent OS-enforced boundary with no route capable of external egress. Loopback must be disabled or outbound communication must be denied by an equivalent fail-closed policy.
 
-Host-local IPC is part of the no-egress theorem. Before the first proof process starts, the evidence must establish that no Unix-domain socket FD is inherited and that ambient service sockets (including Docker/container-engine sockets, SSH-agent sockets, package-manager daemon sockets, telemetry/update sockets, and proxy sockets) are unavailable inside the proof boundary. `/var/run/docker.sock`, `/run/docker.sock`, and purpose-equivalent container-engine endpoints must be absent or inaccessible.
+Host-local IPC is part of the no-egress theorem. Before the first proof process starts, the evidence must establish that no Unix-domain socket FD is inherited and that ambient service sockets (including Docker/container-engine sockets, SSH-agent sockets, package-manager daemon sockets, telemetry/update sockets, and proxy sockets) are unavailable inside the proof boundary. `/var/run/docker.sock`, `/run/docker.sock`, and purpose-equivalent container-engine endpoints must be absent or inaccessible. Evidence must record whether each discovered endpoint is physically present and, independently, prove that no such endpoint is usable by any proof process.
 
 The proof boundary must deny creation or connection of `AF_UNIX`/`AF_LOCAL` sockets by the proof processes unless a future authorization explicitly names an endpoint. This v1 authorization names **no** allowed Unix-domain endpoint.
 
@@ -691,13 +692,14 @@ NO_EGRESS_BOUNDARY_PROOF=PASS
 NETWORK_SOCKET_AUDIT=PASS
 UNIX_SOCKET_AUDIT=PASS
 INHERITED_SOCKET_FD_PROOF=PASS
+DOCKER_ENGINE_ENDPOINT_UNAVAILABLE_PROOF=PASS
 REGISTRY_NETWORK_CALLS=0
 GATE_IMAGE_PULL_CALLS=0
 GATE_IMAGE_PUSH_CALLS=0
 CREDENTIAL_REQUESTS=0
 ```
 
-`NO_EGRESS_BOUNDARY_PROOF=PASS` is forbidden unless both `NETWORK_SOCKET_AUDIT=PASS` and `UNIX_SOCKET_AUDIT=PASS` and `INHERITED_SOCKET_FD_PROOF=PASS` are established on the same exact-head proof run.
+`NO_EGRESS_BOUNDARY_PROOF=PASS` is forbidden unless `NETWORK_SOCKET_AUDIT=PASS`, `UNIX_SOCKET_AUDIT=PASS`, `INHERITED_SOCKET_FD_PROOF=PASS`, and `DOCKER_ENGINE_ENDPOINT_UNAVAILABLE_PROOF=PASS` are all established on the same exact-head proof run.
 
 If any required toolchain/dependency is absent, the proof blocks rather than fetching it.
 
@@ -722,9 +724,16 @@ NO_UNEXPECTED_PATHS=PASS
 RELEASE_MANIFEST_PATH_PRESENT=PASS
 OFFLINE_ARTIFACT_TEST_PATH_PRESENT=PASS
 OFFLINE_ARTIFACT_EVIDENCE_PATH_PRESENT=PASS
+REQUIRED_FUTURE_PATH_OBJECT_TYPES=REGULAR_BLOBS
+REQUIRED_FUTURE_PATH_GIT_MODE=100644
+REQUIRED_FUTURE_PATH_SYMLINKS=0
+REQUIRED_FUTURE_PATH_GITLINKS=0
+REQUIRED_FUTURE_PATH_RESOLUTION_PROOF=PASS
 ```
 
-A subset of the three paths is not a complete artifact-proof candidate and must not receive `TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_PROVEN`.
+Each allowlisted path must be the exact repository path shown above, must resolve in the candidate Git tree directly to an ordinary Git blob with mode `100644`, and must not resolve through a symlink, gitlink/submodule, path alias, or alternate filesystem object. The proof must inspect repository object type/mode and resolved path rather than trusting pathname strings alone.
+
+A subset of the three paths, a symlink/gitlink substitution, a non-regular object, or any alternate resolved path is not a complete artifact-proof candidate and must not receive `TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_PROVEN`.
 
 The canonical G0 source and G0 test are frozen read-only inputs:
 
@@ -762,7 +771,7 @@ This docs-only authorization does not itself authorize compiler/test/tar/packagi
 
 After this authorization becomes canonical, repository mutation authority may exist only for the three future allowlisted paths. The canonical G0 source/test remain frozen.
 
-Until separate live founder/current-session process authority is explicit:
+Until separate live founder/current-session process authority is explicit and authenticated:
 
 ```text
 FUTURE_ALLOWLISTED_PATH_MUTATION_AFTER_CANONICAL_AUTH=MAY_BE_ALLOWED
@@ -775,16 +784,45 @@ GVISOR_EXECUTION=NO
 WORKLOAD_EXECUTION=NO
 ```
 
-Before any future build/test/package process executes, the future evidence record must contain a strict process-authority attestation with these semantic fields:
+A future artifact-proof run may not derive process authority from a self-authored record, from a hash alone, or from text introduced by the artifact candidate PR. Before any build/test/package process executes, a separate canonical predecessor must already establish an external founder-authentication trust root and its verification mechanism. The trust-root record must predate the candidate artifact branch/head and must not be one of the three candidate paths.
+
+The retained process-authority record must then bind at least:
 
 ```text
 PROCESS_AUTHORITY_STATUS=EXPLICITLY_GRANTED
 PROCESS_AUTHORITY_SCOPE=OFFLINE_ARTIFACT_BUILD_TEST_PACKAGE_ONLY
 PROCESS_AUTHORITY_PROVENANCE=FOUNDER_CURRENT_SESSION
-PROCESS_AUTHORITY_RECORD_SHA256=<sha256 of the exact retained authorization record>
+PROCESS_AUTHORITY_TRUST_ROOT_ID=<separately canonical external trust-root identity>
+PROCESS_AUTHORITY_TRUST_ROOT_COMMIT=<canonical ancestor commit that predates the candidate head>
+PROCESS_AUTHORITY_AUTHENTICATION_PROOF=<offline-verifiable authenticated proof under that trust root>
+PROCESS_AUTHORITY_SESSION_ID=<fresh opaque session identifier>
+PROCESS_AUTHORITY_SESSION_NONCE=<fresh non-replayed nonce>
+PROCESS_AUTHORITY_ISSUED_AT_UTC=<issued timestamp>
+PROCESS_AUTHORITY_EXPIRES_AT_UTC=<expiry timestamp>
+PROCESS_AUTHORITY_REPOSITORY=TheHalfMoon/Kodac
+PROCESS_AUTHORITY_EXACT_HEAD=<exact artifact candidate head SHA>
+PROCESS_AUTHORITY_COMMAND_MANIFEST_SHA256=<sha256 of exact authorized executable/argv/process-tree manifest>
+PROCESS_AUTHORITY_RECORD_SHA256=<sha256 of the exact retained authenticated authority record>
 ```
 
-The offline artifact test must reject a missing, malformed, broader-than-authorized, or non-founder/current-session process-authority record. The attestation is authorization provenance only; it is excluded from `implementationIdentity` because session metadata is not artifact identity.
+The command manifest bound by `PROCESS_AUTHORITY_COMMAND_MANIFEST_SHA256` must enumerate the exact executable identities/paths, argv, working-directory policy, environment policy, and every allowed child-process edge for the offline build/test/package proof. Undeclared executables, argv widening, shell indirection, extra children, daemonization, or execution outside that process tree is unauthorized.
+
+The offline artifact test must verify, not merely record, all of the following before process execution:
+
+```text
+PROCESS_AUTHORITY_TRUST_ROOT_PROOF=PASS
+PROCESS_AUTHORITY_AUTHENTICATION_PROOF=PASS
+PROCESS_AUTHORITY_SESSION_FRESHNESS_PROOF=PASS
+PROCESS_AUTHORITY_NONCE_REPLAY_PROOF=PASS
+PROCESS_AUTHORITY_REPOSITORY_BINDING_PROOF=PASS
+PROCESS_AUTHORITY_EXACT_HEAD_BINDING_PROOF=PASS
+PROCESS_AUTHORITY_COMMAND_SCOPE_PROOF=PASS
+PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF=PASS
+```
+
+The trust root may not be supplied or replaced by the artifact candidate itself. If no separately canonical trust root/verifier exists, or if authenticated founder/current-session evidence cannot be verified offline, then process authority is **not proven** and the artifact proof remains blocked. This authorization does not choose, generate, install, rotate, or distribute a trust root.
+
+The attestation and its session metadata are authorization provenance only; they are excluded from `implementationIdentity` because authorization/session state is not artifact identity.
 
 The required machine-checkable gate is:
 
@@ -792,14 +830,14 @@ The required machine-checkable gate is:
 CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
 ```
 
-That verdict may be emitted only after the strict authority record is validated. If the authority record is absent or the authorized scope does not include the exact offline build/test/package processes used by the proof, then:
+That verdict may be emitted only when every authentication, freshness, exact-head, repository, command-scope, and process-tree proof above passes against the separately canonical trust root. If any required authority field/proof is absent, stale, replayed, self-authored, scoped too broadly, bound to another repository/head, or does not include the exact offline build/test/package process tree used by the proof, then:
 
 ```text
 CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=FAIL
 ARTIFACT_RELEASE=BLOCKED
 ```
 
-If process execution is prohibited, the future artifact PR must remain unmerged rather than fabricate evidence or weaken the theorem.
+If process execution is prohibited or authenticated authority cannot be established, the future artifact PR must remain unmerged rather than fabricate evidence or weaken the theorem.
 
 ---
 
@@ -813,9 +851,20 @@ canonical G0 test blob/hash unchanged
 REQUIRED_FUTURE_PATHS_PRESENT=PASS
 CHANGED_PATHS=EXACTLY_3_ALLOWLISTED_PATHS
 NO_UNEXPECTED_PATHS=PASS
+REQUIRED_FUTURE_PATH_OBJECT_TYPES=REGULAR_BLOBS
+REQUIRED_FUTURE_PATH_GIT_MODE=100644
+REQUIRED_FUTURE_PATH_RESOLUTION_PROOF=PASS
 release manifest strict validation
 unknown release-manifest fields rejected
 invalid/mutable identity fields rejected
+PROCESS_AUTHORITY_TRUST_ROOT_PROOF=PASS
+PROCESS_AUTHORITY_AUTHENTICATION_PROOF=PASS
+PROCESS_AUTHORITY_SESSION_FRESHNESS_PROOF=PASS
+PROCESS_AUTHORITY_NONCE_REPLAY_PROOF=PASS
+PROCESS_AUTHORITY_REPOSITORY_BINDING_PROOF=PASS
+PROCESS_AUTHORITY_EXACT_HEAD_BINDING_PROOF=PASS
+PROCESS_AUTHORITY_COMMAND_SCOPE_PROOF=PASS
+PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF=PASS
 CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
 PACKAGE_FORMAT_CANONICALIZATION_PROOF=PASS
 MEDIA_TYPE_AND_DESCRIPTOR_PROOF=PASS
@@ -842,6 +891,7 @@ NO_EGRESS_BOUNDARY_PROOF=PASS
 NETWORK_SOCKET_AUDIT=PASS
 UNIX_SOCKET_AUDIT=PASS
 INHERITED_SOCKET_FD_PROOF=PASS
+DOCKER_ENGINE_ENDPOINT_UNAVAILABLE_PROOF=PASS
 network/registry acquisition absent
 Docker daemon interaction absent
 ```
@@ -856,6 +906,7 @@ The future proof must explicitly defend against:
 
 - rebuilding from source/test bytes different from canonical G0;
 - omitting one of the three required artifact-proof paths while claiming a complete verdict;
+- replacing an allowlisted path with a symlink, gitlink/submodule, non-regular Git object, or alternate resolved path;
 - unpinned compiler/linker/static runtime inputs;
 - ambient compiler/include/library override variables;
 - hidden timestamps, locale, timezone, umask, PATH, working directory, or TMPDIR dependence;
@@ -870,10 +921,12 @@ The future proof must explicitly defend against:
 - mutable tags or registry names becoming trust identity;
 - DNS, telemetry, update, license-check, registry, or other build-time egress;
 - ambient AF_UNIX/AF_LOCAL endpoints or inherited socket FDs bypassing the IP no-egress boundary;
-- Docker/container-engine daemon access through a host-local socket;
+- Docker/container-engine daemon access through a host-local socket that is physically present but intended to be inaccessible;
 - artifact digest computed over bytes different from inspected bytes;
 - one-build-only reproducibility claims;
-- process execution performed without explicit founder/current-session scope authority;
+- self-authored, self-signed, stale, replayed, wrong-repository, or wrong-head process-authority records;
+- process authority that does not bind the exact executable/argv/child-process tree;
+- process execution performed without authenticated founder/current-session scope authority;
 - confusing an offline digest with an observed local Docker image ID;
 - treating artifact proof as B1-v2/B2A-v2/B2B authority.
 
@@ -919,8 +972,19 @@ NO_UNEXPECTED_PATHS=PASS
 RELEASE_MANIFEST_PATH_PRESENT=PASS
 OFFLINE_ARTIFACT_TEST_PATH_PRESENT=PASS
 OFFLINE_ARTIFACT_EVIDENCE_PATH_PRESENT=PASS
+REQUIRED_FUTURE_PATH_OBJECT_TYPES=REGULAR_BLOBS
+REQUIRED_FUTURE_PATH_GIT_MODE=100644
+REQUIRED_FUTURE_PATH_RESOLUTION_PROOF=PASS
 CANONICAL_G0_SOURCE_BYTES_UNCHANGED=PASS
 CANONICAL_G0_TEST_BYTES_UNCHANGED=PASS
+PROCESS_AUTHORITY_TRUST_ROOT_PROOF=PASS
+PROCESS_AUTHORITY_AUTHENTICATION_PROOF=PASS
+PROCESS_AUTHORITY_SESSION_FRESHNESS_PROOF=PASS
+PROCESS_AUTHORITY_NONCE_REPLAY_PROOF=PASS
+PROCESS_AUTHORITY_REPOSITORY_BINDING_PROOF=PASS
+PROCESS_AUTHORITY_EXACT_HEAD_BINDING_PROOF=PASS
+PROCESS_AUTHORITY_COMMAND_SCOPE_PROOF=PASS
+PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF=PASS
 CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
 PACKAGE_FORMAT_CANONICALIZATION_PROOF=PASS
 BUILD_CONTEXT_POLICY_PROOF=PASS
@@ -935,6 +999,7 @@ NO_EGRESS_BOUNDARY_PROOF=PASS
 NETWORK_SOCKET_AUDIT=PASS
 UNIX_SOCKET_AUDIT=PASS
 INHERITED_SOCKET_FD_PROOF=PASS
+DOCKER_ENGINE_ENDPOINT_UNAVAILABLE_PROOF=PASS
 NETWORK_REGISTRY_ZERO_PROOF=PASS
 DOCKER_DAEMON_ZERO_PROOF=PASS
 EXACT_HEAD_CI=PASS
@@ -944,7 +1009,7 @@ FINAL_MAIN_HEAD_DIFF_FENCE=PASS
 EXPECTED_HEAD_SHA_MERGE_FENCE=PASS
 ```
 
-The merge gate must fail closed if the process-authority evidence is absent, if any of the three required paths is absent, or if any unexpected path is present. No gate may be waived because the artifact is "only packaging".
+The merge gate must fail closed if authenticated process-authority evidence is absent or invalid, if the separately canonical trust root cannot be verified, if any of the three required paths is absent or is not a direct regular Git blob at the exact repository path, if any unexpected path is present, or if a Docker/container-engine endpoint remains usable. No gate may be waived because the artifact is "only packaging".
 
 ---
 
@@ -1009,7 +1074,7 @@ If and only if this docs-only authorization becomes canonical:
 NEXT_POST_G0_SLICE=
 TRUSTED GATE OFFLINE ARTIFACT PACKAGE PROOF
 
-FUTURE_RELEASE_PATH_ALLOWLIST=EXACTLY_3_REQUIRED_PATHS
+FUTURE_RELEASE_PATH_ALLOWLIST=EXACTLY_3_REQUIRED_REGULAR_BLOBS
 CANONICAL_G0_SOURCE_MUTATION=FORBIDDEN
 CANONICAL_G0_TEST_MUTATION=FORBIDDEN
 KODAC_GATE_PACKAGE_FORMAT_VERSION=kodac-gate-oci-layout-v1
@@ -1017,7 +1082,8 @@ USTAR_CANONICALIZATION_PROFILE=kodac-ustar-v1
 DOCKER_DAEMON_USE_IN_OFFLINE_SLICE=FORBIDDEN
 NETWORK_EGRESS_IN_OFFLINE_SLICE=FORBIDDEN
 UNIX_DOMAIN_SOCKET_USE_IN_OFFLINE_SLICE=FORBIDDEN
-CURRENT_SESSION_PROCESS_AUTHORITY=SEPARATE_REQUIRED_GATE
+AUTHENTICATED_PROCESS_AUTHORITY_TRUST_ROOT=SEPARATE_CANONICAL_PREREQUISITE
+CURRENT_SESSION_PROCESS_AUTHORITY=SEPARATE_REQUIRED_AUTHENTICATED_GATE
 
 MAX_FUTURE_RESULT=TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_PROVEN
 
@@ -1033,4 +1099,4 @@ R3G_F_E4=NO
 H4_COMPLETE=NO
 ```
 
-This slice keeps post-G0 progression fail-closed: first prove exact canonical offline artifact bytes under explicit process authority, then separately prove local Docker provisioning/identity, and only after those prerequisites may a future B1-v2 authorization be considered.
+This slice keeps post-G0 progression fail-closed: first establish a separately canonical founder-authentication trust root before any proof-process authority can be accepted, then prove exact canonical offline artifact bytes under authenticated exact-head/process-bound authority, then separately prove local Docker provisioning/identity, and only after those prerequisites may a future B1-v2 authorization be considered.
