@@ -258,7 +258,9 @@ async function boundedDurableOperation<T>(label: string, operation: (signal: Abo
     if (timeoutSignal.aborted) onTimeout()
   })
   try {
-    return await Promise.race([Promise.resolve().then(() => operation(operationSignal)), boundary])
+    const result = await Promise.race([Promise.resolve().then(() => operation(operationSignal)), boundary])
+    if (timeoutSignal.aborted) throw new SandboxPrestartIndeterminateError(`${label} timed out with uncertain durable outcome`)
+    return result
   } catch (error) {
     throw indeterminate(error, label)
   } finally {

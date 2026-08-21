@@ -499,6 +499,17 @@ async function withCapturedB2ATimers<T>(run: (timers: CapturedTimer[]) => Promis
   try { return await run(timers) } finally { globalThis.setTimeout = originalSetTimeout; globalThis.clearTimeout = originalClearTimeout }
 }
 
+async function withCapturedDurableTimeout<T>(run: (abortTimeout: () => void) => Promise<T>): Promise<T> {
+  const original = Object.getOwnPropertyDescriptor(AbortSignal, "timeout")
+  let controller: AbortController | undefined
+  Object.defineProperty(AbortSignal, "timeout", { configurable: true, value: (milliseconds: number) => { assert.equal(milliseconds, 5000); controller = new AbortController(); return controller.signal } })
+  try {
+    return await run(() => { assert.ok(controller, "durable timeout signal must exist before the transaction executes"); controller.abort() })
+  } finally {
+    if (original !== undefined) Object.defineProperty(AbortSignal, "timeout", original)
+  }
+}
+
 async function withFakeMonotonic<T>(now: () => number, run: () => Promise<T>): Promise<T> {
   const own = Object.getOwnPropertyDescriptor(performance, "now")
   Object.defineProperty(performance, "now", { configurable: true, value: now })
@@ -635,6 +646,29 @@ async function timingInterleavingProof(): Promise<void> {
     assert.equal(store.failure()?.failureCode, "aborted")
     assert.equal(upgradeCount(fake), 0)
     assertZeroStart(fake)
+  })
+
+  await withRootFakeDocker({}, async ({ permit, lineage, fake, store }) => {
+    await withCapturedDurableTimeout(async (abortTimeout) => {
+      const runtime = createGvisorDockerPrestartOutputRuntime({
+        socketPath: fake.socketPath,
+        commitPreparationTransaction: (input: Parameters<typeof store.commitPreparationTransaction>[0]) => ({
+          then(resolve: (value: unknown) => void) {
+            const value = store.commitPreparationTransaction(input)
+            resolve(value)
+            abortTimeout()
+          },
+        }),
+        readStateFence: store.readStateFence,
+        commitOwnershipClaimTransaction: store.commitOwnershipClaimTransaction,
+        commitFailureTransaction: store.commitFailureTransaction,
+      })
+      await assert.rejects(new GvisorDockerPrestartOutputGateway(runtime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
+      assert.equal(store.state()?.state, "PREPARED")
+      assert.equal(store.writes(), 1)
+      assert.equal(upgradeCount(fake), 0)
+      assertZeroStart(fake)
+    })
   })
 
   await withRootFakeDocker({ autoUpgrade: false }, async ({ permit, lineage, fake, store }) => {
@@ -947,6 +981,21 @@ if (process.env.KODAC_B2A_ROOT_CHILD !== "1" && process.env.KODAC_B2A_TIMING_CHI
     assert.match(runtimeSource, /4294967295/)
     assert.match(channelSource, /socket\.setTimeout\(0\)/)
     assert.match(channelSource, /socket\.removeListener\("timeout", onTimeout\)/)
+  })
+
+  test("H4-R4B-B2A durable timeout success fence is explicit and excludes caller abort from the post-success decision", () => {
+    const runtimeSource = source("../src/execution/gateway-gvisor-docker-prestart-output-runtime.ts")
+    const start = runtimeSource.indexOf("async function boundedDurableOperation")
+    const end = runtimeSource.indexOf("async function exactFence", start)
+    assert.ok(start >= 0 && end > start)
+    const block = runtimeSource.slice(start, end)
+    const race = block.indexOf("const result = await Promise.race")
+    const timeoutFence = block.indexOf("if (timeoutSignal.aborted)", race)
+    const resultReturn = block.indexOf("return result", timeoutFence)
+    assert.ok(race >= 0 && timeoutFence > race && resultReturn > timeoutFence)
+    const postSuccessFence = block.slice(timeoutFence, resultReturn)
+    assert.equal(postSuccessFence.includes("parentSignal"), false)
+    assert.equal(postSuccessFence.includes("operationSignal"), false)
   })
 
   test("H4-R4B-B2A package-root negative space withholds raw attach, store mutation, owner and readiness constructors", () => {
