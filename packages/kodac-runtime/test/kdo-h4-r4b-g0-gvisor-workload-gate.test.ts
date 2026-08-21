@@ -152,6 +152,37 @@ test("H4-R4B-G0 source stays within the minimal gate authority", () => {
   assert.match(gateSource, /execv\(argv\[1\], &argv\[1\]\)/)
   assert.match(gateSource, /argv\[1\]\[0\] != '\/'/)
 
+  const gateCode = gateSource
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "")
+  const functionDefinitions = new Set(
+    [...gateCode.matchAll(/^\s*(?:static\s+)?(?:void|int)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/gm)].map(
+      (match) => match[1]!,
+    ),
+  )
+  const controlKeywords = new Set(["if", "for", "while", "switch", "sizeof"])
+  const externalCalls = [
+    ...new Set(
+      [...gateCode.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)]
+        .map((match) => match[1]!)
+        .filter((name) => !functionDefinitions.has(name) && !controlKeywords.has(name)),
+    ),
+  ].sort()
+  const allowedExternalCalls = new Set(["_exit", "close", "execv", "execve", "read"])
+  assert.deepEqual(
+    externalCalls.filter((name) => !allowedExternalCalls.has(name)),
+    [],
+    `unexpected external call(s) expanded the G0 TCB: ${externalCalls.join(", ")}`,
+  )
+  for (const requiredCall of ["_exit", "close", "read"] as const) {
+    assert.ok(externalCalls.includes(requiredCall), `G0 source must retain ${requiredCall}`)
+  }
+  assert.ok(
+    externalCalls.includes("execv") || externalCalls.includes("execve"),
+    "G0 source must retain direct exact-path exec",
+  )
+  assert.doesNotMatch(gateCode, /\b(?:asm|__asm__|syscall)\b/)
+
   const forbiddenCalls = /\b(?:socket|connect|bind|listen|accept|send|recv|fork|clone|posix_spawn|system|popen|mount|umount|setns|unshare|ptrace|getenv|setenv|putenv|execvp|execlp|execvpe|sleep|usleep|nanosleep)\s*\(/
   assert.doesNotMatch(gateSource, forbiddenCalls)
   assert.doesNotMatch(gateSource, /\b(?:printf|fprintf|fputs|puts|perror|write)\s*\(/)
