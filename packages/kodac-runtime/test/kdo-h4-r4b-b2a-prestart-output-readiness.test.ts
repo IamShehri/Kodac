@@ -1,0 +1,1033 @@
+import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
+import { spawnSync } from "node:child_process"
+import {
+  chmodSync,
+  chownSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs"
+import { ClientRequest, createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http"
+import { createConnection, createServer as createNetServer, type Server as NetServer } from "node:net"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { performance } from "node:perf_hooks"
+import { fileURLToPath } from "node:url"
+import type { Duplex } from "node:stream"
+import test from "node:test"
+
+import {
+  KDO_H4_R1_APPROVAL_VERSION,
+  KDO_H4_R1_EVIDENCE_COMMIT_VERSION,
+  createApprovalEvidence,
+  type ApprovalEvidence,
+  type ApprovalRequest,
+} from "../src/trust/approval.ts"
+import { createConfinementRequest } from "../src/trust/confinement.ts"
+import { createSandboxExecutionRequirement, type SandboxExecutionRequirement } from "../src/trust/sandbox-backend-evidence.ts"
+import { createSandboxExecutionApprovalBinding, createSandboxExecutionApprovalIntent } from "../src/trust/sandbox-execution-approval-binding.ts"
+import { createSandboxAdmissionPermit, type SandboxAdmissionPermit } from "../src/trust/sandbox-admission-permit.ts"
+import {
+  createCanonicalR4BB1Reservation,
+  createSandboxDormantCreatePrepared,
+  createSandboxDormantCreatedAdmission,
+  createSandboxDormantCreatedAdmissionCommit,
+  createSandboxDormantDockerObservation,
+  type SandboxDormantCreatePrepared,
+  type SandboxDormantCreatedAdmission,
+  type SandboxDormantCreatedAdmissionCommit,
+} from "../src/trust/sandbox-admission-dormant-create.ts"
+import {
+  createDockerSocketEndpointIdentity,
+  type DockerSocketEndpointIdentity,
+} from "../src/trust/sandbox-observer-docker-control-plane.ts"
+import {
+  KDO_H4_R3A_NETWORK_MODE,
+  createSandboxEntrypoint,
+  createSandboxNetworkPolicy,
+  createSandboxOciImageSource,
+  createSandboxResourcePolicy,
+  createSandboxWorkloadRequest,
+} from "../src/trust/sandbox-workload.ts"
+import {
+  KDO_H4_R4B_B2A_FAILURE_CODES,
+  createSandboxPrestartFailedFence,
+  createSandboxPrestartFailure,
+  createSandboxPrestartFailureCommit,
+  createSandboxPrestartOwnerCapability,
+  createSandboxPrestartOwnerClaimedFence,
+  createSandboxPrestartOwnershipClaim,
+  createSandboxPrestartOwnershipClaimCommit,
+  createSandboxPrestartPrepared,
+  createSandboxPrestartPreparedCommit,
+  createSandboxPrestartPreparedFence,
+  sandboxPrestartOwnerInstanceIdentity,
+  validateSandboxPrestartFailure,
+  validateSandboxPrestartFailureCommit,
+  validateSandboxPrestartOwnershipClaim,
+  validateSandboxPrestartOwnershipClaimCommit,
+  validateSandboxPrestartPrepared,
+  validateSandboxPrestartPreparedCommit,
+  validateSandboxPrestartStateFence,
+  type SandboxPrestartFailure,
+  type SandboxPrestartFailureCommit,
+  type SandboxPrestartOwnershipClaim,
+  type SandboxPrestartOwnershipClaimCommit,
+  type SandboxPrestartPrepared,
+  type SandboxPrestartPreparedCommit,
+  type SandboxPrestartStateFence,
+} from "../src/trust/sandbox-admission-prestart-output.ts"
+import {
+  GvisorDockerPrestartOutputGateway,
+  KDO_H4_R4B_B2A_RUNTIME_LIMITS,
+  SandboxPrestartIndeterminateError,
+  SandboxPrestartTerminalError,
+  createGvisorDockerPrestartOutputRuntime,
+  validateGvisorDockerPrestartHostIdMappingForTest,
+} from "../src/execution/gateway-gvisor-docker-prestart-output-runtime.ts"
+
+const source = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf8")
+const FIXTURE_DIGEST = `sha256:${"1".repeat(64)}`
+const IMAGE_ID = `sha256:${"d".repeat(64)}`
+const IMAGE_USER = "10001:10001"
+const IMAGE_ENV = Object.freeze(["NODE_ENV=production", "PATH=/usr/local/bin:/usr/bin"])
+const IMAGE_WORKING_DIR = "/workspace"
+const WORKSPACE_IDENTITY = "a".repeat(64)
+const EXECUTION_INTENT_IDENTITY = "b".repeat(64)
+const REQUEST_INSTANCE = "123e4567-e89b-42d3-a456-426614174000"
+const CONTAINER_ID = "c".repeat(64)
+const DOCKER_API_1_48_MASKED_PATHS = Object.freeze(["/proc/asound", "/proc/acpi", "/proc/kcore", "/proc/keys", "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug", "/proc/scsi", "/sys/firmware", "/sys/devices/virtual/powercap"] as const)
+const DOCKER_API_1_48_READONLY_PATHS = Object.freeze(["/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"] as const)
+
+function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T }
+function sha256(value: string): string { return createHash("sha256").update(value, "utf8").digest("hex") }
+function referenceRequestIdentity(intent: ApprovalRequest["intent"]): string { return sha256(`${KDO_H4_R1_APPROVAL_VERSION}\n${JSON.stringify({ capability: intent.capability, paths: intent.paths, inputDigest: intent.inputDigest })}`) }
+function evidenceCommit(evidence: ApprovalEvidence) { return Object.freeze({ version: KDO_H4_R1_EVIDENCE_COMMIT_VERSION, evidenceIdentity: evidence.evidenceIdentity, durability: "durable" as const }) }
+
+function fixtureRequirement(maxOutputBytes = 1024): SandboxExecutionRequirement {
+  const confinement = createConfinementRequest({ mode: "read-only", workspaceIdentity: WORKSPACE_IDENTITY, executionIntentIdentity: EXECUTION_INTENT_IDENTITY, scope: { readPaths: ["src"], writePaths: [] } })
+  const workload = createSandboxWorkloadRequest({
+    source: createSandboxOciImageSource({ repository: "ghcr.io/acme/kodac-b2a-fixture", digest: FIXTURE_DIGEST }),
+    entrypoint: createSandboxEntrypoint({ executable: "/usr/bin/node", args: ["--version"] }),
+    resourcePolicy: createSandboxResourcePolicy({ cpuMillis: 1000, memoryBytes: 536_870_912, ttlMs: 60_000, maxOutputBytes }),
+    networkPolicy: createSandboxNetworkPolicy({ mode: KDO_H4_R3A_NETWORK_MODE }),
+    confinement,
+    credentialBindingIdentity: null,
+  })
+  return createSandboxExecutionRequirement({ workload, requiredSemanticRuntimeClass: "gvisor" })
+}
+
+function fixedPermit(): SandboxAdmissionPermit {
+  const requirement = fixtureRequirement()
+  const expected = createSandboxExecutionApprovalIntent(requirement)
+  const intent = { capability: expected.capability, paths: [...expected.paths], inputDigest: expected.inputDigest }
+  const request: ApprovalRequest = { version: KDO_H4_R1_APPROVAL_VERSION, requestIdentity: referenceRequestIdentity(intent), requestInstanceId: REQUEST_INSTANCE, intent }
+  const binding = createSandboxExecutionApprovalBinding(requirement, request)
+  const asked = createApprovalEvidence(request, "asked")
+  const decided = createApprovalEvidence(request, "decided", "allowed-once")
+  return createSandboxAdmissionPermit({ binding, askedEvidence: asked, askedEvidenceCommit: evidenceCommit(asked), decidedEvidence: decided, decidedEvidenceCommit: evidenceCommit(decided) })
+}
+
+function b1Lineage(permit: SandboxAdmissionPermit, endpoint: DockerSocketEndpointIdentity): { prepared: SandboxDormantCreatePrepared; created: SandboxDormantCreatedAdmission; createdCommit: SandboxDormantCreatedAdmissionCommit } {
+  const prepared = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  const observation = createSandboxDormantDockerObservation({
+    socketEndpointIdentity: endpoint.endpointIdentity,
+    containerId: CONTAINER_ID,
+    containerName: prepared.containerName,
+    imageManifestDigest: prepared.sourceDigest,
+    executable: prepared.entrypointExecutable,
+    argsIdentity: prepared.argsIdentity,
+    runtimeName: prepared.runtimeName,
+    networkMode: prepared.networkMode,
+    networkAttachmentCount: 0,
+    nanoCpus: prepared.nanoCpus,
+    memoryBytes: prepared.memoryBytes,
+    memorySwapBytes: prepared.memorySwapBytes,
+    restartCount: 0,
+    restartPolicy: "no",
+    privileged: false,
+    tty: false,
+    running: false,
+    paused: false,
+    restarting: false,
+    dead: false,
+    pid: 0,
+    labels: prepared.labels,
+  }, prepared, permit)
+  const created = createSandboxDormantCreatedAdmission(prepared, observation, permit)
+  return { prepared, created, createdCommit: createSandboxDormantCreatedAdmissionCommit(created, permit, "created") }
+}
+
+function syntheticPrepared() {
+  const permit = fixedPermit()
+  const endpoint = createDockerSocketEndpointIdentity({ device: "1", inode: "2", uid: "0", gid: "0", mode: String(0o140600) })
+  const lineage = b1Lineage(permit, endpoint)
+  const prepared = createSandboxPrestartPrepared({ createdAdmission: lineage.created, createdAdmissionCommit: lineage.createdCommit, permit, providerIdentity: "e".repeat(64), socketEndpointIdentity: endpoint.endpointIdentity })
+  return { permit, endpoint, lineage, prepared }
+}
+
+test("H4-R4B-B2A prepared and state identities are exact and deterministic", () => {
+  const fixture = syntheticPrepared()
+  const rebuilt = createSandboxPrestartPrepared({ createdAdmission: fixture.lineage.created, createdAdmissionCommit: fixture.lineage.createdCommit, permit: fixture.permit, providerIdentity: fixture.prepared.providerIdentity, socketEndpointIdentity: fixture.endpoint.endpointIdentity })
+  assert.deepEqual(rebuilt, fixture.prepared)
+  assert.deepEqual(validateSandboxPrestartPrepared(clone(fixture.prepared), fixture.lineage.created, fixture.lineage.createdCommit, fixture.permit), fixture.prepared)
+  const commit = createSandboxPrestartPreparedCommit(fixture.prepared)
+  assert.deepEqual(validateSandboxPrestartPreparedCommit(clone(commit), fixture.prepared), commit)
+  const fence = createSandboxPrestartPreparedFence(fixture.prepared)
+  assert.equal(fence.state, "PREPARED")
+  assert.equal(fence.ownershipClaimIdentity, null)
+  assert.equal(fence.ownerInstanceIdentity, null)
+  assert.equal(fence.failureIdentity, null)
+  assert.deepEqual(validateSandboxPrestartStateFence(clone(fence), fixture.prepared), fence)
+})
+
+test("H4-R4B-B2A owner capability is sealed, non-structural, and unique", () => {
+  const fixture = syntheticPrepared()
+  const ownerA = createSandboxPrestartOwnerCapability()
+  const ownerB = createSandboxPrestartOwnerCapability()
+  assert.notEqual(sandboxPrestartOwnerInstanceIdentity(ownerA), sandboxPrestartOwnerInstanceIdentity(ownerB))
+  assert.throws(() => sandboxPrestartOwnerInstanceIdentity({ version: ownerA.version }), /not trusted/)
+  assert.throws(() => sandboxPrestartOwnerInstanceIdentity(JSON.parse(JSON.stringify(ownerA))), /not trusted/)
+  assert.throws(() => sandboxPrestartOwnerInstanceIdentity(new Proxy(ownerA, {})), /not trusted/)
+  const claim = createSandboxPrestartOwnershipClaim(fixture.prepared, ownerA)
+  const claimCommit = createSandboxPrestartOwnershipClaimCommit(claim)
+  assert.deepEqual(validateSandboxPrestartOwnershipClaim(clone(claim), fixture.prepared), claim)
+  assert.deepEqual(validateSandboxPrestartOwnershipClaimCommit(clone(claimCommit), claim), claimCommit)
+  const fence = createSandboxPrestartOwnerClaimedFence(fixture.prepared, claim)
+  assert.equal(fence.state, "OWNER_CLAIMED")
+  assert.equal(fence.ownerInstanceIdentity, claim.ownerInstanceIdentity)
+})
+
+test("H4-R4B-B2A durable failure enum excludes indeterminate replay pseudo-failures", () => {
+  const fixture = syntheticPrepared()
+  const owner = createSandboxPrestartOwnerCapability()
+  for (const code of KDO_H4_R4B_B2A_FAILURE_CODES) {
+    const failure = createSandboxPrestartFailure(fixture.prepared, code === "owner-lost-graceful" ? "ready-invalidation" : "attaching", code, code === "owner-lost-graceful" ? owner : null)
+    const commit = createSandboxPrestartFailureCommit(failure, "created")
+    assert.deepEqual(validateSandboxPrestartFailure(clone(failure), fixture.prepared), failure)
+    assert.deepEqual(validateSandboxPrestartFailureCommit(clone(commit), failure), commit)
+  }
+  for (const forbidden of ["indeterminate", "owner-already-claimed", "owner-lost-indeterminate"]) {
+    const failure = createSandboxPrestartFailure(fixture.prepared, "attaching", "aborted", null)
+    const hostile = clone(failure) as unknown as Record<string, unknown>
+    hostile.failureCode = forbidden
+    assert.throws(() => validateSandboxPrestartFailure(hostile, fixture.prepared), /failureCode/)
+  }
+})
+
+test("H4-R4B-B2A terminal fences distinguish pre-owner and exact-owner failures", () => {
+  const fixture = syntheticPrepared()
+  const preOwnerFailure = createSandboxPrestartFailure(fixture.prepared, "prepare", "aborted", null)
+  const preOwnerFence = createSandboxPrestartFailedFence(fixture.prepared, preOwnerFailure, null)
+  assert.equal(preOwnerFence.state, "FAILED_TERMINAL")
+  assert.equal(preOwnerFence.ownerInstanceIdentity, null)
+  const owner = createSandboxPrestartOwnerCapability()
+  const claim = createSandboxPrestartOwnershipClaim(fixture.prepared, owner)
+  const ownerFailure = createSandboxPrestartFailure(fixture.prepared, "ready-invalidation", "owner-lost-graceful", owner)
+  const ownerFence = createSandboxPrestartFailedFence(fixture.prepared, ownerFailure, claim)
+  assert.equal(ownerFence.ownerInstanceIdentity, claim.ownerInstanceIdentity)
+  assert.throws(() => createSandboxPrestartFailedFence(fixture.prepared, ownerFailure, null), /pre-owner failure/)
+})
+
+test("H4-R4B-B2A schema is closed and cannot serialize indeterminate as durable truth", () => {
+  const schema = JSON.parse(source("../../../schema/kdo-h4-r4b-b2a-prestart-output.schema.json"))
+  for (const key of ["prepared", "preparedCommit", "stateFence", "ownershipClaim", "ownershipClaimCommit", "failure", "failureCommit"]) assert.equal(schema.$defs[key].additionalProperties, false, key)
+  const codes = schema.$defs.failure.properties.failureCode.enum as string[]
+  for (const forbidden of ["indeterminate", "owner-already-claimed", "owner-lost-indeterminate"]) assert.equal(codes.includes(forbidden), false)
+  assert.deepEqual(schema.$defs.ownershipClaimCommit.properties.disposition, { const: "created" })
+})
+
+test("H4-R4B-B2A host-ID mapping gate accepts only the full initial-namespace-equivalent map", () => {
+  assert.equal(validateGvisorDockerPrestartHostIdMappingForTest(" 0\t0 4294967295\n", "0 0 4294967295"), true)
+  const rejected = [
+    "", "0 1000 1", "0 100000 65536", "0 0 4294967294", "1 0 4294967295", "0 1 4294967295",
+    "0 0 4294967295\n1 1 1", "0 0", "0 0 4294967296", "0 0 -1", "0 0 nope", "00 0 4294967295",
+  ]
+  for (const value of rejected) {
+    assert.throws(() => validateGvisorDockerPrestartHostIdMappingForTest(value, "0 0 4294967295"))
+    assert.throws(() => validateGvisorDockerPrestartHostIdMappingForTest("0 0 4294967295", value))
+  }
+})
+
+test("H4-R4B-B2A atomic fence orderings permit at most one owner or one terminal winner", () => {
+  const fixture = syntheticPrepared()
+  const preparedCommit = createSandboxPrestartPreparedCommit(fixture.prepared)
+  const preparedFence = createSandboxPrestartPreparedFence(fixture.prepared)
+  const ownerA = createSandboxPrestartOwnerCapability()
+  const ownerB = createSandboxPrestartOwnerCapability()
+  const claimA = createSandboxPrestartOwnershipClaim(fixture.prepared, ownerA)
+  const claimB = createSandboxPrestartOwnershipClaim(fixture.prepared, ownerB)
+  const claimACommit = createSandboxPrestartOwnershipClaimCommit(claimA)
+
+  const claimFirst = durableStore()
+  claimFirst.commitPreparationTransaction({ prepared: fixture.prepared, preparedCommit, fence: preparedFence })
+  const baseA = claimFirst.state()!
+  const won = claimFirst.commitOwnershipClaimTransaction({ claim: claimA, claimCommit: claimACommit, expectedFence: baseA, nextFence: createSandboxPrestartOwnerClaimedFence(fixture.prepared, claimA) })
+  assert.equal(won.kind, "created")
+  const lost = claimFirst.commitOwnershipClaimTransaction({ claim: claimB, claimCommit: createSandboxPrestartOwnershipClaimCommit(claimB), expectedFence: baseA, nextFence: createSandboxPrestartOwnerClaimedFence(fixture.prepared, claimB) })
+  assert.equal(lost.kind, "owner-claimed-unavailable")
+  assert.equal(claimFirst.state()?.ownerInstanceIdentity, claimA.ownerInstanceIdentity)
+  const nullOwnerFailureAfterClaim = createSandboxPrestartFailure(fixture.prepared, "prepare", "aborted", null)
+  assert.throws(() => claimFirst.commitFailureTransaction({ failure: nullOwnerFailureAfterClaim, failureCommit: createSandboxPrestartFailureCommit(nullOwnerFailureAfterClaim, "created"), expectedFence: baseA, nextFence: createSandboxPrestartFailedFence(fixture.prepared, nullOwnerFailureAfterClaim, null) }), /failure CAS conflict/)
+  assert.equal(claimFirst.state()?.state, "OWNER_CLAIMED")
+  assert.equal(claimFirst.state()?.ownerInstanceIdentity, claimA.ownerInstanceIdentity)
+
+  const failureFirst = durableStore()
+  failureFirst.commitPreparationTransaction({ prepared: fixture.prepared, preparedCommit, fence: preparedFence })
+  const baseB = failureFirst.state()!
+  const failureA = createSandboxPrestartFailure(fixture.prepared, "prepare", "aborted", null)
+  failureFirst.commitFailureTransaction({ failure: failureA, failureCommit: createSandboxPrestartFailureCommit(failureA, "created"), expectedFence: baseB, nextFence: createSandboxPrestartFailedFence(fixture.prepared, failureA, null) })
+  const afterTerminal = failureFirst.commitOwnershipClaimTransaction({ claim: claimA, claimCommit: claimACommit, expectedFence: baseB, nextFence: createSandboxPrestartOwnerClaimedFence(fixture.prepared, claimA) })
+  assert.equal(afterTerminal.kind, "failed-terminal")
+  assert.equal(failureFirst.state()?.state, "FAILED_TERMINAL")
+  const terminalIdentity = failureFirst.state()?.failureIdentity
+  const failureB = createSandboxPrestartFailure(fixture.prepared, "prepare", "socket-namespace-untrusted", null)
+  assert.notEqual(failureB.failureIdentity, failureA.failureIdentity)
+  assert.throws(() => failureFirst.commitFailureTransaction({ failure: failureB, failureCommit: createSandboxPrestartFailureCommit(failureB, "created"), expectedFence: baseB, nextFence: createSandboxPrestartFailedFence(fixture.prepared, failureB, null) }), /conflicting terminal identity/)
+  assert.equal(failureFirst.state()?.failureIdentity, terminalIdentity)
+})
+
+interface FakeDockerOptions {
+  readonly autoUpgrade?: boolean
+  readonly upgradeHead?: Buffer
+  readonly holdReadNumber?: number
+}
+interface FakeDocker {
+  readonly socketPath: string
+  readonly requests: string[]
+  readonly server: HttpServer
+  pendingUpgrade(): boolean
+  pendingRead(): boolean
+  releaseUpgrade(): void
+  releaseHeldRead(): void
+  close(): Promise<void>
+}
+
+function inspectBody(prepared: SandboxDormantCreatePrepared): Record<string, unknown> {
+  return {
+    Id: CONTAINER_ID,
+    Name: `/${prepared.containerName}`,
+    Image: IMAGE_ID,
+    Path: prepared.entrypointExecutable,
+    Args: ["--version"],
+    State: { Status: "created", Running: false, Paused: false, Restarting: false, Dead: false, Pid: 0 },
+    RestartCount: 0,
+    Config: {
+      Image: prepared.sourceReference,
+      User: IMAGE_USER,
+      Env: [...IMAGE_ENV],
+      WorkingDir: IMAGE_WORKING_DIR,
+      AttachStdin: false,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: false,
+      OpenStdin: false,
+      StdinOnce: false,
+      NetworkDisabled: false,
+      Volumes: {},
+      Healthcheck: { Test: ["NONE"] },
+      Labels: { ...prepared.labels },
+    },
+    HostConfig: {
+      Runtime: "runsc", NetworkMode: "none", Privileged: false,
+      NanoCpus: prepared.nanoCpus, Memory: prepared.memoryBytes, MemorySwap: prepared.memorySwapBytes,
+      RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
+      Binds: null, Links: null, Dns: [], DnsOptions: [], DnsSearch: [], ExtraHosts: [], VolumesFrom: null,
+      CapAdd: null, CapDrop: null, GroupAdd: null, Devices: [], DeviceCgroupRules: null, DeviceRequests: null,
+      Ulimits: null, SecurityOpt: null, Mounts: [], PortBindings: {}, StorageOpt: {}, Tmpfs: {}, Sysctls: {},
+      PublishAllPorts: false, AutoRemove: false, ReadonlyRootfs: false, PidMode: "", IpcMode: "private", UTSMode: "",
+      UsernsMode: "", CgroupnsMode: "private", CgroupParent: "", VolumeDriver: "",
+      MaskedPaths: [...DOCKER_API_1_48_MASKED_PATHS], ReadonlyPaths: [...DOCKER_API_1_48_READONLY_PATHS],
+    },
+    NetworkSettings: { Networks: { none: {} } },
+    Mounts: [],
+  }
+}
+
+async function startFakeDocker(root: string, prepared: SandboxDormantCreatePrepared, options: FakeDockerOptions = {}): Promise<FakeDocker> {
+  const socketPath = join(root, "docker.sock")
+  const requests: string[] = []
+  const sockets = new Set<Duplex>()
+  let readNumber = 0
+  let heldRead: (() => void) | undefined
+  let heldUpgrade: (() => void) | undefined
+  const dispatchRead = (send: () => void) => {
+    readNumber += 1
+    if (options.holdReadNumber === readNumber) {
+      assert.equal(heldRead, undefined, "only one controlled Docker read may be held")
+      heldRead = () => { heldRead = undefined; send() }
+      return
+    }
+    send()
+  }
+  const server = createHttpServer((request: IncomingMessage, response: ServerResponse) => {
+    const method = request.method ?? ""; const url = request.url ?? ""; requests.push(`${method} ${url}`)
+    if (method === "GET" && url === `/v1.48/images/${encodeURIComponent(prepared.sourceReference)}/json`) {
+      dispatchRead(() => { response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify({ Id: IMAGE_ID, Descriptor: { digest: prepared.sourceDigest }, Config: { User: IMAGE_USER, Env: [...IMAGE_ENV], WorkingDir: IMAGE_WORKING_DIR, Volumes: {} } })) })
+      return
+    }
+    if (method === "GET" && url === `/v1.48/containers/${CONTAINER_ID}/json`) {
+      dispatchRead(() => { response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify(inspectBody(prepared))) })
+      return
+    }
+    response.writeHead(404); response.end("{}")
+  })
+  server.on("upgrade", (request, socket) => {
+    sockets.add(socket); socket.once("close", () => sockets.delete(socket)); requests.push(`UPGRADE ${request.url ?? ""}`)
+    const sendUpgrade = () => {
+      if (socket.destroyed) return
+      const headers = Buffer.from(["HTTP/1.1 101 UPGRADED", "Content-Type: application/vnd.docker.multiplexed-stream", "Connection: Upgrade", "Upgrade: tcp", "", ""].join("\r\n"), "utf8")
+      socket.write(Buffer.concat([headers, options.upgradeHead ?? Buffer.alloc(0)]))
+    }
+    if (options.autoUpgrade === false) heldUpgrade = () => { heldUpgrade = undefined; sendUpgrade() }
+    else sendUpgrade()
+  })
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socketPath, () => { server.off("error", reject); resolve() }) })
+  chmodSync(socketPath, 0o600)
+  return {
+    socketPath, requests, server,
+    pendingUpgrade: () => heldUpgrade !== undefined,
+    pendingRead: () => heldRead !== undefined,
+    releaseUpgrade: () => heldUpgrade?.(),
+    releaseHeldRead: () => heldRead?.(),
+    async close() { for (const socket of sockets) socket.destroy(); server.closeAllConnections(); if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve())) },
+  }
+}
+
+function durableStore() {
+  let preparedRecord: SandboxPrestartPrepared | undefined
+  let preparedCommit: SandboxPrestartPreparedCommit | undefined
+  let fence: SandboxPrestartStateFence | undefined
+  let claim: SandboxPrestartOwnershipClaim | undefined
+  let claimCommit: SandboxPrestartOwnershipClaimCommit | undefined
+  let failure: SandboxPrestartFailure | undefined
+  let failureCommit: SandboxPrestartFailureCommit | undefined
+  let writes = 0
+  return {
+    writes: () => writes,
+    state: () => fence,
+    failure: () => failure,
+    commitPreparationTransaction: (input: { prepared: SandboxPrestartPrepared; preparedCommit: SandboxPrestartPreparedCommit; fence: SandboxPrestartStateFence }) => {
+      if (preparedRecord === undefined) { preparedRecord = input.prepared; preparedCommit = input.preparedCommit; fence = input.fence; writes += 1; return { disposition: "created", prepared: preparedRecord, preparedCommit, fence } }
+      return { disposition: "existing", prepared: preparedRecord, preparedCommit, fence }
+    },
+    readStateFence: () => { if (fence === undefined) throw new Error("missing fence"); return fence },
+    commitOwnershipClaimTransaction: (input: { claim: SandboxPrestartOwnershipClaim; claimCommit: SandboxPrestartOwnershipClaimCommit; expectedFence: SandboxPrestartStateFence; nextFence: SandboxPrestartStateFence }) => {
+      if (fence === undefined) throw new Error("missing fence")
+      if (fence.state === "OWNER_CLAIMED") return { kind: "owner-claimed-unavailable", claim: null, claimCommit: null, fence }
+      if (fence.state === "FAILED_TERMINAL") return { kind: "failed-terminal", claim: null, claimCommit: null, fence }
+      if (fence.fenceIdentity !== input.expectedFence.fenceIdentity) throw new Error("claim CAS conflict")
+      claim = input.claim; claimCommit = input.claimCommit; fence = input.nextFence; writes += 1
+      return { kind: "created", claim, claimCommit, fence }
+    },
+    commitFailureTransaction: (input: { failure: SandboxPrestartFailure; failureCommit: SandboxPrestartFailureCommit; expectedFence: SandboxPrestartStateFence; nextFence: SandboxPrestartStateFence }) => {
+      if (fence === undefined) throw new Error("missing fence")
+      if (fence.state === "FAILED_TERMINAL") {
+        if (fence.failureIdentity !== input.failure.failureIdentity || failure === undefined || failureCommit === undefined) throw new Error("conflicting terminal identity")
+        return { disposition: "existing", failure, failureCommit: createSandboxPrestartFailureCommit(failure, "existing"), fence }
+      }
+      if (fence.fenceIdentity !== input.expectedFence.fenceIdentity) throw new Error("failure CAS conflict")
+      failure = input.failure; failureCommit = input.failureCommit; fence = input.nextFence; writes += 1
+      return { disposition: "created", failure, failureCommit, fence }
+    },
+  }
+}
+
+function runtimeFromStore(socketPath: string, store: ReturnType<typeof durableStore>) {
+  return createGvisorDockerPrestartOutputRuntime({
+    socketPath,
+    commitPreparationTransaction: store.commitPreparationTransaction,
+    readStateFence: store.readStateFence,
+    commitOwnershipClaimTransaction: store.commitOwnershipClaimTransaction,
+    commitFailureTransaction: store.commitFailureTransaction,
+  })
+}
+
+function rootStage(stage: string): void { process.stderr.write(`B2A_ROOT_STAGE=${stage}\n`) }
+function assertZeroStart(fake: FakeDocker): void { assert.equal(fake.requests.some((entry) => /\/start|\/exec|\/restart|\/stop|\/kill|DELETE/.test(entry)), false) }
+function upgradeCount(fake: FakeDocker): number { return fake.requests.filter((entry) => entry.startsWith("UPGRADE ")).length }
+async function waitUntil(predicate: () => boolean, label: string): Promise<void> { for (let index = 0; index < 2_000; index += 1) { if (predicate()) return; await new Promise<void>((resolve) => setImmediate(resolve)) } throw new Error(`timed out waiting for ${label}`) }
+
+async function withRootFakeDocker(options: FakeDockerOptions, run: (input: { permit: SandboxAdmissionPermit; lineage: ReturnType<typeof b1Lineage>; fake: FakeDocker; store: ReturnType<typeof durableStore> }) => Promise<void>): Promise<void> {
+  const root = mkdtempSync("/run/kodac-b2a-timing-")
+  const permit = fixedPermit()
+  const preparedForName = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  let fake: FakeDocker | undefined
+  try {
+    fake = await startFakeDocker(root, preparedForName, options)
+    const stats = lstatSync(fake.socketPath, { bigint: true })
+    const endpoint = createDockerSocketEndpointIdentity({ device: stats.dev.toString(10), inode: stats.ino.toString(10), uid: stats.uid.toString(10), gid: stats.gid.toString(10), mode: stats.mode.toString(10) })
+    const lineage = b1Lineage(permit, endpoint)
+    await run({ permit, lineage, fake, store: durableStore() })
+  } finally { await fake?.close(); rmSync(root, { recursive: true, force: true }) }
+}
+
+async function withCapturedAttachTimeout<T>(run: (getTimeout: () => (() => void) | undefined) => Promise<T>): Promise<T> {
+  const original = ClientRequest.prototype.setTimeout
+  let attachTimeout: (() => void) | undefined
+  ClientRequest.prototype.setTimeout = function(this: ClientRequest, msecs: number, callback?: () => void): ClientRequest {
+    if (this.method === "POST" && this.path.includes("/attach?")) { assert.equal(msecs, 5000); attachTimeout = callback; return this }
+    return original.call(this, msecs, callback)
+  } as typeof ClientRequest.prototype.setTimeout
+  try { return await run(() => attachTimeout) } finally { ClientRequest.prototype.setTimeout = original }
+}
+
+type CapturedTimer = { readonly delay: number; readonly callback: () => void; cleared: boolean }
+async function withCapturedB2ATimers<T>(run: (timers: CapturedTimer[]) => Promise<T>): Promise<T> {
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  const timers: CapturedTimer[] = []
+  globalThis.setTimeout = ((callback: (...args: any[]) => void, delay?: number, ...args: any[]) => {
+    if (delay === 5000 || delay === 15000) {
+      const timer: CapturedTimer = { delay, callback: () => callback(...args), cleared: false }
+      timers.push(timer)
+      return timer as unknown as ReturnType<typeof setTimeout>
+    }
+    return originalSetTimeout(callback, delay, ...args)
+  }) as typeof globalThis.setTimeout
+  globalThis.clearTimeout = ((handle: any) => {
+    const captured = timers.find((timer) => timer === handle)
+    if (captured !== undefined) { captured.cleared = true; return }
+    originalClearTimeout(handle)
+  }) as typeof globalThis.clearTimeout
+  try { return await run(timers) } finally { globalThis.setTimeout = originalSetTimeout; globalThis.clearTimeout = originalClearTimeout }
+}
+
+async function withCapturedDurableTimeout<T>(run: (abortTimeout: () => void) => Promise<T>): Promise<T> {
+  const original = Object.getOwnPropertyDescriptor(AbortSignal, "timeout")
+  let controller: AbortController | undefined
+  Object.defineProperty(AbortSignal, "timeout", { configurable: true, value: (milliseconds: number) => { assert.equal(milliseconds, 5000); controller = new AbortController(); return controller.signal } })
+  try {
+    return await run(() => { assert.ok(controller, "durable timeout signal must exist before the transaction executes"); controller.abort() })
+  } finally {
+    if (original !== undefined) Object.defineProperty(AbortSignal, "timeout", original)
+  }
+}
+
+async function withFakeMonotonic<T>(now: () => number, run: () => Promise<T>): Promise<T> {
+  const own = Object.getOwnPropertyDescriptor(performance, "now")
+  Object.defineProperty(performance, "now", { configurable: true, value: now })
+  try { return await run() } finally { if (own !== undefined) Object.defineProperty(performance, "now", own); else delete (performance as unknown as { now?: unknown }).now }
+}
+
+async function rootPhysicalProof(): Promise<void> {
+  rootStage("begin")
+  assert.equal(process.platform, "linux")
+  assert.equal(process.geteuid?.(), 0)
+  assert.equal(process.getegid?.(), 0)
+  assert.match(readFileSync("/proc/self/uid_map", "utf8").trim().replace(/\s+/g, " "), /^0 0 4294967295$/)
+  assert.match(readFileSync("/proc/self/gid_map", "utf8").trim().replace(/\s+/g, " "), /^0 0 4294967295$/)
+  const root = mkdtempSync("/run/kodac-b2a-")
+  const permit = fixedPermit()
+  const preparedForName = createSandboxDormantCreatePrepared(permit, createCanonicalR4BB1Reservation(permit))
+  let fake: FakeDocker | undefined
+  try {
+    rootStage("before-fake-docker")
+    fake = await startFakeDocker(root, preparedForName)
+    rootStage("fake-docker-ready")
+    const stats = lstatSync(fake.socketPath, { bigint: true })
+    const endpoint = createDockerSocketEndpointIdentity({ device: stats.dev.toString(10), inode: stats.ino.toString(10), uid: stats.uid.toString(10), gid: stats.gid.toString(10), mode: stats.mode.toString(10) })
+    assert.equal(endpoint.uid, "0"); assert.equal(endpoint.gid, "0"); assert.equal(Number(stats.mode & 0o777n), 0o600)
+    const lineage = b1Lineage(permit, endpoint)
+
+    const requestsBeforeUntrustedPreflight = fake.requests.length
+    chmodSync(fake.socketPath, 0o660)
+    try {
+      await assert.rejects(
+        new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, durableStore())).preparePrestartOutput(permit, lineage.created, lineage.createdCommit),
+        /B2A pre-I\/O host trust rejected/,
+      )
+      assert.equal(fake.requests.length, requestsBeforeUntrustedPreflight, "B2A initial host-trust rejection must occur before any Docker request")
+    } finally {
+      chmodSync(fake.socketPath, 0o600)
+    }
+
+    const store = durableStore()
+    const runtime = runtimeFromStore(fake.socketPath, store)
+    const gateway = new GvisorDockerPrestartOutputGateway(runtime)
+    rootStage("before-prepare")
+    const result = await gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+    rootStage("after-prepare")
+    assert.equal(result.status, "PRESTART_READY")
+    if (result.status !== "PRESTART_READY") throw new Error("unexpected unavailable result")
+    assert.equal(store.state()?.state, "OWNER_CLAIMED")
+    assert.equal(store.writes(), 2)
+    assert.equal(upgradeCount(fake), 1)
+    assertZeroStart(fake)
+    assert.ok(fake.requests.every((entry) => entry.startsWith("GET ") || entry === `UPGRADE /v1.48/containers/${CONTAINER_ID}/attach?logs=0&stream=1&stdin=0&stdout=1&stderr=1`))
+
+    await assert.rejects(gateway.invalidatePrestartOutput({ version: result.readiness.version }), /not trusted/)
+    await assert.rejects(gateway.invalidatePrestartOutput(JSON.parse(JSON.stringify(result.readiness))), /not trusted/)
+    await assert.rejects(gateway.invalidatePrestartOutput(structuredClone(result.readiness)), /not trusted/)
+    await assert.rejects(gateway.invalidatePrestartOutput(new Proxy(result.readiness, {})), /not trusted/)
+
+    const writesBeforeReplay = store.writes()
+    const upgradesBeforeReplay = upgradeCount(fake)
+    const replay = await gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+    assert.deepEqual(replay, { status: "OWNER_CLAIMED_UNAVAILABLE", classification: "INDETERMINATE", reusable: false })
+    assert.equal(store.writes(), writesBeforeReplay)
+    assert.equal(upgradeCount(fake), upgradesBeforeReplay)
+
+    const otherRuntime = runtimeFromStore(fake.socketPath, store)
+    const otherGateway = new GvisorDockerPrestartOutputGateway(otherRuntime)
+    const hardLossAmbiguity = await otherGateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+    assert.deepEqual(hardLossAmbiguity, { status: "OWNER_CLAIMED_UNAVAILABLE", classification: "INDETERMINATE", reusable: false })
+    assert.equal(store.writes(), writesBeforeReplay)
+    assert.equal(upgradeCount(fake), upgradesBeforeReplay)
+    await assert.rejects(otherGateway.invalidatePrestartOutput(result.readiness), /not trusted/)
+
+    const orphanRuntime = createGvisorDockerPrestartOutputRuntime({
+      socketPath: fake.socketPath,
+      commitPreparationTransaction: (input: { prepared: SandboxPrestartPrepared; preparedCommit: SandboxPrestartPreparedCommit }) => ({ disposition: "existing", prepared: input.prepared, preparedCommit: input.preparedCommit, fence: null }),
+      readStateFence: () => { throw new Error("orphan fence unavailable") },
+      commitOwnershipClaimTransaction: () => { throw new Error("owner claim must not run") },
+      commitFailureTransaction: () => { throw new Error("failure repair must not run") },
+    })
+    await assert.rejects(new GvisorDockerPrestartOutputGateway(orphanRuntime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
+    assert.equal(upgradeCount(fake), upgradesBeforeReplay)
+
+    const unknownPrepareRuntime = createGvisorDockerPrestartOutputRuntime({
+      socketPath: fake.socketPath,
+      commitPreparationTransaction: () => { throw new Error("unknown durable preparation outcome") },
+      readStateFence: () => { throw new Error("must not read") },
+      commitOwnershipClaimTransaction: () => { throw new Error("must not claim") },
+      commitFailureTransaction: () => { throw new Error("must not settle") },
+    })
+    await assert.rejects(new GvisorDockerPrestartOutputGateway(unknownPrepareRuntime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
+    assert.equal(upgradeCount(fake), upgradesBeforeReplay)
+
+    const claimUnknownStore = durableStore()
+    const claimUnknownRuntime = createGvisorDockerPrestartOutputRuntime({
+      socketPath: fake.socketPath,
+      commitPreparationTransaction: claimUnknownStore.commitPreparationTransaction,
+      readStateFence: claimUnknownStore.readStateFence,
+      commitOwnershipClaimTransaction: () => { throw new Error("unknown durable claim outcome") },
+      commitFailureTransaction: claimUnknownStore.commitFailureTransaction,
+    })
+    await assert.rejects(new GvisorDockerPrestartOutputGateway(claimUnknownRuntime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
+    assert.equal(claimUnknownStore.state()?.state, "PREPARED")
+    assert.equal(upgradeCount(fake), upgradesBeforeReplay)
+
+    rootStage("before-invalidate")
+    await gateway.invalidatePrestartOutput(result.readiness)
+    rootStage("after-invalidate")
+    assert.equal(store.state()?.state, "FAILED_TERMINAL")
+    assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
+    await assert.rejects(gateway.invalidatePrestartOutput(result.readiness), /not trusted/)
+    const writesAfterTerminal = store.writes()
+    const upgradesAfterTerminal = upgradeCount(fake)
+    await assert.rejects(gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartTerminalError)
+    assert.equal(store.writes(), writesAfterTerminal)
+    assert.equal(upgradeCount(fake), upgradesAfterTerminal)
+    assertZeroStart(fake)
+  } finally {
+    rootStage("before-close")
+    await fake?.close()
+    rootStage("after-close")
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+async function timingInterleavingProof(): Promise<void> {
+  assert.equal(process.platform, "linux")
+  assert.equal(process.geteuid?.(), 0)
+  assert.equal(process.getegid?.(), 0)
+
+  await withRootFakeDocker({ upgradeHead: Buffer.from([1]) }, async ({ permit, lineage, fake, store }) => {
+    const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+    await assert.rejects(gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartTerminalError)
+    assert.equal(store.failure()?.failureCode, "payload-before-start")
+    assertZeroStart(fake)
+  })
+
+  await withRootFakeDocker({}, async ({ permit, lineage, fake, store }) => {
+    const abort = new AbortController()
+    const runtime = createGvisorDockerPrestartOutputRuntime({
+      socketPath: fake.socketPath,
+      commitPreparationTransaction: store.commitPreparationTransaction,
+      readStateFence: store.readStateFence,
+      commitOwnershipClaimTransaction: (input: Parameters<typeof store.commitOwnershipClaimTransaction>[0]) => { const result = store.commitOwnershipClaimTransaction(input); abort.abort(); return result },
+      commitFailureTransaction: store.commitFailureTransaction,
+    })
+    await assert.rejects(new GvisorDockerPrestartOutputGateway(runtime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit, { signal: abort.signal }), SandboxPrestartTerminalError)
+    assert.equal(store.failure()?.failureCode, "aborted")
+    assert.equal(upgradeCount(fake), 0)
+    assertZeroStart(fake)
+  })
+
+  await withRootFakeDocker({}, async ({ permit, lineage, fake, store }) => {
+    await withCapturedDurableTimeout(async (abortTimeout) => {
+      const runtime = createGvisorDockerPrestartOutputRuntime({
+        socketPath: fake.socketPath,
+        commitPreparationTransaction: (input: Parameters<typeof store.commitPreparationTransaction>[0]) => ({
+          then(resolve: (value: unknown) => void) {
+            const value = store.commitPreparationTransaction(input)
+            resolve(value)
+            abortTimeout()
+          },
+        }),
+        readStateFence: store.readStateFence,
+        commitOwnershipClaimTransaction: store.commitOwnershipClaimTransaction,
+        commitFailureTransaction: store.commitFailureTransaction,
+      })
+      await assert.rejects(new GvisorDockerPrestartOutputGateway(runtime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartIndeterminateError)
+      assert.equal(store.state()?.state, "PREPARED")
+      assert.equal(store.writes(), 1)
+      assert.equal(upgradeCount(fake), 0)
+      assertZeroStart(fake)
+    })
+  })
+
+  await withRootFakeDocker({ autoUpgrade: false }, async ({ permit, lineage, fake, store }) => {
+    await withCapturedAttachTimeout(async (getTimeout) => {
+      const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+      const preparation = gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+      await waitUntil(() => fake.pendingUpgrade() && getTimeout() !== undefined, "held attach and captured 5000ms timeout")
+      getTimeout()!()
+      await assert.rejects(preparation, SandboxPrestartTerminalError)
+      assert.equal(store.failure()?.failureCode, "attach-timeout")
+      fake.releaseUpgrade()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      assert.equal(store.state()?.state, "FAILED_TERMINAL")
+      assertZeroStart(fake)
+    })
+  })
+
+  await withRootFakeDocker({ autoUpgrade: false }, async ({ permit, lineage, fake, store }) => {
+    await withCapturedAttachTimeout(async (getTimeout) => {
+      const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+      const preparation = gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+      await waitUntil(() => fake.pendingUpgrade() && getTimeout() !== undefined, "held boundary upgrade")
+      fake.releaseUpgrade()
+      const result = await preparation
+      assert.equal(result.status, "PRESTART_READY")
+      if (result.status !== "PRESTART_READY") throw new Error("boundary upgrade did not reach readiness")
+      getTimeout()!()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await gateway.invalidatePrestartOutput(result.readiness)
+      assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
+      assertZeroStart(fake)
+    })
+  })
+
+  for (const [delta, shouldReady] of [[4999, true], [5000, true], [5001, false]] as const) {
+    await withRootFakeDocker({}, async ({ permit, lineage, fake, store }) => {
+      const values = [0, 0, 0, delta, delta]
+      let index = 0
+      await withFakeMonotonic(() => values[index++] ?? delta, async () => {
+        const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+        const preparation = gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+        if (shouldReady) {
+          const result = await preparation
+          assert.equal(result.status, "PRESTART_READY")
+          if (result.status !== "PRESTART_READY") throw new Error("reader boundary should be ready")
+          await gateway.invalidatePrestartOutput(result.readiness)
+          assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
+        } else {
+          await assert.rejects(preparation, SandboxPrestartTerminalError)
+          assert.equal(store.failure()?.failureCode, "reader-activation-timeout")
+        }
+        assertZeroStart(fake)
+      })
+    })
+  }
+
+  for (const ordering of ["before", "at", "after"] as const) {
+    await withRootFakeDocker({ holdReadNumber: 5 }, async ({ permit, lineage, fake, store }) => {
+      await withCapturedB2ATimers(async (timers) => {
+        const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+        const preparation = gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+        await waitUntil(() => fake.pendingRead() && timers.some((timer) => timer.delay === 5000), `post-attach revalidation ${ordering}`)
+        const phaseTimer = timers.find((timer) => timer.delay === 5000)!
+        if (ordering === "before") {
+          fake.releaseHeldRead()
+          const result = await preparation
+          assert.equal(result.status, "PRESTART_READY")
+          if (result.status !== "PRESTART_READY") throw new Error("revalidation-before-deadline should be ready")
+          assert.equal(phaseTimer.cleared, true)
+          phaseTimer.callback()
+          await gateway.invalidatePrestartOutput(result.readiness)
+          assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
+        } else {
+          phaseTimer.callback()
+          if (ordering === "after") await new Promise<void>((resolve) => setImmediate(resolve))
+          fake.releaseHeldRead()
+          await assert.rejects(preparation, SandboxPrestartTerminalError)
+          assert.equal(store.failure()?.failureCode, "dormant-revalidation-timeout")
+        }
+        assertZeroStart(fake)
+      })
+    })
+  }
+
+  await withRootFakeDocker({ holdReadNumber: 5 }, async ({ permit, lineage, fake, store }) => {
+    await withCapturedB2ATimers(async (timers) => {
+      let now = 0
+      await withFakeMonotonic(() => now, async () => {
+        const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+        const preparation = gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+        await waitUntil(() => fake.pendingRead() && timers.some((timer) => timer.delay === 15000), "absolute owner-to-ready deadline")
+        now = 15000
+        timers.find((timer) => timer.delay === 15000)!.callback()
+        fake.releaseHeldRead()
+        await assert.rejects(preparation, SandboxPrestartTerminalError)
+        assert.equal(store.failure()?.failureCode, "prestart-total-timeout")
+        assertZeroStart(fake)
+      })
+    })
+  })
+
+  await withRootFakeDocker({}, async ({ permit, lineage, fake, store }) => {
+    await withCapturedB2ATimers(async (timers) => {
+      const values = [0, 14999, 14999, 14999, 14999]
+      let index = 0
+      await withFakeMonotonic(() => values[index++] ?? 14999, async () => {
+        const gateway = new GvisorDockerPrestartOutputGateway(runtimeFromStore(fake.socketPath, store))
+        const result = await gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+        assert.equal(result.status, "PRESTART_READY")
+        if (result.status !== "PRESTART_READY") throw new Error("14999ms owner-to-ready path should be ready")
+        const absolute = timers.find((timer) => timer.delay === 15000)!
+        assert.equal(absolute.cleared, true)
+        absolute.callback()
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        await gateway.invalidatePrestartOutput(result.readiness)
+        assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
+        assertZeroStart(fake)
+      })
+    })
+  })
+
+  await withRootFakeDocker({ holdReadNumber: 5 }, async ({ permit, lineage, fake, store }) => {
+    await withCapturedB2ATimers(async (timers) => {
+      const runtime = createGvisorDockerPrestartOutputRuntime({
+        socketPath: fake.socketPath,
+        commitPreparationTransaction: store.commitPreparationTransaction,
+        readStateFence: store.readStateFence,
+        commitOwnershipClaimTransaction: store.commitOwnershipClaimTransaction,
+        commitFailureTransaction: () => { throw new Error("settlement store timed out") },
+      })
+      const preparation = new GvisorDockerPrestartOutputGateway(runtime).preparePrestartOutput(permit, lineage.created, lineage.createdCommit)
+      await waitUntil(() => fake.pendingRead() && timers.some((timer) => timer.delay === 5000), "phase timeout before settlement timeout")
+      timers.find((timer) => timer.delay === 5000)!.callback()
+      fake.releaseHeldRead()
+      await assert.rejects(preparation, SandboxPrestartIndeterminateError)
+      assert.equal(store.state()?.state, "OWNER_CLAIMED")
+      assert.equal(store.failure(), undefined)
+      assertZeroStart(fake)
+    })
+  })
+}
+
+if (process.env.KODAC_B2A_ROOT_CHILD === "1") {
+  await rootPhysicalProof()
+  process.stdout.write("B2A_ROOT_PROOF_PASS\n")
+  process.exit(0)
+}
+if (process.env.KODAC_B2A_TIMING_CHILD === "1") {
+  await timingInterleavingProof()
+  process.stdout.write("B2A_TIMING_PROOF_PASS\n")
+  process.exit(0)
+}
+
+function commandAvailable(name: string): boolean { return spawnSync("bash", ["-lc", `command -v -- ${name}`], { encoding: "utf8" }).status === 0 }
+function sudo(args: readonly string[]): void {
+  const result = spawnSync("sudo", ["-n", ...args], { encoding: "utf8" })
+  assert.equal(result.status, 0, `sudo ${args.join(" ")} failed\nstdout=${result.stdout}\nstderr=${result.stderr}`)
+}
+function getfacl(path: string): string {
+  const result = spawnSync("getfacl", ["-cpn", "--", path], { encoding: "utf8" })
+  assert.equal(result.status, 0, `getfacl failed for ${path}: ${result.stderr}`)
+  return result.stdout
+}
+function actorEvidence() {
+  const status = readFileSync("/proc/self/status", "utf8")
+  const uid = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)$/m.exec(status)
+  const cap = /^CapEff:\s+([0-9A-Fa-f]+)$/m.exec(status)
+  assert.ok(uid); assert.ok(cap)
+  const fsuid = Number(uid[4]); assert.ok(Number.isSafeInteger(fsuid) && fsuid > 0)
+  const capEff = BigInt(`0x${cap[1]}`)
+  for (const bit of [0n, 1n, 2n, 3n]) assert.equal((capEff & (1n << bit)) === 0n, true, `negative actor capability bit ${bit} must be absent`)
+  const egid = process.getegid?.(); assert.equal(typeof egid, "number")
+  const groups = new Set<number>([egid as number, ...(process.getgroups?.() ?? [])])
+  assert.equal(groups.has(egid as number), true)
+  return Object.freeze({ fsuid, egid: egid as number, groups })
+}
+async function listenUnix(path: string): Promise<NetServer> {
+  const server = createNetServer((socket) => socket.end())
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(path, () => { server.off("error", reject); resolve() }) })
+  return server
+}
+async function connectUnix(path: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const socket = createConnection({ path })
+    socket.once("connect", () => { socket.destroy(); resolve() })
+    socket.once("error", reject)
+  })
+}
+async function expectConnectEacces(path: string): Promise<void> {
+  await assert.rejects(connectUnix(path), (error: unknown) => {
+    const code = (error as NodeJS.ErrnoException).code
+    assert.equal(code, "EACCES")
+    return true
+  })
+}
+function inodeIdentity(path: string): string { const stats = lstatSync(path, { bigint: true }); return `${stats.dev}:${stats.ino}:${stats.mode}:${stats.uid}:${stats.gid}` }
+function expectFsEacces(operation: () => void): void {
+  assert.throws(operation, (error: unknown) => { assert.equal((error as NodeJS.ErrnoException).code, "EACCES"); return true })
+}
+function controlDirectorySequence(root: string): void {
+  const createPath = join(root, "create-ok"); writeFileSync(createPath, "ok"); unlinkSync(createPath)
+  const unlinkPath = join(root, "unlink-ok"); writeFileSync(unlinkPath, "ok"); unlinkSync(unlinkPath)
+  const renameSource = join(root, "rename-source"); const renameTarget = join(root, "rename-target"); writeFileSync(renameSource, "ok"); writeFileSync(renameTarget, "target"); renameSync(renameSource, renameTarget); unlinkSync(renameTarget)
+}
+function denialDirectorySequence(root: string, actorSourceRoot: string): void {
+  const createTarget = join(root, "create-denied")
+  const unlinkTarget = join(root, "unlink-denied")
+  const renameTarget = join(root, "rename-denied")
+  const renameSource = join(actorSourceRoot, "rename-source")
+  writeFileSync(renameSource, "actor-source")
+  const unlinkBefore = inodeIdentity(unlinkTarget); const renameTargetBefore = inodeIdentity(renameTarget); const renameSourceBefore = inodeIdentity(renameSource)
+  expectFsEacces(() => writeFileSync(createTarget, "denied")); assert.throws(() => lstatSync(createTarget), (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT")
+  expectFsEacces(() => unlinkSync(unlinkTarget)); assert.equal(inodeIdentity(unlinkTarget), unlinkBefore)
+  expectFsEacces(() => renameSync(renameSource, renameTarget)); assert.equal(inodeIdentity(renameTarget), renameTargetBefore); assert.equal(inodeIdentity(renameSource), renameSourceBefore)
+}
+
+async function posixAclPhysicalProof(): Promise<void> {
+  const actor = actorEvidence()
+  assert.equal(process.geteuid?.(), actor.fsuid)
+  assert.equal(commandAvailable("setfacl"), true)
+  assert.equal(commandAvailable("getfacl"), true)
+  const root = mkdtempSync(join(tmpdir(), "kodac-b2a-acl-"))
+  const actorSourceRoot = join(root, "actor-source"); mkdirSync(actorSourceRoot, 0o700)
+  const extControlDir = join(root, "ext-control"); const extDenyDir = join(root, "ext-deny")
+  const minControlDir = join(root, "min-control"); const minDenyDir = join(root, "min-deny")
+  for (const path of [extControlDir, extDenyDir, minControlDir, minDenyDir]) mkdirSync(path, 0o700)
+  const extControlSocket = join(extControlDir, "control.sock"); const extDenySocket = join(extDenyDir, "deny.sock")
+  const minControlSocket = join(minControlDir, "control.sock"); const minDenySocket = join(minDenyDir, "deny.sock")
+  const servers: NetServer[] = []
+  try {
+    servers.push(await listenUnix(extControlSocket), await listenUnix(extDenySocket), await listenUnix(minControlSocket), await listenUnix(minDenySocket))
+    for (const path of [join(extDenyDir, "unlink-denied"), join(extDenyDir, "rename-denied"), join(minDenyDir, "unlink-denied"), join(minDenyDir, "rename-denied")]) writeFileSync(path, "protected")
+
+    sudo(["chown", "root:root", extControlDir, extDenyDir, extControlSocket, extDenySocket, join(extDenyDir, "unlink-denied"), join(extDenyDir, "rename-denied")])
+    sudo(["chmod", "0750", extControlDir, extDenyDir]); sudo(["chmod", "0600", extControlSocket, extDenySocket])
+    sudo(["setfacl", "-m", `u:${actor.fsuid}:rwx,m:rwx`, "--", extControlDir])
+    sudo(["setfacl", "-m", `u:${actor.fsuid}:rwx,m:r-x`, "--", extDenyDir])
+    sudo(["setfacl", "-m", `u:${actor.fsuid}:rw,m:rw`, "--", extControlSocket])
+    sudo(["setfacl", "-m", `u:${actor.fsuid}:rw,m:---`, "--", extDenySocket])
+
+    const extSocketAcl = getfacl(extDenySocket); const extDirAcl = getfacl(extDenyDir)
+    assert.match(extSocketAcl, new RegExp(`^user:${actor.fsuid}:rw-\\s+#effective:---$`, "m")); assert.match(extSocketAcl, /^mask::---$/m)
+    assert.match(extDirAcl, new RegExp(`^user:${actor.fsuid}:rwx\\s+#effective:r-x$`, "m")); assert.match(extDirAcl, /^mask::r-x$/m)
+    assert.equal(Number(lstatSync(extDenyDir, { bigint: true }).mode & 0o1000n), 0)
+    assert.equal(Number(lstatSync(extDenySocket, { bigint: true }).mode & 0o777n), 0o600)
+    await connectUnix(extControlSocket); await expectConnectEacces(extDenySocket)
+    controlDirectorySequence(extControlDir); denialDirectorySequence(extDenyDir, actorSourceRoot)
+
+    const protectedFile = join(extDenyDir, "unlink-denied")
+    assert.throws(() => chmodSync(protectedFile, 0o777), (error: unknown) => (error as NodeJS.ErrnoException).code === "EPERM")
+    assert.throws(() => chownSync(protectedFile, actor.fsuid, actor.egid), (error: unknown) => (error as NodeJS.ErrnoException).code === "EPERM")
+    const aclMutation = spawnSync("setfacl", ["-m", `u:${actor.fsuid}:rwx`, "--", protectedFile], { encoding: "utf8" }); assert.notEqual(aclMutation.status, 0)
+
+    sudo(["chown", `root:${actor.egid}`, minControlDir, minDenyDir, minControlSocket, minDenySocket, join(minDenyDir, "unlink-denied"), join(minDenyDir, "rename-denied")])
+    sudo(["setfacl", "-b", "--", minControlDir, minDenyDir, minControlSocket, minDenySocket, join(minDenyDir, "unlink-denied"), join(minDenyDir, "rename-denied")])
+    sudo(["chmod", "0770", minControlDir]); sudo(["chmod", "0550", minDenyDir]); sudo(["chmod", "0660", minControlSocket]); sudo(["chmod", "0600", minDenySocket])
+    assert.equal(actor.groups.has(actor.egid), true)
+    const minSocketAcl = getfacl(minDenySocket); const minDirAcl = getfacl(minDenyDir)
+    assert.doesNotMatch(minSocketAcl, /^mask::/m); assert.doesNotMatch(minSocketAcl, /^user:[0-9]+:/m); assert.doesNotMatch(minSocketAcl, /^group:[^:]+:/m); assert.match(minSocketAcl, /^group::---$/m)
+    assert.doesNotMatch(minDirAcl, /^mask::/m); assert.doesNotMatch(minDirAcl, /^user:[0-9]+:/m); assert.doesNotMatch(minDirAcl, /^group:[^:]+:/m); assert.match(minDirAcl, /^group::r-x$/m)
+    assert.equal(Number(lstatSync(minDenyDir, { bigint: true }).mode & 0o1000n), 0)
+    await connectUnix(minControlSocket); await expectConnectEacces(minDenySocket)
+    controlDirectorySequence(minControlDir); denialDirectorySequence(minDenyDir, actorSourceRoot)
+    assert.equal(actorEvidence().fsuid, actor.fsuid)
+  } finally {
+    for (const server of servers) await new Promise<void>((resolve) => server.close(() => resolve()))
+    sudo(["rm", "-rf", "--", root])
+  }
+}
+
+if (process.env.KODAC_B2A_ROOT_CHILD !== "1" && process.env.KODAC_B2A_TIMING_CHILD !== "1") {
+  test("H4-R4B-B2A Linux physical root replay and ambiguity proof stays zero-start", { skip: process.platform !== "linux" }, () => {
+    const script = fileURLToPath(import.meta.url)
+    const result = spawnSync("sudo", ["-n", "/usr/bin/env", "KODAC_B2A_ROOT_CHILD=1", process.execPath, "--experimental-strip-types", script], { encoding: "utf8", timeout: 30_000 })
+    if (process.env.GITHUB_ACTIONS === "true") {
+      assert.equal(result.status, 0, `root B2A proof failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
+      assert.match(result.stdout, /B2A_ROOT_PROOF_PASS/)
+    }
+  })
+
+  test("H4-R4B-B2A deterministic deadline cancellation payload and late-success interleavings stay zero-start", { skip: process.platform !== "linux" }, () => {
+    const script = fileURLToPath(import.meta.url)
+    const result = spawnSync("sudo", ["-n", "/usr/bin/env", "KODAC_B2A_TIMING_CHILD=1", process.execPath, "--experimental-strip-types", script], { encoding: "utf8", timeout: 30_000 })
+    if (process.env.GITHUB_ACTIONS === "true") {
+      assert.equal(result.status, 0, `timing B2A proof failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
+      assert.match(result.stdout, /B2A_TIMING_PROOF_PASS/)
+    }
+  })
+
+  test("H4-R4B-B2A extended and minimal POSIX ACL fixtures causally deny the same untrusted actor", { skip: process.platform !== "linux" }, async () => {
+    if (!commandAvailable("sudo") || !commandAvailable("setfacl") || !commandAvailable("getfacl")) {
+      if (process.env.GITHUB_ACTIONS === "true") assert.fail("GitHub Linux proof host must provide sudo/setfacl/getfacl")
+      return
+    }
+    await posixAclPhysicalProof()
+  })
+
+  test("H4-R4B-B2A deadlines remain exactly 5s/5s/5s/15s and zero-start is statically enforced", () => {
+    assert.deepEqual(KDO_H4_R4B_B2A_RUNTIME_LIMITS, { attachUpgradeTimeoutMs: 5000, readerActivationTimeoutMs: 5000, dormantRevalidationTimeoutMs: 5000, ownerToReadyTimeoutMs: 15000 })
+    const runtimeSource = source("../src/execution/gateway-gvisor-docker-prestart-output-runtime.ts")
+    const channelSource = source("../src/execution/gateway-gvisor-output-channel-internal.ts")
+    assert.doesNotMatch(runtimeSource, /\/containers\/[^\s"'`]*\/(?:start|exec|restart|stop|kill)\b/)
+    assert.equal(runtimeSource.includes('method: "DELETE"'), false)
+    assert.doesNotMatch(channelSource, /\/containers\/[^\s"'`]*\/(?:start|exec|restart|stop|kill)\b/)
+    assert.equal(channelSource.includes('method: "DELETE"'), false)
+    assert.equal(runtimeSource.includes("node:child_process"), false)
+    assert.equal(channelSource.includes("node:child_process"), false)
+    assert.match(runtimeSource, /readFileSync\("\/proc\/self\/uid_map", "utf8"\)/)
+    assert.match(runtimeSource, /readFileSync\("\/proc\/self\/gid_map", "utf8"\)/)
+    assert.match(runtimeSource, /4294967295/)
+    assert.match(channelSource, /socket\.setTimeout\(0\)/)
+    assert.match(channelSource, /socket\.removeListener\("timeout", onTimeout\)/)
+  })
+
+  test("H4-R4B-B2A durable timeout success fence is explicit and excludes caller abort from the post-success decision", () => {
+    const runtimeSource = source("../src/execution/gateway-gvisor-docker-prestart-output-runtime.ts")
+    const start = runtimeSource.indexOf("async function boundedDurableOperation")
+    const end = runtimeSource.indexOf("async function exactFence", start)
+    assert.ok(start >= 0 && end > start)
+    const block = runtimeSource.slice(start, end)
+    const race = block.indexOf("const result = await Promise.race")
+    const timeoutFence = block.indexOf("if (timeoutSignal.aborted)", race)
+    const resultReturn = block.indexOf("return result", timeoutFence)
+    assert.ok(race >= 0 && timeoutFence > race && resultReturn > timeoutFence)
+    const postSuccessFence = block.slice(timeoutFence, resultReturn)
+    assert.equal(postSuccessFence.includes("parentSignal"), false)
+    assert.equal(postSuccessFence.includes("operationSignal"), false)
+  })
+
+  test("H4-R4B-B2A package-root negative space withholds raw attach, store mutation, owner and readiness constructors", () => {
+    const root = source("../src/index.ts")
+    for (const forbidden of [
+      "openExactGvisorDockerAttach", "InternalGvisorPrestartMultiplexReader", "createGvisorDockerPrestartOutputRuntime",
+      "createSandboxPrestartOwnerCapability", "sandboxPrestartOwnerInstanceIdentity", "createSandboxPrestartOwnershipClaim",
+      "createSandboxPrestartOwnerClaimedFence", "createSandboxPrestartFailedFence", "createSandboxPrestartPreparedFence",
+      "createSandboxPrestartFailure", "createSandboxPrestartFailureCommit", "createSandboxPrestartPreparedCommit",
+      "createSandboxPrestartOwnershipClaimCommit", "createReadiness", "validateGvisorDockerPrestartHostIdMappingForTest",
+    ]) assert.equal(root.includes(forbidden), false, forbidden)
+  })
+
+  test("H4-R4B-B2A R3G-E canonical regression suite remains present and fixed-protocol", () => {
+    const regression = source("./kdo-h4-r3g-e-docker-stream.test.ts")
+    assert.match(regression, /trusted transport proves exact list\/inspect\/attach multiplex path and aggregate bytes/)
+    assert.match(regression, /rejects TTY stdin and missing stdout\/stderr before attach upgrade/)
+    assert.match(regression, /overflow closes the accepted stream and same-attempt replay cannot replenish budget/)
+    assert.match(regression, /abort destroys the owned upgraded stream and cannot become late success/)
+    assert.match(regression, /socket replacement before any trusted output request/)
+  })
+}

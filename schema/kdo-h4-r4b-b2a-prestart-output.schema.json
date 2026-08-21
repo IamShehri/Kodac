@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kodac.dev/schema/kdo-h4-r4b-b2a-prestart-output.schema.json",
+  "title": "Kodac H4-R4B-B2A Pre-start Output Durable Contracts",
+  "oneOf": [
+    { "$ref": "#/$defs/prepared" },
+    { "$ref": "#/$defs/preparedCommit" },
+    { "$ref": "#/$defs/stateFence" },
+    { "$ref": "#/$defs/ownershipClaim" },
+    { "$ref": "#/$defs/ownershipClaimCommit" },
+    { "$ref": "#/$defs/failure" },
+    { "$ref": "#/$defs/failureCommit" }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "containerId": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "prepared": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "preparedIdentity", "executionAttemptIdentity", "createdAdmissionIdentity", "containerId", "requirementIdentity", "workloadIdentity", "providerIdentity", "socketEndpointIdentity", "prestartOutputOperationIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r4b-b2a-prepared-v1" },
+        "preparedIdentity": { "$ref": "#/$defs/sha256" },
+        "executionAttemptIdentity": { "$ref": "#/$defs/sha256" },
+        "createdAdmissionIdentity": { "$ref": "#/$defs/sha256" },
+        "containerId": { "$ref": "#/$defs/containerId" },
+        "requirementIdentity": { "$ref": "#/$defs/sha256" },
+        "workloadIdentity": { "$ref": "#/$defs/sha256" },
+        "providerIdentity": { "$ref": "#/$defs/sha256" },
+        "socketEndpointIdentity": { "$ref": "#/$defs/sha256" },
+        "prestartOutputOperationIdentity": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "preparedCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "preparedIdentity", "executionAttemptIdentity", "prestartOutputOperationIdentity", "disposition", "durability", "commitIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r4b-b2a-prepared-commit-v1" },
+        "preparedIdentity": { "$ref": "#/$defs/sha256" },
+        "executionAttemptIdentity": { "$ref": "#/$defs/sha256" },
+        "prestartOutputOperationIdentity": { "$ref": "#/$defs/sha256" },
+        "disposition": { "const": "created" },
+        "durability": { "const": "durable" },
+        "commitIdentity": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "stateFence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "preparedIdentity", "executionAttemptIdentity", "createdAdmissionIdentity", "prestartOutputOperationIdentity", "state", "ownershipClaimIdentity", "ownerInstanceIdentity", "failureIdentity", "fenceIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r4b-b2a-state-fence-v1" },
+        "preparedIdentity": { "$ref": "#/$defs/sha256" },
+        "executionAttemptIdentity": { "$ref": "#/$defs/sha256" },
+        "createdAdmissionIdentity": { "$ref": "#/$defs/sha256" },
+        "prestartOutputOperationIdentity": { "$ref": "#/$defs/sha256" },
+        "state": { "enum": ["PREPARED", "OWNER_CLAIMED", "FAILED_TERMINAL"] },
+        "ownershipClaimIdentity": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "ownerInstanceIdentity": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "failureIdentity": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "fenceIdentity": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "PREPARED" } }, "required": ["state"] },
+          "then": { "properties": { "ownershipClaimIdentity": { "type": "null" }, "ownerInstanceIdentity": { "type": "null" }, "failureIdentity": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "OWNER_CLAIMED" } }, "required": ["state"] },
+          "then": { "properties": { "ownershipClaimIdentity": { "$ref": "#/$defs/sha256" }, "ownerInstanceIdentity": { "$ref": "#/$defs/sha256" }, "failureIdentity": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "FAILED_TERMINAL" } }, "required": ["state"] },
+          "then": { "properties": { "failureIdentity": { "$ref": "#/$defs/sha256" } } }
+        },
+        {
+          "if": { "properties": { "ownershipClaimIdentity": { "$ref": "#/$defs/sha256" } }, "required": ["ownershipClaimIdentity"] },
+          "then": { "properties": { "ownerInstanceIdentity": { "$ref": "#/$defs/sha256" } } },
+          "else": { "properties": { "ownerInstanceIdentity": { "type": "null" } } }
+        }
+      ]
+    },
+    "ownershipClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "preparedIdentity", "prestartOutputOperationIdentity", "executionAttemptIdentity", "createdAdmissionIdentity", "ownerInstanceIdentity", "ownershipClaimIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r4b-b2a-ownership-claim-v1" },
+        "preparedIdentity": { "$ref": "#/$defs/sha256" },
+        "prestartOutputOperationIdentity": { "$ref": "#/$defs/sha256" },
+        "executionAttemptIdentity": { "$ref": "#/$defs/sha256" },
+        "createdAdmissionIdentity": { "$ref": "#/$defs/sha256" },
+        "ownerInstanceIdentity": { "$ref": "#/$defs/sha256" },
+        "ownershipClaimIdentity": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "ownershipClaimCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "ownershipClaimIdentity", "preparedIdentity", "prestartOutputOperationIdentity", "executionAttemptIdentity", "ownerInstanceIdentity", "disposition", "durability", "commitIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r4b-b2a-ownership-claim-commit-v1" },
+        "ownershipClaimIdentity": { "$ref": "#/$defs/sha256" },
+        "preparedIdentity": { "$ref": "#/$defs/sha256" },
+        "prestartOutputOperationIdentity": { "$ref": "#/$defs/sha256" },
+        "executionAttemptIdentity": { "$ref": "#/$defs/sha256" },
+        "ownerInstanceIdentity": { "$ref": "#/$defs/sha256" },
+        "disposition": { "const": "created" },
+        "durability": { "const": "durable" },
+        "commitIdentity": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "preparedIdentity", "prestartOutputOperationIdentity", "executionAttemptIdentity", "createdAdmissionIdentity", "ownerInstanceIdentity", "failurePhase", "failureCode", "failureIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r4b-b2a-failure-v1" },
+        "preparedIdentity": { "$ref": "#/$defs/sha256" },
+        "prestartOutputOperationIdentity": { "$ref": "#/$defs/sha256" },
+        "executionAttemptIdentity": { "$ref": "#/$defs/sha256" },
+        "createdAdmissionIdentity": { "$ref": "#/$defs/sha256" },
+        "ownerInstanceIdentity": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "failurePhase": { "enum": ["prepare", "owner-claim", "attaching", "upgrade-validation", "reader-activation", "post-attach-revalidation", "ready-invalidation"] },
+        "failureCode": { "enum": ["aborted", "socket-namespace-untrusted", "socket-client-unauthorized", "socket-identity-changed", "attach-failed", "attach-timeout", "attach-protocol-invalid", "reader-failed", "reader-activation-timeout", "payload-before-start", "dormant-revalidation-failed", "dormant-revalidation-timeout", "prestart-total-timeout", "owner-lost-graceful"] },
+        "failureIdentity": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "failureCode": { "const": "owner-lost-graceful" } }, "required": ["failureCode"] },
+          "then": { "properties": { "ownerInstanceIdentity": { "$ref": "#/$defs/sha256" } } }
+        }
+      ]
+    },
+    "failureCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "failureIdentity", "preparedIdentity", "prestartOutputOperationIdentity", "executionAttemptIdentity", "disposition", "durability", "commitIdentity"],
+      "properties": {
+        "version": { "const": "kodac-h4-r4b-b2a-failure-commit-v1" },
+        "failureIdentity": { "$ref": "#/$defs/sha256" },
+        "preparedIdentity": { "$ref": "#/$defs/sha256" },
+        "prestartOutputOperationIdentity": { "$ref": "#/$defs/sha256" },
+        "executionAttemptIdentity": { "$ref": "#/$defs/sha256" },
+        "disposition": { "enum": ["created", "existing"] },
+        "durability": { "const": "durable" },
+        "commitIdentity": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}
