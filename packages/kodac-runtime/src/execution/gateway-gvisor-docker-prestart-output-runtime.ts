@@ -250,19 +250,19 @@ function validateClaimSettlement(value: unknown, prepared: SandboxPrestartPrepar
 }
 async function boundedDurableOperation<T>(label: string, operation: (signal: AbortSignal) => Promise<T> | T, parentSignal?: AbortSignal): Promise<T> {
   const timeoutSignal = AbortSignal.timeout(B2A_DURABLE_OPERATION_TIMEOUT_MS)
-  const signal = parentSignal === undefined ? timeoutSignal : AbortSignal.any([parentSignal, timeoutSignal])
-  let onAbort: (() => void) | undefined
+  const operationSignal = parentSignal === undefined ? timeoutSignal : AbortSignal.any([parentSignal, timeoutSignal])
+  let onTimeout: (() => void) | undefined
   const boundary = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(new SandboxPrestartIndeterminateError(parentSignal?.aborted === true ? `${label} aborted with uncertain durable outcome` : `${label} timed out with uncertain durable outcome`))
-    signal.addEventListener("abort", onAbort, { once: true })
-    if (signal.aborted) onAbort()
+    onTimeout = () => reject(new SandboxPrestartIndeterminateError(`${label} timed out with uncertain durable outcome`))
+    timeoutSignal.addEventListener("abort", onTimeout, { once: true })
+    if (timeoutSignal.aborted) onTimeout()
   })
   try {
-    return await Promise.race([Promise.resolve().then(() => operation(signal)), boundary])
+    return await Promise.race([Promise.resolve().then(() => operation(operationSignal)), boundary])
   } catch (error) {
     throw indeterminate(error, label)
   } finally {
-    if (onAbort !== undefined) signal.removeEventListener("abort", onAbort)
+    if (onTimeout !== undefined) timeoutSignal.removeEventListener("abort", onTimeout)
   }
 }
 async function exactFence(runtime: TrustedGvisorDockerPrestartOutputRuntime, prepared: SandboxPrestartPrepared, parentSignal?: AbortSignal): Promise<SandboxPrestartStateFence> {
@@ -349,8 +349,10 @@ export class GvisorDockerPrestartOutputGateway {
       const ownerStartedAt = performance.now(); let localState: "OWNER_CLAIMED_LOCAL" | "ATTACHING" | "READER_ACTIVE" | "PRESTART_READY" | "INVALIDATED" = "OWNER_CLAIMED_LOCAL"
       absoluteTimer = setTimeout(() => { if (localState !== "PRESTART_READY" && localState !== "INVALIDATED") { localState = "INVALIDATED"; controller.abort(); reader?.destroy(new Error("B2A owner-to-ready deadline expired")) } }, KDO_H4_R4B_B2A_RUNTIME_LIMITS.ownerToReadyTimeoutMs)
       if (controller.signal.aborted) return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "owner-claim", "aborted")
-      const preAttachFence = await exactFence(this.#runtime, prepared, controller.signal); if (preAttachFence.state === "FAILED_TERMINAL") throw new SandboxPrestartTerminalError("B2A operation became terminal before attach"); if (preAttachFence.state !== "OWNER_CLAIMED" || preAttachFence.ownershipClaimIdentity !== claim.ownershipClaimIdentity || preAttachFence.ownerInstanceIdentity !== claim.ownerInstanceIdentity) throw new SandboxPrestartIndeterminateError("B2A durable owner changed before attach")
-      try { await revalidatePristineDormant(this.#runtime, permit, created, controller.signal) } catch { return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "attaching", "dormant-revalidation-failed") }
+      let preAttachFence: SandboxPrestartStateFence
+      try { preAttachFence = await exactFence(this.#runtime, prepared, controller.signal) } catch (error) { if (controller.signal.aborted) return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "owner-claim", performance.now() - ownerStartedAt >= KDO_H4_R4B_B2A_RUNTIME_LIMITS.ownerToReadyTimeoutMs ? "prestart-total-timeout" : "aborted"); throw error }
+      if (preAttachFence.state === "FAILED_TERMINAL") throw new SandboxPrestartTerminalError("B2A operation became terminal before attach"); if (preAttachFence.state !== "OWNER_CLAIMED" || preAttachFence.ownershipClaimIdentity !== claim.ownershipClaimIdentity || preAttachFence.ownerInstanceIdentity !== claim.ownerInstanceIdentity) throw new SandboxPrestartIndeterminateError("B2A durable owner changed before attach")
+      try { await revalidatePristineDormant(this.#runtime, permit, created, controller.signal) } catch { return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "attaching", controller.signal.aborted ? (performance.now() - ownerStartedAt >= KDO_H4_R4B_B2A_RUNTIME_LIMITS.ownerToReadyTimeoutMs ? "prestart-total-timeout" : "aborted") : "dormant-revalidation-failed") }
       let gateB: HostTrustSnapshot; try { gateB = snapshotHostTrust(this.#runtime) } catch (error) { return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "attaching", classifyHostFailure(error)) }; if (!sameHostTrust(gateA, gateB)) return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "attaching", "socket-identity-changed")
       if (controller.signal.aborted || localState !== "OWNER_CLAIMED_LOCAL") return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "attaching", performance.now() - ownerStartedAt >= KDO_H4_R4B_B2A_RUNTIME_LIMITS.ownerToReadyTimeoutMs ? "prestart-total-timeout" : "aborted"); if (performance.now() - ownerStartedAt >= KDO_H4_R4B_B2A_RUNTIME_LIMITS.ownerToReadyTimeoutMs) return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "attaching", "prestart-total-timeout")
       localState = "ATTACHING"
@@ -368,7 +370,9 @@ export class GvisorDockerPrestartOutputGateway {
       const phase = linkedPhaseController(controller.signal, KDO_H4_R4B_B2A_RUNTIME_LIMITS.dormantRevalidationTimeoutMs)
       try { await revalidatePristineDormant(this.#runtime, permit, created, phase.signal) } catch { reader.destroy(); return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "post-attach-revalidation", phase.timedOut() ? "dormant-revalidation-timeout" : controller.signal.aborted ? (performance.now() - ownerStartedAt >= KDO_H4_R4B_B2A_RUNTIME_LIMITS.ownerToReadyTimeoutMs ? "prestart-total-timeout" : "aborted") : "dormant-revalidation-failed") } finally { phase.cleanup() }
       let gateD: HostTrustSnapshot; try { gateD = snapshotHostTrust(this.#runtime) } catch (error) { reader.destroy(); return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "ready-invalidation", classifyHostFailure(error)) }; if (!sameHostTrust(gateA, gateD)) { reader.destroy(); return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "ready-invalidation", "socket-identity-changed") }
-      const finalFence = await exactFence(this.#runtime, prepared, controller.signal); if (finalFence.state === "FAILED_TERMINAL") { reader.destroy(); throw new SandboxPrestartTerminalError("B2A operation became terminal before readiness") } if (finalFence.state !== "OWNER_CLAIMED" || finalFence.ownershipClaimIdentity !== claim.ownershipClaimIdentity || finalFence.ownerInstanceIdentity !== claim.ownerInstanceIdentity) { reader.destroy(); throw new SandboxPrestartIndeterminateError("B2A exact durable owner cannot be proven before readiness") }
+      let finalFence: SandboxPrestartStateFence
+      try { finalFence = await exactFence(this.#runtime, prepared, controller.signal) } catch (error) { if (controller.signal.aborted || readerFailure !== undefined || localState === "INVALIDATED") { reader.destroy(); return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "ready-invalidation", performance.now() - ownerStartedAt >= KDO_H4_R4B_B2A_RUNTIME_LIMITS.ownerToReadyTimeoutMs ? "prestart-total-timeout" : readerFailure ?? "aborted") } reader.destroy(); throw error }
+      if (finalFence.state === "FAILED_TERMINAL") { reader.destroy(); throw new SandboxPrestartTerminalError("B2A operation became terminal before readiness") } if (finalFence.state !== "OWNER_CLAIMED" || finalFence.ownershipClaimIdentity !== claim.ownershipClaimIdentity || finalFence.ownerInstanceIdentity !== claim.ownerInstanceIdentity) { reader.destroy(); throw new SandboxPrestartIndeterminateError("B2A exact durable owner cannot be proven before readiness") }
       if (controller.signal.aborted || localState !== "READER_ACTIVE") { reader.destroy(); return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "ready-invalidation", performance.now() - ownerStartedAt >= KDO_H4_R4B_B2A_RUNTIME_LIMITS.ownerToReadyTimeoutMs ? "prestart-total-timeout" : readerFailure ?? "aborted") } if (performance.now() - ownerStartedAt >= KDO_H4_R4B_B2A_RUNTIME_LIMITS.ownerToReadyTimeoutMs) { reader.destroy(); return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "ready-invalidation", "prestart-total-timeout") }
       try { reader.assertReadyForPrestart() } catch { reader.destroy(); return await fail(this.#runtime, prepared, ownerFence, claim, ownerCapability, "ready-invalidation", "reader-failed") }
       localState = "PRESTART_READY"; if (absoluteTimer !== undefined) { clearTimeout(absoluteTimer); absoluteTimer = undefined }; const terminalization: ReadinessTerminalizationState = { phase: null, code: null, promise: null, error: null }; const readiness = createReadiness({ prepared, claim, ownerCapability, reader, controller, runtime: this.#runtime, terminalization }); readinessRef = readiness; return Object.freeze({ status: "PRESTART_READY", prepared, preparedCommit, ownershipClaim: claim, ownershipClaimCommit: claimCommit, readiness })
