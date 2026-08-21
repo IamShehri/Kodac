@@ -190,7 +190,20 @@ trustRootScheme=kodac-founder-process-authority-ed25519-v1
 signatureAlgorithm=Ed25519
 ```
 
-`challengeNonceHex` is exactly 64 lowercase hexadecimal characters, generated out of band for this establishment attempt and never reused.
+`challengeNonceHex` is exactly 64 lowercase hexadecimal characters generated out of band for this establishment attempt.
+
+The establishment nonce lifecycle is fail-closed and single-use:
+
+```text
+ESTABLISHMENT_NONCE_SINGLE_USE=REQUIRED
+ESTABLISHMENT_NONCE_SCOPE=ONE_EXACT_ESTABLISHMENT_PREIMAGE_ONLY
+ESTABLISHMENT_NONCE_CONSUMED_AT=FIRST_ESTABLISHMENT_SIGNATURE_CREATION
+ESTABLISHMENT_NONCE_REUSE_WITH_DIFFERENT_PREIMAGE=FORBIDDEN
+ABANDONED_OR_FAILED_ESTABLISHMENT_NONCE_REUSE=FORBIDDEN
+CANONICALIZED_ESTABLISHMENT_NONCE_REUSE=FORBIDDEN
+```
+
+A consumed nonce may remain attached to the exact same signed establishment preimage while an otherwise unrelated candidate-head repair is reviewed, but it may never authenticate a different establishment preimage. If the trust-root record's signed `establishment` object changes for any reason, a fresh nonce and fresh Ed25519 signature are required. If an establishment attempt is abandoned or fails before canonical merge, its nonce is retired permanently.
 
 `issuedAtUtc` is RFC 3339 UTC with `Z` and second precision.
 
@@ -257,6 +270,20 @@ verifyTrustRootRecord(...)
 verifyProcessAuthorityEnvelope(...)
 ```
 
+For every JSON trust record or authority envelope arriving from repository/file/evidence bytes, the authoritative verifier input is the **original UTF-8 JSON byte sequence**, not an ordinary pre-parsed JavaScript object. Duplicate-member detection must occur while parsing those source bytes and before any object materialization is trusted for schema validation or canonicalization.
+
+Required input theorem:
+
+```text
+RAW_UTF8_JSON_INPUT_REQUIRED=YES
+UTF8_VALIDITY_PROOF=PASS
+DUPLICATE_MEMBER_REJECTION_BEFORE_CANONICALIZATION=REQUIRED
+DUPLICATE_MEMBER_REJECTION_AT_EVERY_OBJECT_DEPTH=REQUIRED
+ORDINARY_PREPARSED_OBJECT_INPUT=FORBIDDEN
+```
+
+An internal parsed object may be passed between verifier helpers only as an opaque value produced by the same duplicate-rejecting parser together with its bound source-byte digest/provenance. Callers may not supply a plain object and assert that duplicates were absent. `JSON.parse` alone is insufficient because duplicate members are already lost before schema validation.
+
 `verifyTrustRootRecord` must prove:
 
 ```text
@@ -273,16 +300,17 @@ TRUST_ROOT_PRIVATE_MATERIAL_ABSENCE_PROOF=PASS
 
 `verifyProcessAuthorityEnvelope` must implement canonical PR #144 without widening it. It must at minimum:
 
-1. accept the canonical trust-root record as immutable input;
-2. reconstruct the exact `kodac-offline-artifact-process-authority-v1` preimage;
-3. require the exact authority field set from canonical PR #144;
-4. validate repository, exact head, scope, trust-root ID/commit, session ID, nonce, timestamps, and command-manifest digest syntax;
-5. verify the detached Ed25519 signature using the canonical public key;
-6. reject unknown fields and alternate semantic field sets;
-7. expose no signing/private-key API; and
-8. perform no network, Docker, registry, subprocess, shell, or filesystem discovery.
+1. accept the canonical trust-root record as immutable raw UTF-8 JSON bytes and verify it through the duplicate-rejecting input path;
+2. accept the authority envelope as original raw UTF-8 JSON bytes and reject duplicate members before semantic extraction;
+3. reconstruct the exact `kodac-offline-artifact-process-authority-v1` preimage;
+4. require the exact authority field set from canonical PR #144;
+5. validate repository, exact head, scope, trust-root ID/commit, session ID, nonce, timestamps, and command-manifest digest syntax;
+6. verify the detached Ed25519 signature using the canonical public key;
+7. reject unknown fields and alternate semantic field sets;
+8. expose no signing/private-key API; and
+9. perform no network, Docker, registry, subprocess, shell, or filesystem discovery.
 
-The verifier consumes explicitly supplied bytes/objects only.
+The verifier consumes explicitly supplied bytes only at its external trust boundaries. Internal helper objects are permitted only when they carry provenance from the duplicate-rejecting parser for those exact source bytes.
 
 ---
 
@@ -290,7 +318,9 @@ The verifier consumes explicitly supplied bytes/objects only.
 
 No new JSON-canonicalization dependency is authorized. The verifier may implement only the exact RFC 8785 subset required by these contracts.
 
-For each signed flat object:
+The outer trust-root record may contain the single nested `establishment` object defined in Section 9. Duplicate-member rejection applies recursively to the complete raw JSON input before any nested object is trusted.
+
+For each **signed flat object** (`establishment` and the canonical PR #144 authority object):
 
 ```text
 JSON_OBJECT_ONLY=YES
@@ -306,7 +336,9 @@ ARRAY_VALUES=FORBIDDEN
 OBJECT_VALUES=FORBIDDEN
 ```
 
-Keys are ordered by Unicode code point per RFC 8785 and strings use JSON escaping rules. Adversarial tests must prove reordered keys produce the same canonical preimage while duplicate, unknown, or wrong-type inputs fail closed.
+RFC 8785 property-name ordering is normative: sort property names by the raw, unescaped **UTF-16 code units** of the names. The current signed field-name allowlists are ASCII-only, so their observed ordering is the same, but implementations must not replace the RFC 8785 rule with a Unicode-code-point comparator. String serialization/escaping must follow RFC 8785's ECMAScript-compatible JSON string serialization rules without Unicode normalization.
+
+Adversarial tests must prove reordered keys produce the same canonical preimage while duplicate, unknown, wrong-type, or malformed raw JSON inputs fail closed.
 
 ---
 
@@ -415,10 +447,17 @@ wrong repository -> FAIL
 wrong authorization commit -> FAIL
 unknown root JSON field -> FAIL
 unknown establishment field -> FAIL
-duplicate JSON key -> FAIL
+duplicate root JSON member in raw UTF-8 bytes -> FAIL
+duplicate establishment JSON member in raw UTF-8 bytes -> FAIL
+duplicate process-authority JSON member in raw UTF-8 bytes -> FAIL
+plain pre-parsed object without duplicate-rejecting-parser provenance -> FAIL
 wrong JSON value type -> FAIL
 alternate key ordering -> SAME_CANONICAL_PREIMAGE
+RFC8785 UTF-16 property ordering test vector -> PASS
 private-key-shaped field present -> FAIL
+same establishment nonce + exact same establishment preimage -> SAME_SIGNED_RECORD_ONLY
+same establishment nonce + different establishment preimage -> FAIL
+retired/abandoned establishment nonce reused -> FAIL
 process-authority signature valid under wrong key -> FAIL
 process-authority signature mutation -> FAIL
 process-authority wrong repository -> FAIL
@@ -445,6 +484,8 @@ test Git blob SHA/SHA-256/bytes
 public SPKI DER hex
 public SPKI DER SHA-256
 trustRootIdSha256
+establishment challenge nonce hex
+establishment nonce single-use/retirement disposition
 establishment preimage SHA-256
 establishment signature hex
 founder bootstrap approval comment author login
@@ -483,12 +524,15 @@ CHANGED_PATHS=EXACTLY_4_ALLOWLISTED_PATHS
 NO_UNEXPECTED_PATHS=PASS
 REQUIRED_FUTURE_PATH_RESOLUTION_PROOF=PASS
 TRUST_ROOT_SCHEMA_PROOF=PASS
+TRUST_ROOT_UNKNOWN_FIELDS_ZERO_PROOF=PASS
 TRUST_ROOT_PUBLIC_KEY_DER_PROOF=PASS
 TRUST_ROOT_ED25519_ALGORITHM_PROOF=PASS
 TRUST_ROOT_ID_PROOF=PASS
+TRUST_ROOT_ESTABLISHMENT_JCS_PROOF=PASS
 TRUST_ROOT_ESTABLISHMENT_PREIMAGE_PROOF=PASS
 TRUST_ROOT_ESTABLISHMENT_SIGNATURE_PROOF=PASS
 TRUST_ROOT_PRIVATE_MATERIAL_ABSENCE_PROOF=PASS
+TRUST_ROOT_ESTABLISHMENT_NONCE_SINGLE_USE_PROOF=PASS
 PROCESS_AUTHORITY_VERIFIER_CONTRACT_TESTS=PASS
 FOUNDER_BOOTSTRAP_APPROVAL_PROOF=PASS
 FOCUSED_LOCAL_TESTS=PASS
@@ -498,6 +542,8 @@ UNRESOLVED_ACTIONABLE_THREADS=0
 FINAL_MAIN_HEAD_DIFF_FENCE=PASS
 EXPECTED_HEAD_SHA_MERGE_FENCE=PASS
 ```
+
+`PROCESS_AUTHORITY_VERIFIER_CONTRACT_TESTS=PASS` additionally requires the raw-UTF-8 duplicate-rejecting input theorem and the RFC 8785 UTF-16 ordering test vector to pass; it may not be used to hide or substitute for any explicit trust-root predicate listed above.
 
 If any predicate is absent or fails:
 
