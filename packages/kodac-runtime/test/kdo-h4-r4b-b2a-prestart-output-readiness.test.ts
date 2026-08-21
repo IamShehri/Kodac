@@ -258,29 +258,39 @@ test("H4-R4B-B2A host-ID mapping gate accepts only the full initial-namespace-eq
 test("H4-R4B-B2A atomic fence orderings permit at most one owner or one terminal winner", () => {
   const fixture = syntheticPrepared()
   const preparedCommit = createSandboxPrestartPreparedCommit(fixture.prepared)
+  const preparedFence = createSandboxPrestartPreparedFence(fixture.prepared)
   const ownerA = createSandboxPrestartOwnerCapability()
   const ownerB = createSandboxPrestartOwnerCapability()
   const claimA = createSandboxPrestartOwnershipClaim(fixture.prepared, ownerA)
   const claimB = createSandboxPrestartOwnershipClaim(fixture.prepared, ownerB)
+  const claimACommit = createSandboxPrestartOwnershipClaimCommit(claimA)
 
   const claimFirst = durableStore()
-  claimFirst.commitPreparationTransaction({ prepared: fixture.prepared, preparedCommit, fence: createSandboxPrestartPreparedFence(fixture.prepared) })
+  claimFirst.commitPreparationTransaction({ prepared: fixture.prepared, preparedCommit, fence: preparedFence })
   const baseA = claimFirst.state()!
-  const claimACommit = createSandboxPrestartOwnershipClaimCommit(claimA)
   const won = claimFirst.commitOwnershipClaimTransaction({ claim: claimA, claimCommit: claimACommit, expectedFence: baseA, nextFence: createSandboxPrestartOwnerClaimedFence(fixture.prepared, claimA) })
   assert.equal(won.kind, "created")
   const lost = claimFirst.commitOwnershipClaimTransaction({ claim: claimB, claimCommit: createSandboxPrestartOwnershipClaimCommit(claimB), expectedFence: baseA, nextFence: createSandboxPrestartOwnerClaimedFence(fixture.prepared, claimB) })
   assert.equal(lost.kind, "owner-claimed-unavailable")
   assert.equal(claimFirst.state()?.ownerInstanceIdentity, claimA.ownerInstanceIdentity)
+  const nullOwnerFailureAfterClaim = createSandboxPrestartFailure(fixture.prepared, "prepare", "aborted", null)
+  assert.throws(() => claimFirst.commitFailureTransaction({ failure: nullOwnerFailureAfterClaim, failureCommit: createSandboxPrestartFailureCommit(nullOwnerFailureAfterClaim, "created"), expectedFence: baseA, nextFence: createSandboxPrestartFailedFence(fixture.prepared, nullOwnerFailureAfterClaim, null) }), /failure CAS conflict/)
+  assert.equal(claimFirst.state()?.state, "OWNER_CLAIMED")
+  assert.equal(claimFirst.state()?.ownerInstanceIdentity, claimA.ownerInstanceIdentity)
 
   const failureFirst = durableStore()
-  failureFirst.commitPreparationTransaction({ prepared: fixture.prepared, preparedCommit, fence: createSandboxPrestartPreparedFence(fixture.prepared) })
+  failureFirst.commitPreparationTransaction({ prepared: fixture.prepared, preparedCommit, fence: preparedFence })
   const baseB = failureFirst.state()!
-  const failure = createSandboxPrestartFailure(fixture.prepared, "prepare", "aborted", null)
-  failureFirst.commitFailureTransaction({ failure, failureCommit: createSandboxPrestartFailureCommit(failure, "created"), expectedFence: baseB, nextFence: createSandboxPrestartFailedFence(fixture.prepared, failure, null) })
+  const failureA = createSandboxPrestartFailure(fixture.prepared, "prepare", "aborted", null)
+  failureFirst.commitFailureTransaction({ failure: failureA, failureCommit: createSandboxPrestartFailureCommit(failureA, "created"), expectedFence: baseB, nextFence: createSandboxPrestartFailedFence(fixture.prepared, failureA, null) })
   const afterTerminal = failureFirst.commitOwnershipClaimTransaction({ claim: claimA, claimCommit: claimACommit, expectedFence: baseB, nextFence: createSandboxPrestartOwnerClaimedFence(fixture.prepared, claimA) })
   assert.equal(afterTerminal.kind, "failed-terminal")
   assert.equal(failureFirst.state()?.state, "FAILED_TERMINAL")
+  const terminalIdentity = failureFirst.state()?.failureIdentity
+  const failureB = createSandboxPrestartFailure(fixture.prepared, "prepare", "socket-namespace-untrusted", null)
+  assert.notEqual(failureB.failureIdentity, failureA.failureIdentity)
+  assert.throws(() => failureFirst.commitFailureTransaction({ failure: failureB, failureCommit: createSandboxPrestartFailureCommit(failureB, "created"), expectedFence: baseB, nextFence: createSandboxPrestartFailedFence(fixture.prepared, failureB, null) }), /conflicting terminal identity/)
+  assert.equal(failureFirst.state()?.failureIdentity, terminalIdentity)
 })
 
 interface FakeDockerOptions {
@@ -586,6 +596,11 @@ async function rootPhysicalProof(): Promise<void> {
     assert.equal(store.state()?.state, "FAILED_TERMINAL")
     assert.equal(store.failure()?.failureCode, "owner-lost-graceful")
     await assert.rejects(gateway.invalidatePrestartOutput(result.readiness), /not trusted/)
+    const writesAfterTerminal = store.writes()
+    const upgradesAfterTerminal = upgradeCount(fake)
+    await assert.rejects(gateway.preparePrestartOutput(permit, lineage.created, lineage.createdCommit), SandboxPrestartTerminalError)
+    assert.equal(store.writes(), writesAfterTerminal)
+    assert.equal(upgradeCount(fake), upgradesAfterTerminal)
     assertZeroStart(fake)
   } finally {
     rootStage("before-close")
