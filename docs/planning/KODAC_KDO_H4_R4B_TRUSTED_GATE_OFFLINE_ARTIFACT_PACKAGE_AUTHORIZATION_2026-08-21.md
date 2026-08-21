@@ -12,8 +12,6 @@ This authorization candidate is deliberately narrower than B1-v2 and narrower th
 
 Its future purpose is only to prove one **offline, deterministic, content-addressed gate artifact package** derived from the already-canonical G0 source bytes.
 
-It must not create, start, attach to, or execute a Docker container. It must not execute runsc or gVisor. It must not dispatch GO over Docker. It must not implement B1-v2, B2A-v2, or B2B.
-
 Maximum future claim from this slice:
 
 ```text
@@ -29,6 +27,8 @@ B2A_V2_READY
 B2B_READY
 H4_COMPLETE
 ```
+
+This authorization does not itself authorize compiler, test, tar, packaging, Docker, runsc, gVisor, or workload process execution.
 
 ---
 
@@ -136,37 +136,149 @@ VALID_PERMIT_BYTES=0x47 0x4f 0x0a
 EOF_AFTER_VALID_PERMIT=REQUIRED
 ```
 
-Any source-byte change means this authorization no longer applies. A source change requires a new G0 proof cycle before any artifact packaging may continue.
+Any source or G0-test byte change invalidates this authorization and requires a new G0 proof cycle before artifact packaging may continue.
 
 ---
 
 ## 5. What this slice may prove
 
-Only after this authorization itself becomes canonical, a future separately executed artifact-proof slice may establish a content-addressed package with purpose-equivalent properties:
+Only after this authorization itself becomes canonical, a future separately executed artifact-proof slice may establish:
 
 ```text
 exact canonical G0 source bytes
 -> exact pinned build recipe
 -> exact observed/pinned toolchain identity
--> one static ELF gate binary
--> deterministic package filesystem metadata
--> deterministic image config bytes
--> deterministic image manifest bytes
--> deterministic layer/package bytes
+-> sanitized and recorded build-context policy
+-> two clean reproducible static builds
+-> one exact static ELF gate binary identity
+-> deterministic minimal payload layer
+-> deterministic OCI image config
+-> deterministic OCI image manifest
+-> deterministic OCI image layout package
 -> exact SHA-256 identities for every emitted object
+-> deterministic implementationIdentity
 ```
-
-The future slice must be able to reconstruct the package from the pinned inputs without caller-selected runtime behavior.
 
 The artifact package must remain inert data until a later separately authorized provisioning step.
 
 ---
 
-## 6. No Docker daemon in the offline artifact slice
+## 6. Canonical package format and byte encoding
 
-The future offline artifact proof authorized by this document must not call the Docker daemon or Docker CLI for any mutating or execution operation.
+The future package must use exactly one package format version:
 
-Forbidden:
+```text
+KODAC_GATE_PACKAGE_FORMAT_VERSION=kodac-gate-oci-layout-v1
+```
+
+The format is a deterministic single-platform OCI image layout with exactly one uncompressed payload layer and no runnable defaults.
+
+Required media types:
+
+```text
+IMAGE_INDEX_MEDIA_TYPE=application/vnd.oci.image.index.v1+json
+IMAGE_MANIFEST_MEDIA_TYPE=application/vnd.oci.image.manifest.v1+json
+IMAGE_CONFIG_MEDIA_TYPE=application/vnd.oci.image.config.v1+json
+IMAGE_LAYER_MEDIA_TYPE=application/vnd.oci.image.layer.v1.tar
+```
+
+Compression is forbidden in v1:
+
+```text
+LAYER_COMPRESSION=none
+PACKAGE_COMPRESSION=none
+```
+
+All JSON objects participating in trusted digests must use:
+
+```text
+UTF-8
+NO_BOM
+RFC_8785_JCS_CANONICALIZATION
+NO_TRAILING_WHITESPACE
+NO_TRAILING_NEWLINE_UNLESS_THE_CANONICAL_JSON_BYTES_REQUIRE_IT=NO
+```
+
+In other words, JSON digest bytes are exactly the RFC 8785 canonical UTF-8 bytes and contain no appended newline.
+
+The OCI image layout must contain only purpose-equivalent entries:
+
+```text
+oci-layout
+index.json
+blobs/sha256/<exact manifest digest>
+blobs/sha256/<exact config digest>
+blobs/sha256/<exact uncompressed layer digest>
+```
+
+`oci-layout` must canonicalize exactly the structural value:
+
+```json
+{"imageLayoutVersion":"1.0.0"}
+```
+
+`index.json` must contain exactly one manifest descriptor and exactly one pinned Linux platform. Descriptor arrays have one element; therefore no alternate descriptor order is permitted.
+
+The image manifest must contain:
+
+```text
+schemaVersion=2
+mediaType=IMAGE_MANIFEST_MEDIA_TYPE
+one exact config descriptor
+one exact layer descriptor
+```
+
+The image config must contain only the structural fields required to bind the target platform and one rootfs layer, with executable defaults absent. `Entrypoint`, `Cmd`, `Env`, `WorkingDir`, `User`, `Volumes`, `StopSignal`, `Healthcheck`, `Shell`, `OnBuild`, and history-derived behavior are forbidden.
+
+The payload layer is an uncompressed POSIX ustar archive with exactly one fixed payload subtree and one regular executable payload. Canonical layer/archive rules:
+
+```text
+USTAR_ONLY=YES
+PAX_HEADERS=FORBIDDEN
+GNU_TAR_EXTENSIONS=FORBIDDEN
+SPARSE_ENTRIES=FORBIDDEN
+XATTRS=FORBIDDEN
+ACL_ENTRIES=FORBIDDEN
+CAPABILITY_XATTRS=FORBIDDEN
+UID=0
+GID=0
+UNAME=""
+GNAME=""
+MTIME=0
+DIRECTORY_MODE=0755
+GATE_FILE_MODE=0755
+LEXICOGRAPHIC_ENTRY_ORDER=REQUIRED
+SYMLINKS=FORBIDDEN
+HARDLINKS=FORBIDDEN
+DEVICE_NODES=FORBIDDEN
+FIFO_SOCKET_ENTRIES=FORBIDDEN
+```
+
+The outer offline package is also an uncompressed POSIX ustar archive over the OCI layout directory, with the same canonical ownership/time/header rules and lexicographic path order.
+
+The future release manifest must record and the `implementationIdentity` must bind:
+
+```text
+KODAC_GATE_PACKAGE_FORMAT_VERSION
+all four media-type literals
+JSON canonicalization identity
+layer archive format/header policy
+outer package archive format/header policy
+compression policy
+descriptor cardinality/order policy
+platform identity
+payload path policy
+```
+
+Any alternate JSON encoding, archive header mode, compression mode, descriptor order, or package layout is a different artifact format and is not authorized by this v1 document.
+
+---
+
+## 7. No Docker daemon in the offline artifact slice
+
+The future offline artifact proof must not call the Docker daemon or Docker CLI for build, import, load, registry, container, mount, or execution behavior.
+
+Forbidden includes:
 
 ```text
 docker build
@@ -182,16 +294,17 @@ docker attach
 docker import
 docker commit
 Docker Engine image-create/pull APIs
+Docker Engine image-load/import APIs
 Docker Engine container-create/start/attach APIs
 ```
 
-The package proof may construct and inspect deterministic image/package bytes offline using ordinary bounded local file/process tooling only if separate live founder/current-session process authority permits that execution.
+Offline construction/inspection may use only bounded local process/file tooling when separate founder/current-session process authority explicitly permits it.
 
 A later local-Docker provisioning/preflight gate must prove that the exact artifact resolves to the expected local Docker identity before B1-v2 is considered.
 
 ---
 
-## 7. Build recipe requirements
+## 8. Build recipe requirements
 
 The release recipe must be no weaker than G0's proven static recipe:
 
@@ -207,11 +320,9 @@ cc
 -o <artifact output>
 ```
 
-The future release manifest must record the exact final command/recipe identity and all environment-independent inputs that affect produced bytes.
+The future release manifest must record the exact final command/recipe identity and every declared byte-affecting flag/input.
 
-No dynamic fallback is allowed.
-
-No shell-selected source path, caller-selected compiler flag, caller-selected target path, or ambient network acquisition is allowed.
+No dynamic fallback, caller-selected compiler flag, caller-selected source, caller-selected target, or ambient dependency discovery is allowed.
 
 If the required exact toolchain is unavailable:
 
@@ -222,34 +333,89 @@ FALLBACK_BUILD=FORBIDDEN
 
 ---
 
-## 8. Toolchain identity is mandatory
+## 9. Sanitized build context is mandatory
 
-A compiler version string alone is not sufficient for the production/package artifact theorem.
+The future proof must not rely on ambient process state. A build-context policy must be recorded in the release manifest and bound into `implementationIdentity`.
 
-The future artifact evidence must bind the concrete toolchain strongly enough that another reviewer can determine which compiler/linker/static runtime inputs produced the binary.
-
-At minimum the release evidence must record a purpose-equivalent identity set covering:
+At minimum the policy must require:
 
 ```text
-compiler implementation and version
-compiler executable identity
-linker implementation and version
-linker executable identity
-static libc/runtime archive identity used by the link
-binutils/readelf identity used for binary inspection
-host/target architecture
-all build flags
+SOURCE_DATE_EPOCH=0
+LC_ALL=C
+LANG=C
+TZ=UTC
+UMASK=0022
+HOME=/nonexistent
+CCACHE_DISABLE=1
+PATH=<exact allowlisted pre-provisioned toolchain path set>
 ```
 
-An immutable pre-provisioned build-environment digest may satisfy multiple entries if it cryptographically binds the relevant toolchain payload and no network acquisition occurs during the proof.
+All compiler/tool flags are explicit recipe inputs.
 
-This authorization does not select or acquire that toolchain.
+The environment must be allowlist-based: undeclared variables are removed. At minimum these ambient override variables must be unset unless an exact value is explicitly authorized and identity-bound:
+
+```text
+GCC_EXEC_PREFIX
+COMPILER_PATH
+LIBRARY_PATH
+CPATH
+C_INCLUDE_PATH
+CPLUS_INCLUDE_PATH
+LD_LIBRARY_PATH
+LD_PRELOAD
+RUSTFLAGS
+CFLAGS
+CPPFLAGS
+LDFLAGS
+```
+
+Each clean build must record:
+
+```text
+working directory
+TMPDIR
+resolved executable paths
+sanitized environment bytes
+umask
+argv for every byte-producing tool
+```
+
+Build A and Build B must use distinct fresh physical directories. Their physical working-directory/TMPDIR pathnames are evidence, not trust identity; reproducibility across those distinct paths is required to prove that host-specific paths do not affect output bytes.
+
+A deterministic `BUILD_CONTEXT_POLICY_IDENTITY` must bind the fixed environment policy, PATH policy, umask, tool argv policy, and the rule that only fresh-directory pathname values may differ between the two builds.
+
+The evidence record must also bind exact observed context digests for Build A and Build B and prove each context conforms to the policy.
 
 ---
 
-## 9. Reproducibility theorem
+## 10. Toolchain identity is mandatory
 
-The future artifact proof must perform at least two clean builds in distinct fresh directories from the same pinned inputs and require exact byte identity.
+A compiler version string alone is not sufficient.
+
+The future release evidence must identify at least:
+
+```text
+compiler implementation and version
+compiler executable SHA-256
+linker implementation and version
+linker executable SHA-256
+static libc/runtime archive identities used by the link
+binutils/readelf implementation/version and executable SHA-256
+host architecture
+target Linux architecture
+all build flags
+BUILD_CONTEXT_POLICY_IDENTITY
+```
+
+An immutable pre-provisioned build-environment digest may satisfy multiple toolchain entries only if it cryptographically binds the exact payloads and the proof independently demonstrates that no acquisition occurs during execution.
+
+This authorization does not select, install, download, update, or acquire that toolchain.
+
+---
+
+## 11. Reproducibility theorem
+
+The future artifact proof must perform at least two clean builds in distinct fresh directories from the same pinned source/toolchain/context policy and require exact byte identity.
 
 Required result:
 
@@ -258,22 +424,21 @@ BUILD_A_BINARY_SHA256 == BUILD_B_BINARY_SHA256
 BUILD_A_BINARY_BYTES == BUILD_B_BINARY_BYTES
 ```
 
-The deterministic package construction must likewise produce identical identities for every package object that is claimed as release evidence.
-
-At minimum:
+Package construction must independently run twice and require:
 
 ```text
 LAYER_DIGEST_A == LAYER_DIGEST_B
 CONFIG_DIGEST_A == CONFIG_DIGEST_B
 MANIFEST_DIGEST_A == MANIFEST_DIGEST_B
+INDEX_DIGEST_A == INDEX_DIGEST_B
 PACKAGE_DIGEST_A == PACKAGE_DIGEST_B
 ```
 
-A reproducibility mismatch is a hard failure. It must not be normalized, ignored, or replaced by a single-build claim.
+A mismatch is a hard failure. It may not be normalized, ignored, or replaced by a single-build claim.
 
 ---
 
-## 10. Static binary theorem must be re-proven on release bytes
+## 12. Static binary theorem must be re-proven on release bytes
 
 The final artifact binary must independently satisfy:
 
@@ -286,44 +451,45 @@ no script/shebang interpreter
 no runtime shared-library dependency
 ```
 
-The binary SHA-256 and byte size recorded in the artifact manifest must refer to these exact inspected bytes.
+The binary SHA-256 and byte size in the release manifest must refer to these exact inspected bytes.
 
-The prior G0 proof binary SHA-256 is evidence about the G0 proof host only. It must not be silently reused as the production/package artifact identity unless the future release build independently produces the exact same bytes and records that fact.
+The prior G0 proof-host binary hash is not automatically the release identity.
 
 ---
 
-## 11. Minimal package filesystem
+## 13. Minimal payload filesystem
 
-The future artifact package must contain only the trusted gate payload required for later image mounting.
+The payload layer must contain only the trusted gate payload required for later image mounting.
 
-The package filesystem must be purpose-equivalent to one fixed payload subtree containing one regular executable file and no executable helpers, shells, interpreters, libraries, configuration, plugins, package manager state, credentials, or mutable application data.
-
-Required properties include:
+Required properties:
 
 ```text
-exactly one gate executable payload
+exactly one executable payload
 regular file only
-no symlink
-no hardlink
-no device node
-no FIFO/socket
-no setuid/setgid bits
-fixed mode
-fixed uid/gid metadata
-fixed timestamp metadata
-fixed path ordering
-no ambient xattrs/capabilities unless separately authorized
+one fixed payload subtree
+no helpers
+no shell
+no interpreter
+no libraries
+no configuration
+no plugins
+no package-manager state
+no credentials
+no mutable application data
+no symlink/hardlink/device/FIFO/socket
+no setuid/setgid
+fixed metadata per §6
 ```
 
-The exact payload subpath and executable relative path must be pinned by the future release manifest before the package can receive a positive verdict.
+The exact payload subpath and executable relative path must be pinned by the release manifest before a positive verdict.
 
 ---
 
-## 12. Image config must grant no behavior
+## 14. Image config grants no behavior
 
-The gate artifact image/package exists only as a mounted read-only filesystem source for future B1-v2. It is not a runnable workload image.
+The artifact image exists only as a future read-only mounted filesystem source. It is not an authorized runnable workload image.
 
-The future image config must not introduce executable policy or runtime defaults such as:
+Executable/runtime defaults are forbidden, including:
 
 ```text
 Entrypoint
@@ -338,47 +504,63 @@ Shell
 OnBuild
 ```
 
-Any unavoidable structural fields must be deterministic and explicitly bound by the artifact manifest.
-
-No gate image config field may become a source of B1-v2 workload semantics.
+Only deterministic structural platform/rootfs fields authorized by §6 may exist.
 
 ---
 
-## 13. Manifest and implementation identity
+## 15. Manifest and implementation identity
 
-The future release manifest must bind all concrete release facts into one deterministic implementation identity.
+The release manifest must be strict, versioned, reject unknown fields, and bind all concrete release facts into one deterministic implementation identity.
 
-At minimum the identity preimage must include purpose-equivalent values for:
+At minimum the identity preimage must include:
 
 ```text
 gateProtocolVersion
 canonical G0 source Git blob SHA
 canonical G0 source SHA-256
+canonical G0 test Git blob SHA
+canonical G0 test SHA-256
 release recipe identity
 toolchain identity
+BUILD_CONTEXT_POLICY_IDENTITY
 target Linux architecture
 binary SHA-256
 binary byte size
 ELF/static proof identity
-package/layer digest
+KODAC_GATE_PACKAGE_FORMAT_VERSION
+media-type literals
+JSON canonicalization identity
+archive/header/compression policies
+payload layer digest
 image config digest
 image manifest digest
+index digest
+outer package digest
 payload subpath
 executable relative path
 fixed future container mount target
 ```
 
-The identity must be domain-separated and deterministically encoded.
+Identity encoding is normative:
 
-No mutable tag, registry name, local filesystem pathname, timestamp, random value, temporary directory, or host-specific absolute build path may participate as trust authority.
+```text
+IMPLEMENTATION_IDENTITY_DOMAIN=kodac-trusted-gate-implementation-v1
+IMPLEMENTATION_IDENTITY_PREIMAGE=
+  UTF8(IMPLEMENTATION_IDENTITY_DOMAIN)
+  || 0x00
+  || RFC8785_JCS_UTF8(<strict identity object>)
+IMPLEMENTATION_IDENTITY=sha256(IMPLEMENTATION_IDENTITY_PREIMAGE)
+```
+
+No mutable tag, registry name, local filesystem pathname, wall-clock timestamp, random value, temporary directory, or host-specific absolute build path may act as trust authority.
 
 ---
 
-## 14. Offline package is not local Docker identity proof
+## 16. Offline package is not local Docker identity proof
 
-A successful offline artifact package may establish exact package/config/manifest digests, but this slice must not claim that Docker has loaded or locally resolved those bytes.
+A successful offline artifact package may establish exact package/config/manifest/index digests, but it must not claim Docker has loaded or resolved those bytes.
 
-Required negative statement after a successful offline release:
+Required negative statement:
 
 ```text
 LOCAL_DOCKER_GATE_IMAGE_PRESENT=NOT_PROVEN
@@ -386,28 +568,60 @@ LOCAL_DOCKER_GATE_IMAGE_ID=NOT_OBSERVED
 DOCKER_IMAGE_MOUNT_PREFLIGHT=NOT_PROVEN
 ```
 
-A later separately authorized provisioning/preflight gate must bind the exact offline artifact identity to the exact locally resolved Docker image ID and descriptor before B1-v2 container create is authorized.
+A later separately authorized provisioning/preflight gate must bind the exact offline artifact identity to an exact locally resolved Docker image ID and descriptor before B1-v2 container create may be considered.
 
 ---
 
-## 15. Network and registry authority remain zero
+## 17. Complete no-egress boundary
 
-The artifact proof must not require registry credentials or network acquisition.
+The future artifact proof must run under a fail-closed no-egress boundary, not merely promise zero registry calls.
+
+Required enforcement before any build/test/package proof process starts:
 
 ```text
+NETWORK_EGRESS=DISABLED_AT_OS_BOUNDARY
+REGISTRY_ACCESS=DISABLED
+DNS_EGRESS=DISABLED
+TELEMETRY_EGRESS=DISABLED
+LICENSE_CHECK_EGRESS=DISABLED
+CREDENTIAL_NETWORK_ACCESS=DISABLED
+```
+
+The proof environment must use an isolated network namespace or purpose-equivalent OS-enforced boundary with no route capable of external egress. Loopback must be disabled or outbound communication must be denied by an equivalent fail-closed policy.
+
+The future evidence must include an audit proving that build/test/package processes performed no network-family socket or outbound connection activity. At minimum the audit must account for:
+
+```text
+socket(AF_INET)
+socket(AF_INET6)
+socket(AF_PACKET)
+connect
+sendto
+sendmsg
+DNS resolver activity
+HTTP/HTTPS activity
+registry client activity
+telemetry/update/license-check activity
+```
+
+Required verdicts:
+
+```text
+NO_EGRESS_BOUNDARY_PROOF=PASS
+NETWORK_SOCKET_AUDIT=PASS
 REGISTRY_NETWORK_CALLS=0
 GATE_IMAGE_PULL_CALLS=0
 GATE_IMAGE_PUSH_CALLS=0
 CREDENTIAL_REQUESTS=0
 ```
 
-If a required toolchain or package dependency is not already present under the approved local proof boundary, the proof must block rather than fetch it.
+If any required toolchain/dependency is absent, the proof blocks rather than fetching it.
 
 ---
 
-## 16. Future implementation allowlist after canonical authorization
+## 18. Future implementation allowlist after canonical authorization
 
-Only after this authorization PR is merged and canonical, the future offline artifact implementation/evidence slice may modify exactly these three new paths:
+Only after this authorization PR is canonical, the future offline artifact implementation/evidence slice may modify exactly these three new paths:
 
 ```text
 1. packages/kodac-runtime/native/gvisor-workload-gate.release.json
@@ -415,7 +629,7 @@ Only after this authorization PR is merged and canonical, the future offline art
 3. docs/planning/KODAC_KDO_H4_R4B_TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_EVIDENCE_2026-08-21.md
 ```
 
-The canonical G0 source and G0 test are read-only inputs and must remain byte-identical:
+The canonical G0 source and G0 test are frozen read-only inputs:
 
 ```text
 packages/kodac-runtime/native/gvisor-workload-gate.c
@@ -429,7 +643,7 @@ In particular, no future offline artifact slice may modify:
 ```text
 Dockerfiles
 GitHub workflows
-package manifests
+package-manager manifests such as package.json/pyproject.toml
 lockfiles
 B1 runtime
 B2A runtime
@@ -441,30 +655,34 @@ R3G-F
 package-root runtime exports
 ```
 
+The allowlisted `packages/kodac-runtime/native/gvisor-workload-gate.release.json` is the trusted **release manifest** defined by this authorization and is explicitly not included in the `package-manager manifests` prohibition above.
+
 ---
 
-## 17. Process execution authority remains separately constrained
+## 19. Process execution authority remains separately constrained
 
 This docs-only authorization does not itself authorize compiler/test/tar/packaging process execution.
 
-After this authorization becomes canonical, repository mutation authority for the three-path future allowlist may exist, but actual artifact proof execution must still obey the live founder/current-session execution constraint.
+After this authorization becomes canonical, repository mutation authority may exist only for the three future allowlisted paths. The canonical G0 source/test remain frozen.
 
-Until such process authority is explicit:
+Until separate live founder/current-session process authority is explicit:
 
 ```text
-OFFLINE_ARTIFACT_SOURCE_MUTATION_AFTER_CANONICAL_AUTH=MAY_BE_ALLOWED
+FUTURE_ALLOWLISTED_PATH_MUTATION_AFTER_CANONICAL_AUTH=MAY_BE_ALLOWED
+CANONICAL_G0_SOURCE_AND_TEST_MUTATION=FORBIDDEN
 OFFLINE_ARTIFACT_BUILD_EXECUTION=NOT_GRANTED_BY_THIS_DOCS_PR
 OFFLINE_ARTIFACT_TEST_EXECUTION=NOT_GRANTED_BY_THIS_DOCS_PR
+OFFLINE_ARTIFACT_PACKAGE_EXECUTION=NOT_GRANTED_BY_THIS_DOCS_PR
 DOCKER_EXECUTION=NO
 GVISOR_EXECUTION=NO
 WORKLOAD_EXECUTION=NO
 ```
 
-If process execution is prohibited, the future artifact PR must remain unmerged rather than fabricate release evidence or weaken the theorem.
+If process execution is prohibited, the future artifact PR must remain unmerged rather than fabricate evidence or weaken the theorem.
 
 ---
 
-## 18. Required future proof matrix
+## 20. Required future proof matrix
 
 A future offline artifact candidate must prove at least:
 
@@ -474,6 +692,13 @@ canonical G0 test blob/hash unchanged
 release manifest strict validation
 unknown release-manifest fields rejected
 invalid/mutable identity fields rejected
+PACKAGE_FORMAT_CANONICALIZATION_PROOF=PASS
+MEDIA_TYPE_AND_DESCRIPTOR_PROOF=PASS
+CANONICAL_JSON_BYTES_PROOF=PASS
+CANONICAL_USTAR_BYTES_PROOF=PASS
+BUILD_CONTEXT_POLICY_PROOF=PASS
+BUILD_A_CONTEXT_CONFORMANCE=PASS
+BUILD_B_CONTEXT_CONFORMANCE=PASS
 toolchain identity complete
 clean build A success
 clean build B success
@@ -485,9 +710,11 @@ package contains only expected payload
 package path metadata deterministic
 no symlink/hardlink/device/FIFO/socket payload
 image config contains no executable defaults
-layer/config/manifest/package digests deterministic
+layer/config/manifest/index/package digests deterministic
 implementationIdentity deterministic
 source-byte mutation rejected
+NO_EGRESS_BOUNDARY_PROOF=PASS
+NETWORK_SOCKET_AUDIT=PASS
 network/registry acquisition absent
 Docker daemon interaction absent
 ```
@@ -496,28 +723,32 @@ All positive evidence must bind one exact repository head.
 
 ---
 
-## 19. Threat model
+## 21. Threat model
 
-The future offline artifact proof must explicitly defend against:
+The future proof must explicitly defend against:
 
-- rebuilding from source bytes different from canonical G0;
+- rebuilding from source/test bytes different from canonical G0;
 - unpinned compiler/linker/static runtime inputs;
-- hidden timestamps or build paths causing nondeterminism;
+- ambient compiler/include/library override variables;
+- hidden timestamps, locale, timezone, umask, PATH, working directory, or TMPDIR dependence;
 - dynamic loader/interpreter reintroduction;
-- extra files or tools entering the gate payload;
+- extra files/tools entering the payload;
 - executable image config fields becoming hidden authority;
+- ambiguous/noncanonical JSON encoding;
+- alternate media types or descriptor order;
+- archive-header, ownership, timestamp, path-order, PAX, GNU-extension, or compression nondeterminism;
 - symlink/hardlink path substitution;
 - caller-selected payload paths or mount targets;
 - mutable tags or registry names becoming trust identity;
-- build-time registry/network access;
-- artifact digest computed over bytes different from the inspected bytes;
+- DNS, telemetry, update, license-check, registry, or other build-time egress;
+- artifact digest computed over bytes different from inspected bytes;
 - one-build-only reproducibility claims;
-- confusing an offline config/manifest digest with an observed local Docker image ID;
-- treating artifact release as B1-v2/B2A-v2/B2B authority.
+- confusing an offline digest with an observed local Docker image ID;
+- treating artifact proof as B1-v2/B2A-v2/B2B authority.
 
 ---
 
-## 20. Maximum future verdict
+## 22. Maximum future verdict
 
 If every future offline artifact gate is proven, the strongest permitted verdict is:
 
@@ -525,7 +756,7 @@ If every future offline artifact gate is proven, the strongest permitted verdict
 TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_PROVEN
 ```
 
-That verdict means only that one exact deterministic static gate package and its content identities are proven from the frozen G0 source under the recorded toolchain/build theorem.
+It means only that one exact deterministic static gate package and its content identities are proven from frozen G0 bytes under the recorded build/toolchain/package theorem.
 
 It must not claim:
 
@@ -545,7 +776,7 @@ H4_COMPLETE
 
 ---
 
-## 21. Merge gate for the future offline artifact implementation PR
+## 23. Merge gate for the future offline artifact implementation PR
 
 A future implementation/evidence PR may merge only if all applicable gates are proven on its exact head:
 
@@ -554,6 +785,8 @@ CHANGED_PATHS=EXACTLY_3_ALLOWLISTED_PATHS_OR_FEWER
 NO_OUT_OF_SCOPE_PATHS=PASS
 CANONICAL_G0_SOURCE_BYTES_UNCHANGED=PASS
 CANONICAL_G0_TEST_BYTES_UNCHANGED=PASS
+PACKAGE_FORMAT_CANONICALIZATION_PROOF=PASS
+BUILD_CONTEXT_POLICY_PROOF=PASS
 TOOLCHAIN_IDENTITY_PROOF=PASS
 TWO_BUILD_REPRODUCIBILITY=PASS
 STATIC_BINARY_PROOF=PASS
@@ -561,6 +794,8 @@ OFFLINE_PACKAGE_STRUCTURE_PROOF=PASS
 IMAGE_CONFIG_NO_AUTHORITY_PROOF=PASS
 CONTENT_DIGEST_PROOF=PASS
 IMPLEMENTATION_IDENTITY_PROOF=PASS
+NO_EGRESS_BOUNDARY_PROOF=PASS
+NETWORK_SOCKET_AUDIT=PASS
 NETWORK_REGISTRY_ZERO_PROOF=PASS
 DOCKER_DAEMON_ZERO_PROOF=PASS
 EXACT_HEAD_CI=PASS
@@ -574,7 +809,7 @@ No gate may be waived because the artifact is "only packaging".
 
 ---
 
-## 22. Merge gate for this docs-only authorization PR
+## 24. Merge gate for this docs-only authorization PR
 
 This authorization candidate itself may merge only if:
 
@@ -594,18 +829,18 @@ FINAL_MAIN_HEAD_DIFF_FENCE=PASS
 EXPECTED_HEAD_SHA_MERGE_FENCE=PASS
 ```
 
-If canonical main moves, the exact base and all predecessor conclusions must be reconciled before merge.
+If canonical main moves, the exact base and predecessor conclusions must be reconciled before merge.
 
 ---
 
-## 23. Explicit non-grants
+## 25. Explicit non-grants
 
 Nothing in this authorization grants:
 
 ```text
 artifact build during this docs PR
 artifact proof process execution during this docs PR
-Docker build/load/pull/push
+Docker build/load/pull/push/import
 Docker create/start/attach/exec
 Docker image mount product usage
 runsc execution
@@ -627,7 +862,7 @@ model/provider execution as product behavior
 
 ---
 
-## 24. Authorization verdict
+## 26. Authorization verdict
 
 If and only if this docs-only authorization becomes canonical:
 
@@ -638,8 +873,9 @@ TRUSTED GATE OFFLINE ARTIFACT PACKAGE PROOF
 FUTURE_RELEASE_PATH_ALLOWLIST=3_PATHS
 CANONICAL_G0_SOURCE_MUTATION=FORBIDDEN
 CANONICAL_G0_TEST_MUTATION=FORBIDDEN
+KODAC_GATE_PACKAGE_FORMAT_VERSION=kodac-gate-oci-layout-v1
 DOCKER_DAEMON_USE_IN_OFFLINE_SLICE=FORBIDDEN
-NETWORK_REGISTRY_USE=FORBIDDEN
+NETWORK_EGRESS_IN_OFFLINE_SLICE=FORBIDDEN
 
 MAX_FUTURE_RESULT=TRUSTED_GATE_OFFLINE_ARTIFACT_PACKAGE_PROVEN
 
@@ -655,4 +891,4 @@ R3G_F_E4=NO
 H4_COMPLETE=NO
 ```
 
-This slice keeps the post-G0 progression fail-closed: first prove immutable offline artifact bytes, then separately prove local Docker provisioning/identity, and only after those prerequisites may a future B1-v2 authorization be considered.
+This slice keeps post-G0 progression fail-closed: first prove exact canonical offline artifact bytes, then separately prove local Docker provisioning/identity, and only after those prerequisites may a future B1-v2 authorization be considered.
