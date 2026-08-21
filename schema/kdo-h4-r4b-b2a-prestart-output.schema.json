@@ -73,6 +73,11 @@
         {
           "if": { "properties": { "state": { "const": "FAILED_TERMINAL" } }, "required": ["state"] },
           "then": { "properties": { "failureIdentity": { "$ref": "#/$defs/sha256" } } }
+        },
+        {
+          "if": { "properties": { "ownershipClaimIdentity": { "$ref": "#/$defs/sha256" } }, "required": ["ownershipClaimIdentity"] },
+          "then": { "properties": { "ownerInstanceIdentity": { "$ref": "#/$defs/sha256" } } },
+          "else": { "properties": { "ownerInstanceIdentity": { "type": "null" } } }
         }
       ]
     },
