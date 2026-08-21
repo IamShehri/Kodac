@@ -274,9 +274,17 @@ async function exactFence(runtime: TrustedGvisorDockerPrestartOutputRuntime, pre
 async function commitTerminalFailure(runtime: TrustedGvisorDockerPrestartOutputRuntime, prepared: SandboxPrestartPrepared, expectedFence: SandboxPrestartStateFence, claim: SandboxPrestartOwnershipClaim | null, owner: SandboxPrestartOwnerCapability | null, phase: SandboxPrestartFailurePhase, code: SandboxPrestartFailureCode): Promise<void> {
   const failure = createSandboxPrestartFailure(prepared, phase, code, owner); const failureCommit = createSandboxPrestartFailureCommit(failure, "created"); const nextFence = createSandboxPrestartFailedFence(prepared, failure, claim)
   const raw = await boundedDurableOperation("B2A failure settlement", (signal) => runtime.commitFailureTransaction({ failure, failureCommit, expectedFence, nextFence }, { signal }))
-  let record: Record<string, unknown>
-  try { record = asPlainRecord(raw, "B2A failure transaction result") } catch (error) { throw indeterminate(error, "B2A failure settlement is indeterminate") }
-  exactKeys(record, ["disposition", "failure", "failureCommit", "fence"], "B2A failure transaction result"); if (record.disposition !== "created" && record.disposition !== "existing") throw new SandboxPrestartIndeterminateError("B2A failure settlement disposition is invalid"); const observedFailure = validateSandboxPrestartFailure(record.failure, prepared); const observedCommit = validateSandboxPrestartFailureCommit(record.failureCommit, failure); const fence = validateSandboxPrestartStateFence(record.fence, prepared); if (observedFailure.failureIdentity !== failure.failureIdentity || observedCommit.failureIdentity !== failure.failureIdentity || fence.state !== "FAILED_TERMINAL" || fence.failureIdentity !== failure.failureIdentity || fence.fenceIdentity !== nextFence.fenceIdentity) throw new SandboxPrestartIndeterminateError("B2A failure settlement does not prove the exact terminal identity")
+  try {
+    const record = asPlainRecord(raw, "B2A failure transaction result")
+    exactKeys(record, ["disposition", "failure", "failureCommit", "fence"], "B2A failure transaction result")
+    if (record.disposition !== "created" && record.disposition !== "existing") throw new SandboxPrestartIndeterminateError("B2A failure settlement disposition is invalid")
+    const observedFailure = validateSandboxPrestartFailure(record.failure, prepared)
+    const observedCommit = validateSandboxPrestartFailureCommit(record.failureCommit, failure)
+    const fence = validateSandboxPrestartStateFence(record.fence, prepared)
+    if (observedFailure.failureIdentity !== failure.failureIdentity || observedCommit.failureIdentity !== failure.failureIdentity || fence.state !== "FAILED_TERMINAL" || fence.failureIdentity !== failure.failureIdentity || fence.fenceIdentity !== nextFence.fenceIdentity) throw new SandboxPrestartIndeterminateError("B2A failure settlement does not prove the exact terminal identity")
+  } catch (error) {
+    throw indeterminate(error, "B2A failure settlement is indeterminate")
+  }
 }
 async function fail(runtime: TrustedGvisorDockerPrestartOutputRuntime, prepared: SandboxPrestartPrepared, expectedFence: SandboxPrestartStateFence, claim: SandboxPrestartOwnershipClaim | null, owner: SandboxPrestartOwnerCapability | null, phase: SandboxPrestartFailurePhase, code: SandboxPrestartFailureCode): Promise<never> { await commitTerminalFailure(runtime, prepared, expectedFence, claim, owner, phase, code); throw new SandboxPrestartTerminalError(`B2A settled terminal failure: ${code}`) }
 function classifyHostFailure(error: unknown): SandboxPrestartFailureCode { return error instanceof SandboxPrestartClientUnauthorizedError ? "socket-client-unauthorized" : "socket-namespace-untrusted" }
