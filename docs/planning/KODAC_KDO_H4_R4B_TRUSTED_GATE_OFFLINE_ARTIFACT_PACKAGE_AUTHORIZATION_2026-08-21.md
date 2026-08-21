@@ -786,7 +786,7 @@ WORKLOAD_EXECUTION=NO
 
 A future artifact-proof run may not derive process authority from a self-authored record, from a hash alone, or from text introduced by the artifact candidate PR. Before any build/test/package process executes, a separate canonical predecessor must already establish an external founder-authentication trust root and its verification mechanism. The trust-root record must predate the candidate artifact branch/head and must not be one of the three candidate paths.
 
-The retained process-authority record must then bind at least:
+The authenticated authority object must bind at least these fields and **must not contain** its own digest or authentication-envelope fields:
 
 ```text
 PROCESS_AUTHORITY_STATUS=EXPLICITLY_GRANTED
@@ -794,7 +794,6 @@ PROCESS_AUTHORITY_SCOPE=OFFLINE_ARTIFACT_BUILD_TEST_PACKAGE_ONLY
 PROCESS_AUTHORITY_PROVENANCE=FOUNDER_CURRENT_SESSION
 PROCESS_AUTHORITY_TRUST_ROOT_ID=<separately canonical external trust-root identity>
 PROCESS_AUTHORITY_TRUST_ROOT_COMMIT=<canonical ancestor commit that predates the candidate head>
-PROCESS_AUTHORITY_AUTHENTICATION_PROOF=<offline-verifiable authenticated proof under that trust root>
 PROCESS_AUTHORITY_SESSION_ID=<fresh opaque session identifier>
 PROCESS_AUTHORITY_SESSION_NONCE=<fresh non-replayed nonce>
 PROCESS_AUTHORITY_ISSUED_AT_UTC=<issued timestamp>
@@ -802,14 +801,30 @@ PROCESS_AUTHORITY_EXPIRES_AT_UTC=<expiry timestamp>
 PROCESS_AUTHORITY_REPOSITORY=TheHalfMoon/Kodac
 PROCESS_AUTHORITY_EXACT_HEAD=<exact artifact candidate head SHA>
 PROCESS_AUTHORITY_COMMAND_MANIFEST_SHA256=<sha256 of exact authorized executable/argv/process-tree manifest>
-PROCESS_AUTHORITY_RECORD_SHA256=<sha256 of the exact retained authenticated authority record>
 ```
+
+The canonical authority-record preimage is normative and non-self-referential:
+
+```text
+PROCESS_AUTHORITY_RECORD_DOMAIN=kodac-offline-artifact-process-authority-v1
+PROCESS_AUTHORITY_RECORD_PREIMAGE=
+  UTF8(PROCESS_AUTHORITY_RECORD_DOMAIN)
+  || 0x00
+  || RFC8785_JCS_UTF8(<strict authority object containing exactly the fields above>)
+PROCESS_AUTHORITY_RECORD_SHA256=sha256(PROCESS_AUTHORITY_RECORD_PREIMAGE)
+```
+
+`PROCESS_AUTHORITY_RECORD_SHA256` and `PROCESS_AUTHORITY_AUTHENTICATION_PROOF` live in a detached retained envelope and are **excluded** from `PROCESS_AUTHORITY_RECORD_PREIMAGE`. The detached envelope must bind the exact preimage hash and identify the canonical trust root/verifier used.
+
+`PROCESS_AUTHORITY_AUTHENTICATION_PROOF` must authenticate exactly `PROCESS_AUTHORITY_RECORD_PREIMAGE` (or its domain-separated `PROCESS_AUTHORITY_RECORD_SHA256` under a verification rule that unambiguously binds that same preimage). Authentication of any alternate serialization, field set, digest, repository, head, scope, or command manifest is invalid.
 
 The command manifest bound by `PROCESS_AUTHORITY_COMMAND_MANIFEST_SHA256` must enumerate the exact executable identities/paths, argv, working-directory policy, environment policy, and every allowed child-process edge for the offline build/test/package proof. Undeclared executables, argv widening, shell indirection, extra children, daemonization, or execution outside that process tree is unauthorized.
 
 The offline artifact test must verify, not merely record, all of the following before process execution:
 
 ```text
+PROCESS_AUTHORITY_RECORD_PREIMAGE_PROOF=PASS
+PROCESS_AUTHORITY_RECORD_DIGEST_PROOF=PASS
 PROCESS_AUTHORITY_TRUST_ROOT_PROOF=PASS
 PROCESS_AUTHORITY_AUTHENTICATION_PROOF=PASS
 PROCESS_AUTHORITY_SESSION_FRESHNESS_PROOF=PASS
@@ -822,7 +837,7 @@ PROCESS_AUTHORITY_PROCESS_TREE_BINDING_PROOF=PASS
 
 The trust root may not be supplied or replaced by the artifact candidate itself. If no separately canonical trust root/verifier exists, or if authenticated founder/current-session evidence cannot be verified offline, then process authority is **not proven** and the artifact proof remains blocked. This authorization does not choose, generate, install, rotate, or distribute a trust root.
 
-The attestation and its session metadata are authorization provenance only; they are excluded from `implementationIdentity` because authorization/session state is not artifact identity.
+The attestation, detached envelope, and session metadata are authorization provenance only; they are excluded from `implementationIdentity` because authorization/session state is not artifact identity.
 
 The required machine-checkable gate is:
 
@@ -830,7 +845,7 @@ The required machine-checkable gate is:
 CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=PASS
 ```
 
-That verdict may be emitted only when every authentication, freshness, exact-head, repository, command-scope, and process-tree proof above passes against the separately canonical trust root. If any required authority field/proof is absent, stale, replayed, self-authored, scoped too broadly, bound to another repository/head, or does not include the exact offline build/test/package process tree used by the proof, then:
+That verdict may be emitted only when the canonical preimage/digest proofs and every authentication, freshness, exact-head, repository, command-scope, and process-tree proof above pass against the separately canonical trust root. If any required authority field/proof is absent, stale, replayed, self-authored, scoped too broadly, bound to another repository/head, authenticates bytes other than the canonical preimage, or does not include the exact offline build/test/package process tree used by the proof, then:
 
 ```text
 CURRENT_SESSION_PROCESS_AUTHORITY_PROOF=FAIL
@@ -857,6 +872,8 @@ REQUIRED_FUTURE_PATH_RESOLUTION_PROOF=PASS
 release manifest strict validation
 unknown release-manifest fields rejected
 invalid/mutable identity fields rejected
+PROCESS_AUTHORITY_RECORD_PREIMAGE_PROOF=PASS
+PROCESS_AUTHORITY_RECORD_DIGEST_PROOF=PASS
 PROCESS_AUTHORITY_TRUST_ROOT_PROOF=PASS
 PROCESS_AUTHORITY_AUTHENTICATION_PROOF=PASS
 PROCESS_AUTHORITY_SESSION_FRESHNESS_PROOF=PASS
@@ -925,6 +942,7 @@ The future proof must explicitly defend against:
 - artifact digest computed over bytes different from inspected bytes;
 - one-build-only reproducibility claims;
 - self-authored, self-signed, stale, replayed, wrong-repository, or wrong-head process-authority records;
+- self-referential or ambiguously serialized process-authority digest/authentication preimages;
 - process authority that does not bind the exact executable/argv/child-process tree;
 - process execution performed without authenticated founder/current-session scope authority;
 - confusing an offline digest with an observed local Docker image ID;
@@ -977,6 +995,8 @@ REQUIRED_FUTURE_PATH_GIT_MODE=100644
 REQUIRED_FUTURE_PATH_RESOLUTION_PROOF=PASS
 CANONICAL_G0_SOURCE_BYTES_UNCHANGED=PASS
 CANONICAL_G0_TEST_BYTES_UNCHANGED=PASS
+PROCESS_AUTHORITY_RECORD_PREIMAGE_PROOF=PASS
+PROCESS_AUTHORITY_RECORD_DIGEST_PROOF=PASS
 PROCESS_AUTHORITY_TRUST_ROOT_PROOF=PASS
 PROCESS_AUTHORITY_AUTHENTICATION_PROOF=PASS
 PROCESS_AUTHORITY_SESSION_FRESHNESS_PROOF=PASS
@@ -1009,7 +1029,7 @@ FINAL_MAIN_HEAD_DIFF_FENCE=PASS
 EXPECTED_HEAD_SHA_MERGE_FENCE=PASS
 ```
 
-The merge gate must fail closed if authenticated process-authority evidence is absent or invalid, if the separately canonical trust root cannot be verified, if any of the three required paths is absent or is not a direct regular Git blob at the exact repository path, if any unexpected path is present, or if a Docker/container-engine endpoint remains usable. No gate may be waived because the artifact is "only packaging".
+The merge gate must fail closed if authenticated process-authority evidence is absent or invalid, if the separately canonical trust root cannot be verified, if the authority digest/authentication envelope does not bind the canonical non-self-referential preimage, if any of the three required paths is absent or is not a direct regular Git blob at the exact repository path, if any unexpected path is present, or if a Docker/container-engine endpoint remains usable. No gate may be waived because the artifact is "only packaging".
 
 ---
 
