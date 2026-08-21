@@ -44,6 +44,7 @@ export async function openExactGvisorDockerAttach(input: {
   const containerId = exactContainerId(input.containerId)
   return await new Promise<InternalGvisorAttachChannel>((resolve, reject) => {
     let settled = false
+    let request: ReturnType<typeof httpRequest>
     const cleanup = () => input.signal.removeEventListener("abort", onAbort)
     const finishReject = (error: unknown) => {
       if (settled) return
@@ -52,11 +53,18 @@ export async function openExactGvisorDockerAttach(input: {
       reject(error instanceof Error ? error : new Error(String(error)))
     }
     const onAbort = () => {
+      if (settled) return
       const error = new Error("B2A Docker attach aborted")
       finishReject(error)
       request.destroy(error)
     }
-    const request = httpRequest({
+    const onTimeout = () => {
+      if (settled) return
+      const error = new Error("B2A Docker attach handshake timed out")
+      finishReject(error)
+      request.destroy(error)
+    }
+    request = httpRequest({
       method: "POST",
       socketPath: input.socketPath,
       path: `/v${KDO_H4_R3G_E_DOCKER_API_VERSION}/containers/${containerId}/${KDO_H4_R4B_B2A_ATTACH_PATH_SUFFIX}`,
@@ -92,6 +100,8 @@ export async function openExactGvisorDockerAttach(input: {
         }
         settled = true
         cleanup()
+        socket.setTimeout(0)
+        socket.removeListener("timeout", onTimeout)
         resolve(Object.freeze({ socket, head: Buffer.from(head) }))
       } catch (error) {
         socketValue.destroy()
@@ -99,11 +109,7 @@ export async function openExactGvisorDockerAttach(input: {
       }
     })
     request.on("error", finishReject)
-    request.setTimeout(input.timeoutMs, () => {
-      const error = new Error("B2A Docker attach handshake timed out")
-      finishReject(error)
-      request.destroy(error)
-    })
+    request.setTimeout(input.timeoutMs, onTimeout)
     input.signal.addEventListener("abort", onAbort, { once: true })
     if (input.signal.aborted) {
       onAbort()
