@@ -177,8 +177,8 @@ NEW_SOURCE_PATHS=2
 
 ```Dockerfile
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:<EXACT_PINNED_DIGEST>
-COPY --chown=nonroot:nonroot phase-b-gate /phase-b-gate
-USER nonroot:nonroot
+COPY --chown=65532:65532 phase-b-gate /phase-b-gate
+USER 65532:65532
 ENTRYPOINT ["/phase-b-gate"]
 ```
 
@@ -192,7 +192,7 @@ baseImageReference
 baseImageDigest
 applicationBinaryPath
 containerBinaryPath
-containerUser
+containerUser=65532:65532
 entrypoint
 expectedPort=8080
 sourceBuildRecipeSha256
@@ -277,23 +277,32 @@ A mutable `latest` tag is not evidence.
 
 ## 9. Runtime service-account boundary
 
-The Cloud Run service must use a dedicated service account:
+The Cloud Run service must use a dedicated application runtime service account:
 
 ```text
 kodac-phase-b-gate-runtime@<PROJECT_ID>.iam.gserviceaccount.com
 ```
 
-The runtime service account may receive only the minimum Google Cloud permissions needed for:
+The application runtime service account may receive only:
 
 ```text
-Cloud SQL Client
-Secret Manager Secret Accessor on the exact AG1-B secrets
-Artifact Registry read as required by Cloud Run platform/service-agent mechanics
+roles/cloudsql.client
+roles/secretmanager.secretAccessor on the exact three AG1-B secrets only
 ```
 
-It must not receive Project Owner, Editor, IAM Admin, Secret Manager Admin, Cloud SQL Admin, Artifact Registry Admin, Cloud Run Admin, Service Account Token Creator, or billing roles.
+```text
+RUNTIME_SERVICE_ACCOUNT_ARTIFACT_REGISTRY_ACCESS=NO
+```
 
-Deployment/admin principals remain outside runtime identity and must not be stored in the service.
+Artifact Registry image-pull authority belongs to the Google-managed Cloud Run service agent/platform identity as required by Cloud Run, not to the application runtime service account. If cross-project image access would require broader identity wiring, execution must stop; AG1-B requires registry and runtime in the same dedicated project.
+
+The application runtime service account must not receive Project Owner, Editor, IAM Admin, Secret Manager Admin, Cloud SQL Admin, Artifact Registry Reader/Admin, Cloud Run Admin, Service Account Token Creator, or billing roles.
+
+Deployment/admin principals and Google-managed service agents remain distinct from the application runtime identity and must not be stored in the service.
+
+Primary reference:
+
+- https://cloud.google.com/run/docs/deploying
 
 ---
 
