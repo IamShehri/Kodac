@@ -72,7 +72,7 @@ LOCAL_REAL_STORE_RECEIPT_COLLISION_FATAL=PASS
 LOCAL_REAL_STORE_COLLISION_ROLLBACK=PASS
 ```
 
-These observations prove local feasibility only. They do not satisfy provider-specific, production, secret-binding, public-ingress, uptime, plan-eligibility, or H4 closure requirements.
+These observations prove local feasibility only. They do not satisfy provider-specific, production, secret-binding, public-ingress, uptime, plan-eligibility, end-to-end webhook, or H4 closure requirements.
 
 ---
 
@@ -411,7 +411,90 @@ GitHub's 10-second webhook response requirement remains load-bearing.
 
 ---
 
-## 12. Pilot activation order
+## 12. Blocking control ZC0-W01 — pre-activation webhook proof
+
+`/healthz` proves liveness only. It is not sufficient to authorize webhook activation.
+
+Before any real GitHub webhook delivery is enabled, a later execution authorization must require a two-part synthetic proof through the selected founder-hosted topology. The real GitHub webhook remains inactive for both parts.
+
+### 12.1 Exact production-binary ingress and response-budget probe
+
+Run the exact qualified production binary/container behind the selected Funnel endpoint. Send a locally generated synthetic HMAC-signed `POST /github/webhook` over the public Funnel URL using the configured webhook-secret boundary, but choose an intentionally unsupported synthetic event/action pair so the canonical handler authenticates the raw request and returns before invoking `Processor`.
+
+This is load-bearing because the canonical handler performs HMAC authentication before the `webhook.Supported(...)` early return. It therefore proves public ingress, TLS termination, raw-byte HMAC validation, `X-Hub-Signature-256` handling, routing, and end-to-end response time without GitHub API calls or receipt-store mutation.
+
+Required evidence:
+
+```text
+ZC0_W01A_EXACT_BINARY=PASS
+ZC0_W01A_FUNNEL_HTTPS=PASS
+ZC0_W01A_GITHUB_WEBHOOK_ACTIVE=NO
+ZC0_W01A_REAL_GITHUB_DELIVERY=NO
+ZC0_W01A_EVENT_SUPPORT=INTENTIONALLY_UNSUPPORTED
+ZC0_W01A_PROCESSOR_CALLED=NO
+ZC0_W01A_GITHUB_API_CALLS=0
+ZC0_W01A_DATABASE_MUTATION=NO
+ZC0_W01A_VALID_SIGNATURE_HTTP_STATUS=202
+ZC0_W01A_VALID_SIGNATURE_ELAPSED_MS=<10000
+ZC0_W01A_VALID_SIGNATURE_RESPONSE_BUDGET=PASS
+ZC0_W01A_MUTATED_RAW_BODY_WITH_STALE_SIGNATURE_HTTP_STATUS=401
+ZC0_W01A_INVALID_SIGNATURE_PROCESSOR_CALLED=NO
+ZC0_W01A_INVALID_SIGNATURE_DATABASE_MUTATION=NO
+```
+
+The probe must sign the exact raw body bytes that are transmitted. A one-byte body mutation with the original signature must fail authentication. No secret value, full request signature, private key, DSN, or raw sensitive payload may be written to evidence; record only non-secret digests, status codes, elapsed time, and booleans.
+
+### 12.2 Exact-handler + real-Postgres synthetic transaction/replay probe
+
+A second probe must use an ephemeral, reviewable harness compiled from the exact pinned App source revision. The harness must instantiate the canonical `server.Server.Handler()` and the real `store.Postgres` adapter, but replace the production `Runtime` processor with a synthetic-only processor whose sole action is to map the authenticated delivery to `store.Process` against a dedicated synthetic probe database/schema in the same PostgreSQL 16 container.
+
+The harness MUST NOT call GitHub APIs, create Check Runs, use real GitHub deliveries, or write synthetic rows into the authoritative receipt database. Its purpose is to connect the exact HMAC handler path to the exact transaction adapter without requiring GitHub App credentials.
+
+The dedicated probe database/schema must be created from the exact canonical migration and equivalent restricted runtime-role theorem, contain synthetic data only, and be destroyed after evidence is captured.
+
+Send requests through the Funnel endpoint to the harness and prove:
+
+```text
+ZC0_W01B_PINNED_APP_SOURCE_REVISION=PASS
+ZC0_W01B_EXACT_SERVER_HANDLER=PASS
+ZC0_W01B_REAL_STORE_POSTGRES=PASS
+ZC0_W01B_SYNTHETIC_PROBE_DATABASE_ONLY=YES
+ZC0_W01B_REAL_GITHUB_DELIVERY=NO
+ZC0_W01B_GITHUB_API_CALLS=0
+
+ZC0_W01B_FIRST_SIGNED_DELIVERY_HTTP_STATUS=202
+ZC0_W01B_FIRST_SIGNED_DELIVERY_ELAPSED_MS=<10000
+ZC0_W01B_FIRST_STORE_OUTCOME=PROCESSED
+ZC0_W01B_FIRST_ROW_COUNT=1
+
+ZC0_W01B_REPLAY_SAME_GUID_SAME_BYTES_HTTP_STATUS=202
+ZC0_W01B_REPLAY_ELAPSED_MS=<10000
+ZC0_W01B_REPLAY_STORE_OUTCOME=DUPLICATE
+ZC0_W01B_REPLAY_ROW_COUNT=1
+
+ZC0_W01B_SAME_GUID_DIFFERENT_BYTES_STORE_OUTCOME=ERR_FATAL_SECURITY
+ZC0_W01B_COLLISION_ORIGINAL_ROW_PRESERVED=YES
+ZC0_W01B_COLLISION_ROW_COUNT=1
+ZC0_W01B_COLLISION_TRANSACTION_ROLLED_BACK=YES
+
+ZC0_W01B_INVALID_SIGNATURE_HTTP_STATUS=401
+ZC0_W01B_INVALID_SIGNATURE_DATABASE_MUTATION=NO
+ZC0_W01B_PROBE_DATABASE_DESTROYED=YES
+```
+
+A collision is expected to fail closed rather than return 2XX. The 10-second 2XX response budget applies to valid first-delivery and valid duplicate/replay requests. Invalid signatures must return 401; conflicting-byte collisions must fail closed while preserving the original row.
+
+The probe harness is evidence tooling only and must not be shipped in the production image. If creating that harness requires persistent App-source files rather than an ephemeral exact-source test harness, those files require their own reviewed source amendment first.
+
+```text
+ZC0_W01_PRE_ACTIVATION_WEBHOOK_PROOF=BLOCKING
+HEALTHZ_AS_WEBHOOK_PROOF=FORBIDDEN
+REAL_WEBHOOK_ACTIVATION_BEFORE_W01=FORBIDDEN
+```
+
+---
+
+## 13. Pilot activation order
 
 This decision does not execute the following steps. If all blockers become canonical and a later execution authorization explicitly permits the pilot, the order is:
 
@@ -426,20 +509,23 @@ Z6  install/configure Tailscale under the proven zero-cost plan without billing 
 Z7  establish stable Funnel hostname with synthetic local service only
 Z8  prove /healthz exact response through Funnel
 Z9  prove host restart / Funnel --bg recovery with synthetic service
-Z10 founder reviews non-secret evidence
+Z10 founder reviews non-secret pre-App evidence
 Z11 separately authorize real GitHub App registration/secret loading
 Z12 register private GitHub App with webhook still inactive
 Z13 load real secrets through the approved secret-file boundary
 Z14 install App only on TheHalfMoon/Kodac with webhook inactive
-Z15 prove exact identities and configuration without event delivery
-Z16 separately authorize webhook activation
+Z15 prove exact identities and configuration with real webhook still inactive
+Z16 execute ZC0-W01A exact-binary signed ingress/response-budget proof with no real GitHub delivery
+Z17 execute ZC0-W01B exact-handler/store synthetic transaction/replay proof with no GitHub API
+Z18 founder reviews the complete non-secret pre-activation evidence
+Z19 separately authorize real webhook activation
 ```
 
 No step may be skipped or reordered merely because the underlying software is free.
 
 ---
 
-## 13. Explicit non-grants
+## 14. Explicit non-grants
 
 Merging this decision alone does NOT authorize:
 
@@ -462,8 +548,10 @@ GITHUB_APP_CREATION=NO
 GITHUB_APP_REGISTRATION=NO
 GITHUB_APP_INSTALLATION=NO
 APP_WEBHOOK_ACTIVATION=NO
+REAL_GITHUB_WEBHOOK_DELIVERY=NO
 REAL_SECRET_ACCESS=NO
 REAL_SECRET_LOADING=NO
+ZC0_W01_EXECUTION=NO
 AG1B_PRODUCTION_EXECUTION=NO
 AG1C_START=NO
 AG2_START=NO
@@ -473,7 +561,7 @@ H4_COMPLETE=NO
 
 ---
 
-## 14. Review and merge gate
+## 15. Review and merge gate
 
 This decision may become canonical only if the exact candidate head proves:
 
@@ -484,6 +572,27 @@ APP_SOURCE_REPOSITORY_MUTATED=NO
 REQUIRED_REPOSITORY_GATES=PASS
 INDEPENDENT_EXACT_HEAD_REVIEW=PASS
 UNRESOLVED_MATERIAL_FINDINGS=0
+```
+
+For a docs-only candidate, the repository runtime workflow may legitimately skip its runtime-execution job only when all of the following are true on the same exact head:
+
+```text
+RUNTIME_CHANGE_CLASSIFIER=NON_RUNTIME
+RUNTIME_EXECUTION_JOB=SKIPPED_BY_CLASSIFIER
+K2_RUNTIME_GATE=PASS
+GOVERNANCE_GATE=PASS
+DOCS_ONLY_RUNTIME_SKIP_COUNTS_AS_GATE_PASS=YES
+```
+
+A skipped runtime job by itself is not a pass. The classifier result and the terminal `k2-runtime-gate=PASS` are required.
+
+Exact-head workflow run IDs and check results are immutable **PR qualification evidence**, not self-referential content of this candidate document. They must be posted in the PR immediately before merge and reverified after every head change. Embedding a workflow run ID generated for commit `H` into a new commit would create `H+1` and invalidate the claim that the embedded run proves the new exact head.
+
+```text
+EXACT_HEAD_WORKFLOW_RUN_IDS_LOCATION=PR_QUALIFICATION_EVIDENCE
+OLD_HEAD_WORKFLOW_RUNS_QUALIFY_NEW_HEAD=NO
+HEAD_CHANGE_REQUIRES_FRESH_WORKFLOWS=YES
+HEAD_CHANGE_REQUIRES_FRESH_INDEPENDENT_REVIEW=YES
 ```
 
 PR-state semantics are:
@@ -502,15 +611,16 @@ If merged, only the following becomes true:
 AG1B_ZERO_COST_CONTROL_PLANE_DECISION=CANONICAL
 ZERO_COST_FOUNDER_HOSTED_PILOT_ARCHITECTURE=CONDITIONALLY_SELECTED_BUT_BLOCKED
 TAILSCALE_ZERO_COST_PLAN_ELIGIBILITY=UNPROVEN_BLOCKING
+ZC0_W01_PRE_ACTIVATION_WEBHOOK_PROOF=DEFINED_BUT_NOT_EXECUTED
 ```
 
 The existing Google Cloud AG1-B authorization remains historical/canonical but is not executable while the founder's hard zero-provider-spend constraint remains in force.
 
 ---
 
-## 15. Primary-source research record
+## 16. Primary-source and source-code research record
 
-Research verified on 2026-08-22 against current primary documentation and live GitHub repository metadata:
+Research verified on 2026-08-22 against current primary documentation, live GitHub repository metadata, and the pinned canonical App source:
 
 - GitHub webhook timeout and failed-delivery behavior: https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/troubleshooting-webhooks and https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries
 - Tailscale Funnel behavior/limits: https://tailscale.com/docs/features/tailscale-funnel and https://tailscale.com/docs/reference/tailscale-cli/funnel
@@ -523,3 +633,4 @@ Research verified on 2026-08-22 against current primary documentation and live G
 - ngrok current Free-plan limits: https://ngrok.com/pricing
 - KODAC repository owner type: live GitHub metadata for `TheHalfMoon/Kodac` reports owner `TheHalfMoon` with `type=User`.
 - KODAC repository license proof: canonical `LICENSE` blob `261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64` (Apache-2.0).
+- Canonical App handler/runtime: `TheHalfMoon/kodac-phase-b-gate` commit `79a5e3a5c3b0f4882e8c9c864e314c0fab3c9a40`, `internal/server/server.go` blob `352b342f859d22ad982f3e38736469198af41e1d`; HMAC authentication occurs before unsupported-event early return, while supported-event `Runtime.Process` reaches GitHub API bootstrap before completing receipt/gate processing.
