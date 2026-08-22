@@ -11,9 +11,9 @@ Authorize one later, separately executed AG1-B slice for the candidate-independe
 1. add an exact OCI packaging recipe to the already-qualified App source repository;
 2. register the GitHub App with the frozen least-privilege permission/event contract;
 3. provision one dedicated external deployment control plane and append-only receipt store;
-4. build and publish one immutable container image from the exact reviewed source;
-5. deploy the App on an immutable Cloud Run revision;
-6. install the App on exactly `TheHalfMoon/Kodac`;
+4. build and publish one immutable `linux/amd64` container image from the exact reviewed source;
+5. deploy the App on an immutable Cloud Run revision bound to the exact image, runtime identity, Cloud SQL instance, and numeric Secret Manager versions;
+6. install the App on exactly `TheHalfMoon/Kodac` while the webhook remains inactive;
 7. record non-secret registration/deployment/store identities and privilege probes for a later proof slice.
 
 This predecessor performs none of those mutations.
@@ -78,13 +78,11 @@ B1_V2/B2A_V2/B2B=NOT_AUTHORIZED
 H4_COMPLETE=NO
 ```
 
-No billable Google Cloud resource may be created merely because this authorization merges. A later AG1-B execution must receive an explicit founder go-ahead after its exact preflight reports the intended project, region, resource classes, and expected cost-bearing resources.
+No billable Google Cloud resource may be created merely because this authorization merges. A later AG1-B execution must first report the intended Google Cloud project, region, machine/storage classes, availability choice, and other cost-bearing resources, then obtain a separate explicit founder go-ahead before any cost-bearing creation.
 
 ---
 
 ## 3. Selected external control plane
-
-AG1-B selects this provider/runtime family:
 
 ```text
 CLOUD_PROVIDER=Google Cloud
@@ -98,21 +96,20 @@ DEPLOYMENT_REGION=me-central2
 
 The App runtime, registry, and database must be colocated in `me-central2` unless a later explicit authorization changes region.
 
-Current primary-source discovery confirms that Cloud Run accepts image references by exact digest and creates immutable revisions; Cloud SQL supports PostgreSQL 16; `me-central2` is currently available for both Cloud Run and Cloud SQL.
-
 Primary references:
 
 - https://cloud.google.com/run/docs/deploying
+- https://cloud.google.com/run/docs/container-contract
 - https://cloud.google.com/artifact-registry/docs/integrate-cloud-run
 - https://cloud.google.com/sql/docs/db-versions
 - https://cloud.google.com/sql/docs/postgres/region-availability-overview
-- https://cloud.google.com/run/docs/setup
+- https://cloud.google.com/run/docs/configuring/services/secrets
 
 ---
 
 ## 4. Dedicated-project boundary
 
-AG1-B requires one dedicated Google Cloud project for this gate.
+AG1-B requires one dedicated Google Cloud project:
 
 ```text
 GCP_PROJECT_PURPOSE=kodac-phase-b-gate-v1-only
@@ -127,13 +124,11 @@ AGENT_CONTEXT_CLOUD_CREDENTIAL_ACCESS=NO
 
 If no dedicated project with billing capability is available, execution must stop before any billable resource creation.
 
-The project ID and project number are non-secret identities and must be captured in proof. OAuth tokens, refresh tokens, service-account private keys, billing identifiers, and user credentials must never enter Kodac, PR comments, logs, ChatGPT, or agent context.
+The project ID and project number are non-secret identities. OAuth tokens, refresh tokens, service-account private keys, billing identifiers, and user credentials must never enter Kodac, PR comments, logs, ChatGPT, or agent/model context.
 
 ---
 
-## 5. Exact logical GCP resource names
-
-Future AG1-B execution must use these logical names unless provider collision forces a stop and replacement authorization:
+## 5. Exact logical resource identities
 
 ```text
 ARTIFACT_REGISTRY_REPOSITORY=kodac-phase-b-gate
@@ -147,22 +142,22 @@ DB_RUNTIME_USER=kodac_phase_b_gate_runtime
 DB_MIGRATION_ROLE=kodac_phase_b_gate_migrator
 ```
 
-No GCP resource may be named or configured so that an establishment PR in `TheHalfMoon/Kodac` can mutate it through repository-controlled CI.
+No GCP resource may be configured so that an establishment PR in `TheHalfMoon/Kodac` can mutate it through repository-controlled CI.
 
 ---
 
 ## 6. AG1-B source-repository packaging amendment
 
-The AG1-A application logic is frozen. AG1-B may add exactly two packaging-source paths to `TheHalfMoon/kodac-phase-b-gate`:
+The AG1-A application logic is frozen. AG1-B may add exactly:
 
 ```text
 build/Containerfile
 build/container-recipe.json
 ```
 
-No existing Go source, test, migration, module, lockfile, receipt vector, or AG1-A build recipe may change in this packaging amendment.
+No existing Go source, test, migration, module, lockfile, receipt vector, or `build/recipe.json` may change.
 
-The amendment must prove:
+Required proof:
 
 ```text
 APP_LOGIC_BLOB_SET_CHANGED=NO
@@ -176,13 +171,13 @@ NEW_SOURCE_PATHS=2
 `build/Containerfile` must be purpose-equivalent to:
 
 ```Dockerfile
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:<EXACT_PINNED_DIGEST>
+FROM --platform=linux/amd64 gcr.io/distroless/static-debian12:nonroot@sha256:<EXACT_PINNED_DIGEST>
 COPY --chown=65532:65532 phase-b-gate /phase-b-gate
 USER 65532:65532
 ENTRYPOINT ["/phase-b-gate"]
 ```
 
-The distroless base digest must be resolved and frozen before the packaging commit is created. Mutable tags without an exact digest are forbidden.
+The distroless digest must be independently resolved and frozen before the packaging commit. Mutable base-image tags without the exact digest are forbidden.
 
 `build/container-recipe.json` must bind at least:
 
@@ -190,6 +185,7 @@ The distroless base digest must be resolved and frozen before the packaging comm
 schemaVersion
 baseImageReference
 baseImageDigest
+imagePlatform=linux/amd64
 applicationBinaryPath
 containerBinaryPath
 containerUser=65532:65532
@@ -198,21 +194,34 @@ expectedPort=8080
 sourceBuildRecipeSha256
 ```
 
-No shell, package manager, curl, apt, apk, runtime compiler, generated-code download, or package installation step is allowed in the container recipe.
+No shell, package manager, curl, apt, apk, runtime compiler, generated-source download, or package-installation step is allowed.
 
-The packaging amendment must receive its own exact-head review before any artifact is built.
+The packaging amendment must receive its own exact-head independent review before any artifact is built.
 
 ---
 
-## 7. Exact build boundary
+## 7. Exact build and OCI platform boundary
 
-The production binary must be built from the exact packaging-reviewed source revision using the already canonical source build contract:
+The production binary must be built from the exact packaging-reviewed source revision:
 
 ```text
 GOOS=linux
 GOARCH=amd64
 CGO_ENABLED=0
 go build -trimpath -buildvcs=true -mod=readonly -o phase-b-gate ./cmd/phase-b-gate
+```
+
+The OCI build must explicitly target:
+
+```text
+APP_BUILD_IMAGE_PLATFORM=linux/amd64
+```
+
+Purpose-equivalent image builders must set `--platform=linux/amd64` or an exact equivalent. Before push/deploy, inspect the resulting image manifest/config and require:
+
+```text
+APP_BUILD_IMAGE_PLATFORM_VERIFIED=linux/amd64
+APP_BUILD_IMAGE_PLATFORM_MATCH=PASS
 ```
 
 Required execution evidence:
@@ -228,17 +237,17 @@ APP_CONTAINER_RECIPE_SHA256
 BASE_IMAGE_EXACT_REFERENCE
 BASE_IMAGE_DIGEST
 APP_BUILD_IMAGE_DIGEST
+APP_BUILD_IMAGE_PLATFORM=linux/amd64
+APP_BUILD_IMAGE_PLATFORM_MATCH=PASS
 ```
 
-The OCI image must be pushed to the dedicated Artifact Registry repository and later deployed to Cloud Run by exact digest, not by mutable tag.
-
-No GitHub Actions workflow is authorized to build or deploy this image in AG1-B.
+Push to the dedicated Artifact Registry repository and deploy by exact digest, never by mutable tag. No GitHub Actions workflow is authorized to build or deploy the image in AG1-B.
 
 ---
 
 ## 8. Cloud Run deployment contract
 
-The deployment must be a Cloud Run service in `me-central2` and must bind the exact image digest.
+The authoritative deployment is one Cloud Run service in `me-central2`.
 
 Required properties:
 
@@ -252,11 +261,14 @@ CLOUD_RUN_MIN_INSTANCES=0
 CLOUD_RUN_MAX_INSTANCES=3
 CLOUD_RUN_CONCURRENCY=20
 CLOUD_RUN_REQUEST_TIMEOUT_SECONDS=30
+CLOUD_RUN_CLOUD_SQL_INSTANCE_CONNECTION_NAME=<PROJECT_ID>:me-central2:kodac-phase-b-gate-pg16
 ```
 
-Public invocation does not grant Phase-B authority. Only a request that passes the source-defined exact raw-body HMAC, repository identity, installation identity, event/action, receipt, and gate predicates can influence a check result.
+Public invocation does not grant Phase-B authority. The application still requires its source-defined HMAC, repository, installation, event/action, receipt, and gate predicates.
 
-Every deployment must record:
+The deployed revision must attach exactly the Cloud SQL instance identified by `CLOUD_RUN_CLOUD_SQL_INSTANCE_CONNECTION_NAME`, creating the `/cloudsql/<INSTANCE_CONNECTION_NAME>` socket used by `DATABASE_DSN`.
+
+Required deployment proof:
 
 ```text
 APP_DEPLOYMENT_PLATFORM=Google Cloud Run
@@ -268,49 +280,71 @@ APP_DEPLOYMENT_REVISION_ID
 APP_DEPLOYMENT_URL
 APP_DEPLOYMENT_IMAGE_DIGEST
 APP_DEPLOYMENT_ARTIFACT_DIGEST_MATCH=PASS
+APP_DEPLOYMENT_IMAGE_PLATFORM=linux/amd64
+APP_DEPLOYMENT_IMAGE_PLATFORM_MATCH=PASS
+CLOUD_RUN_CLOUD_SQL_INSTANCE_CONNECTION_NAME
+CLOUD_RUN_CLOUD_SQL_ATTACHMENT_MATCH=PASS
 APP_DEPLOYMENT_ENVIRONMENT_CONTRACT_SHA256
 ```
 
-A mutable `latest` tag is not evidence.
+A mutable `latest` image tag is not evidence.
+
+Primary references:
+
+- https://cloud.google.com/run/docs/container-contract
+- https://cloud.google.com/sql/docs/postgres/connect-instance-cloud-run
 
 ---
 
-## 9. Runtime service-account boundary
+## 9. Runtime service-account and IAM boundary
 
-The Cloud Run service must use a dedicated application runtime service account:
+The Cloud Run revision must execute as exactly:
 
 ```text
-kodac-phase-b-gate-runtime@<PROJECT_ID>.iam.gserviceaccount.com
+CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT=kodac-phase-b-gate-runtime@<PROJECT_ID>.iam.gserviceaccount.com
 ```
 
-The application runtime service account may receive only:
+The application runtime identity may receive only:
 
 ```text
 roles/cloudsql.client
-roles/secretmanager.secretAccessor on the exact three AG1-B secrets only
+roles/secretmanager.secretAccessor on exactly:
+  APP_PRIVATE_KEY_PEM secret resource
+  WEBHOOK_SECRET secret resource
+  DATABASE_DSN secret resource
 ```
 
 ```text
 RUNTIME_SERVICE_ACCOUNT_ARTIFACT_REGISTRY_ACCESS=NO
 ```
 
-Artifact Registry image-pull authority belongs to the Google-managed Cloud Run service agent/platform identity as required by Cloud Run, not to the application runtime service account. If cross-project image access would require broader identity wiring, execution must stop; AG1-B requires registry and runtime in the same dedicated project.
+Artifact Registry image-pull authority belongs to the Google-managed Cloud Run service agent/platform identity, not to the application runtime service account. Cross-project registry/runtime wiring is forbidden in v1.
 
-The application runtime service account must not receive Project Owner, Editor, IAM Admin, Secret Manager Admin, Cloud SQL Admin, Artifact Registry Reader/Admin, Cloud Run Admin, Service Account Token Creator, or billing roles.
+Forbidden runtime roles include Project Owner, Editor, IAM Admin, Secret Manager Admin, Cloud SQL Admin, Artifact Registry Reader/Admin, Cloud Run Admin, Service Account Token Creator, and billing roles.
 
-Deployment/admin principals and Google-managed service agents remain distinct from the application runtime identity and must not be stored in the service.
+Required proof:
 
-Primary reference:
+```text
+CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT
+CLOUD_RUN_REVISION_SERVICE_ACCOUNT
+CLOUD_RUN_REVISION_SERVICE_ACCOUNT_MATCH=PASS
+RUNTIME_PROJECT_IAM_POLICY_CANONICAL_SHA256
+RUNTIME_PROJECT_IAM_REQUIRED_ROLE_SET=["roles/cloudsql.client"]
+RUNTIME_PROJECT_IAM_EXCESS_ROLE_COUNT=0
+SECRET_APP_PRIVATE_KEY_IAM_POLICY_SHA256
+SECRET_WEBHOOK_SECRET_IAM_POLICY_SHA256
+SECRET_DATABASE_DSN_IAM_POLICY_SHA256
+RUNTIME_SECRET_ACCESS_BINDINGS_MATCH=PASS
+RUNTIME_SERVICE_ACCOUNT_ARTIFACT_REGISTRY_ACCESS=NO
+```
 
-- https://cloud.google.com/run/docs/deploying
+Proof must inspect both project-level IAM and each exact secret-resource IAM policy. Deployment/admin principals and Google-managed service agents remain distinct from the runtime identity.
 
 ---
 
-## 10. Secret Manager boundary
+## 10. Secret Manager boundary and injection mode
 
-Real deployment secret values become permissible only inside the later AG1-B execution and only in the external secret control plane.
-
-Required secrets:
+Real deployment secrets become permissible only during the later AG1-B execution and only in Secret Manager:
 
 ```text
 APP_PRIVATE_KEY_PEM
@@ -318,32 +352,37 @@ WEBHOOK_SECRET
 DATABASE_DSN
 ```
 
-Secret values are forbidden from:
+Secret values are forbidden from both repositories, Kodac Actions secrets, PR comments/reviews/issues, transcripts copied into chat, model/agent context, proof documents, and application logs.
+
+The source contract reads these values as environment variables. Therefore the authoritative Cloud Run revision must use:
 
 ```text
-TheHalfMoon/Kodac
-TheHalfMoon/kodac-phase-b-gate
-GitHub Actions secrets for Kodac
-GitHub PR comments/reviews/issues
-terminal transcript copied into chat
-agent/model context
-proof documents
-application logs
-Cloud Run ordinary environment-variable listings outside Secret Manager references
+SECRET_INJECTION_MODE=environment_variables
+SECRET_VOLUME_MOUNTS=FORBIDDEN_FOR_V1
+SECRET_VERSION_ALIAS_LATEST=FORBIDDEN
 ```
 
-Cloud Run must reference exact Secret Manager secret **versions**, not `latest`, for the authoritative deployment revision.
+Every environment-variable reference must bind a specific numeric Secret Manager version:
+
+```text
+APP_PRIVATE_KEY_PEM=<secret-resource>:<numeric-version>
+WEBHOOK_SECRET=<secret-resource>:<numeric-version>
+DATABASE_DSN=<secret-resource>:<numeric-version>
+```
 
 Proof may record only:
 
 ```text
+SECRET_ENV_NAME
 SECRET_RESOURCE_NAME
 SECRET_VERSION_NUMBER
 SECRET_VERSION_RESOURCE_ID
 SECRET_VERSION_CREATED_AT
+SECRET_INJECTION_MODE=environment_variables
+SECRET_NUMERIC_VERSION_PINNED=PASS
 ```
 
-Never record secret payloads or secret hashes derived from low-entropy credentials.
+Never record secret payloads or hashes derived from secret values.
 
 Primary reference:
 
@@ -353,17 +392,21 @@ Primary reference:
 
 ## 11. GitHub App registration contract
 
-The future GitHub App must be registered under the personal account owner `TheHalfMoon`.
+Register under the personal account owner `TheHalfMoon`:
 
 ```text
 APP_LOGICAL_NAME=Kodac Phase-B Gate
 APP_LOGICAL_ID=kodac-phase-b-gate-v1
 APP_OWNER_LOGIN=TheHalfMoon
+APP_VISIBILITY=private
 APP_INSTALLABILITY=Only on this account
 USER_AUTHORIZATION_FLOW=DISABLED
 OAUTH_USER_TOKENS=FORBIDDEN
 DEVICE_FLOW=DISABLED
+APP_WEBHOOK_ACTIVE=NO
 ```
+
+`APP_VISIBILITY=private` here means GitHub's owner-only installation mode; public/`Any account` installability is forbidden.
 
 Exact repository permissions:
 
@@ -375,8 +418,6 @@ Exact repository permissions:
 APP_PERMISSION_SET_SHA256=867da13ffc15393d88f01623995bbf15fd66dd797be4c25861ad571f619c9576
 ```
 
-No other repository, organization, or account permission is authorized.
-
 Exact subscribed event set:
 
 ```json
@@ -387,54 +428,89 @@ Exact subscribed event set:
 APP_WEBHOOK_EVENT_SET_SHA256=7a2be823e0b4ab120e21fe47308e86c969b06f6937d95bdccde04c3aa5a5fc00
 ```
 
-No additional event is authorized.
+No additional repository, organization, account permission, or subscribed event is authorized.
 
-Registration may be performed with the webhook inactive. GitHub documents that an App can be registered for `Only on this account`, and its webhook can be deactivated/activated independently.
+Required registration-setting proof:
+
+```text
+APP_OWNER_LOGIN=TheHalfMoon
+APP_VISIBILITY=private
+APP_INSTALLABILITY=Only on this account
+USER_AUTHORIZATION_FLOW=DISABLED
+OAUTH_USER_TOKENS=FORBIDDEN
+DEVICE_FLOW=DISABLED
+APP_PERMISSION_SET_SHA256
+APP_WEBHOOK_EVENT_SET_SHA256
+APP_REGISTRATION_SETTINGS_MATCH=PASS
+```
+
+Any mismatch fails closed.
 
 Primary references:
 
 - https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app
-- https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app
+- https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-using-url-parameters
 - https://docs.github.com/en/apps/maintaining-github-apps/modifying-a-github-app-registration
 
 ---
 
 ## 12. GitHub App private-key handling
 
-A real GitHub App private key may be generated only during AG1-B execution after the assigned `APP_GITHUB_ID` exists.
+A real private key may be generated only after `APP_GITHUB_ID` exists.
 
-The private key must:
+It must:
 
-1. be generated/downloaded through GitHub's App settings by the founder;
-2. be transferred directly into the dedicated Secret Manager secret;
-3. never be pasted into chat, a PR, a repository file, or a command transcript returned for review;
-4. be removed from any temporary local plaintext file after successful Secret Manager import and verification;
+1. be generated/downloaded through GitHub App settings by the founder;
+2. be transferred directly into the dedicated Secret Manager resource/version;
+3. never be pasted into chat, a PR, repository content, or a transcript returned for review;
+4. be removed from any temporary local plaintext file after Secret Manager import is verified;
 5. never be included in proof, even hashed.
 
-If secure direct import cannot be completed without exposing the key to agent/model context, execution must stop.
+If secure transfer cannot be completed without exposing the key to agent/model context, execution stops.
 
 ---
 
-## 13. Webhook-secret lifecycle
+## 13. Webhook secret, URL, and binding boundary
 
-The webhook secret must be independently generated with cryptographic randomness during AG1-B execution and stored directly in Secret Manager.
-
-It must not be derived from a repository value, App ID, installation ID, password, founder identity, timestamp, UUID alone, or any deterministic/public value.
+Generate the webhook secret with cryptographic randomness during AG1-B and store it directly in Secret Manager. It must not be deterministically derived from public identities.
 
 The value may be entered into GitHub App settings by the founder but must never be sent to this assistant.
 
-The authoritative deployment and GitHub App settings must reference/use the same secret value, but proof records only secret resource/version identities, never the value or digest.
+AG1-B must keep the App webhook inactive at registration, throughout installation, and at completion. There is **no temporary activation exception** in AG1-B.
+
+After the authoritative Cloud Run revision exists, configure the GitHub App webhook URL while it remains inactive:
+
+```text
+APP_WEBHOOK_URL=<APP_DEPLOYMENT_URL>/github/webhook
+APP_WEBHOOK_URL_MATCH=PASS
+```
+
+The Cloud Run revision and GitHub App must be configured from the same founder-controlled webhook-secret value, but GitHub does not expose that value for independent readback. Therefore AG1-B must not claim a live equality proof:
+
+```text
+WEBHOOK_SECRET_BINDING_CONFIGURATION=FOUNDER_SINGLE_VALUE_DUAL_CONFIGURATION
+WEBHOOK_SECRET_BINDING_PROBE=DEFERRED_BLOCKING_ACTIVATION
+```
+
+Any later authorization that would activate the webhook must first define and pass a controlled, non-secret proof of the GitHub-to-deployment HMAC binding. Until then:
+
+```text
+LATER_WEBHOOK_ACTIVATION_ALLOWED=NO
+```
+
+This preserves a fail-closed boundary without exposing or hashing the secret.
 
 ---
 
 ## 14. Installation boundary
 
-The App may be installed only on the account that owns it and only with repository selection:
+Install only:
 
 ```text
 INSTALLATION_ACCOUNT=TheHalfMoon
 REPOSITORY_SELECTION=Only select repositories
 SELECTED_REPOSITORIES=[TheHalfMoon/Kodac]
+APP_WEBHOOK_ACTIVE_DURING_INSTALLATION=NO
 ```
 
 Required proof:
@@ -448,25 +524,26 @@ APP_INSTALLATION_ACCOUNT=TheHalfMoon
 APP_INSTALLATION_REPOSITORY_ID=1297407563
 APP_INSTALLATION_REPOSITORY=TheHalfMoon/Kodac
 APP_INSTALLATION_REPOSITORY_COUNT=1
+APP_WEBHOOK_ACTIVE_DURING_INSTALLATION=NO
 ```
 
-Installation on `TheHalfMoon/kodac-phase-b-gate` is not required and must not be added merely because it is the App source repository.
+Do not install the App on `TheHalfMoon/kodac-phase-b-gate`.
 
 ---
 
-## 15. Webhook activation boundary
+## 15. Webhook activation terminal theorem
 
-AG1-B must finish with:
+Throughout AG1-B:
 
 ```text
 APP_WEBHOOK_ACTIVE=NO
 ```
 
-Reason: `REVIEWER_ALLOWLIST=[]` and `QUALIFIED_REVIEWER_PROVIDERS=0` remain canonical until AG1-C. The App must not begin unsolicited production event processing merely because it has been registered/deployed/installed.
+Reason: `REVIEWER_ALLOWLIST=[]` and `QUALIFIED_REVIEWER_PROVIDERS=0` remain canonical until AG1-C, while AG2 and end-to-end qualification are also incomplete.
 
-AG1-B may preconfigure the exact event subscriptions, deployment URL, and secret binding if GitHub permits those values while inactive. If a brief activation is technically required to save webhook configuration, no repository event may be intentionally triggered and the webhook must be returned to inactive state before AG1-B proof is accepted.
+AG1-B may configure the exact event subscriptions, secret, and final deployment URL while the webhook is inactive. It must not activate the webhook for testing, saving settings, installation, or proof.
 
-Persistent activation requires a later explicit authorization after the required downstream prerequisites are satisfied.
+Persistent or temporary activation requires a later explicit authorization and remains blocked by the deferred secret-binding proof.
 
 ---
 
@@ -474,18 +551,20 @@ Persistent activation requires a later explicit authorization after the required
 
 AG1-B selects Cloud SQL PostgreSQL major version 16 in `me-central2`.
 
-The exact managed minor version must be captured from the created instance:
-
 ```text
 STORE_ENGINE_FAMILY=PostgreSQL
 STORE_ENGINE_MAJOR=16
 STORE_ENGINE_EXACT_VERSION=<provider-assigned exact version>
-STORE_CLUSTER_OR_SERVICE_IDENTITY=<Cloud SQL instance connection name>
+STORE_CLUSTER_OR_SERVICE_IDENTITY=<PROJECT_ID>:me-central2:kodac-phase-b-gate-pg16
 STORE_DATABASE_NAME=kodac_phase_b_gate
 STORE_SCHEMA_NAME=phase_b
 ```
 
-The App runtime connects through the Cloud Run / Cloud SQL Auth Proxy integration using the instance Unix socket. Google documents that this path is automatically encrypted; the local PostgreSQL socket may use `sslmode=disable` because TLS is supplied by the Auth Proxy transport layer.
+The App runtime connects through the Cloud Run / Cloud SQL integration using the Unix socket:
+
+```text
+/cloudsql/<STORE_CLUSTER_OR_SERVICE_IDENTITY>
+```
 
 Required proof:
 
@@ -494,6 +573,8 @@ STORE_TRANSPORT=Cloud SQL Auth Proxy via Cloud Run Unix socket
 STORE_TRANSPORT_ENCRYPTION=PASS
 STORE_TLS_REQUIRED=YES
 STORE_PUBLIC_AUTHORIZED_NETWORKS=0
+CLOUD_RUN_CLOUD_SQL_INSTANCE_CONNECTION_NAME=<STORE_CLUSTER_OR_SERVICE_IDENTITY>
+CLOUD_RUN_CLOUD_SQL_ATTACHMENT_MATCH=PASS
 ```
 
 Primary references:
@@ -503,13 +584,17 @@ Primary references:
 
 ---
 
-## 17. Database ownership and privilege separation
+## 17. Database ownership, ACL, and role-membership theorem
 
-The migration/administrative identity and runtime identity must be different.
+Migration/administrative identity and runtime identity must be different:
 
-The migration identity may create the database/schema/tables/triggers required by the canonical migration.
+```text
+STORE_MIGRATION_ROLE_IDENTITY=kodac_phase_b_gate_migrator
+STORE_RUNTIME_ROLE_IDENTITY=kodac_phase_b_gate_runtime_role
+STORE_MIGRATION_RUNTIME_IDENTITY_DIFFERENT=PASS
+```
 
-The running App identity must satisfy exactly:
+The running App identity must have exactly:
 
 ```text
 SELECT=YES
@@ -533,24 +618,45 @@ TRIGGERS
 FUNCTIONS
 ```
 
-When creating a Cloud SQL built-in PostgreSQL runtime user, the execution must avoid the default `cloudsqlsuperuser` grant by assigning the pre-created custom runtime role during user creation or by proving equivalent least-privilege state before runtime use.
+When creating a built-in Cloud SQL PostgreSQL runtime user, assign the pre-created custom runtime role during user creation so the user is not granted `cloudsqlsuperuser`.
+
+Required privilege proof must cover direct ACLs **and inherited/transitive role membership**, not behavior probes alone:
+
+```text
+STORE_MIGRATION_ROLE_IDENTITY
+STORE_RUNTIME_ROLE_IDENTITY
+STORE_MIGRATION_RUNTIME_IDENTITY_DIFFERENT=PASS
+STORE_RUNTIME_DIRECT_ACL_SHA256
+STORE_RUNTIME_ROLE_MEMBERSHIP_CLOSURE_SHA256
+STORE_RUNTIME_UNAUTHORIZED_MEMBERSHIP_COUNT=0
+STORE_RUNTIME_ROLE_GRANTS_SHA256
+STORE_RUNTIME_ROLE_OWNS_DATABASE=NO
+STORE_RUNTIME_ROLE_OWNS_SCHEMA=NO
+STORE_RUNTIME_ROLE_OWNS_TABLES=NO
+STORE_RUNTIME_ROLE_OWNS_TRIGGERS=NO
+STORE_RUNTIME_ROLE_OWNS_FUNCTIONS=NO
+```
 
 Primary references:
 
 - https://cloud.google.com/sql/docs/postgres/create-manage-users
 - https://cloud.google.com/sql/docs/postgres/users
+- https://www.postgresql.org/docs/16/ddl-priv.html
+- https://www.postgresql.org/docs/16/role-membership.html
 
 ---
 
 ## 18. Exact migration boundary
 
-Only the migration source already canonical in the App repository may be executed:
+Only:
 
 ```text
 migrations/0001_phase_b.sql
 ```
 
-The execution must bind:
+may be executed from the App source repository.
+
+Bind:
 
 ```text
 STORE_MIGRATION_SOURCE_REPOSITORY=TheHalfMoon/kodac-phase-b-gate
@@ -559,15 +665,13 @@ STORE_MIGRATION_FILE_SHA256=<exact hash>
 STORE_SCHEMA_SHA256=<normalized schema proof hash>
 ```
 
-No ad-hoc DDL outside this migration and the minimum role/database bootstrap statements is authorized.
-
-Role/database bootstrap statements must be captured as sanitized, non-secret evidence and must not weaken the runtime privilege theorem.
+No ad-hoc DDL outside the canonical migration and the minimum database/role bootstrap statements is authorized. Sanitized bootstrap evidence must preserve the runtime privilege theorem.
 
 ---
 
 ## 19. Required live store probes
 
-Before AG1-B can be proven complete, run non-production synthetic probes against the provisioned store and record non-secret outcomes:
+Before AG1-B can be proven complete:
 
 ```text
 STORE_UPDATE_PROBE=DENIED
@@ -581,32 +685,33 @@ STORE_CONFLICTING_BYTES_PROBE=PASS
 STORE_RUNTIME_ROLE_OWNS_DATABASE=NO
 STORE_RUNTIME_ROLE_OWNS_SCHEMA=NO
 STORE_RUNTIME_ROLE_OWNS_TABLES=NO
+STORE_RUNTIME_ROLE_OWNS_TRIGGERS=NO
+STORE_RUNTIME_ROLE_OWNS_FUNCTIONS=NO
+STORE_RUNTIME_UNAUTHORIZED_MEMBERSHIP_COUNT=0
 ```
 
-Probe rows must use obviously synthetic delivery/receipt identities and may be retained only if needed to prove append-only behavior; otherwise use a dedicated transaction and rollback where compatible with the theorem.
-
-No Kodac trust-root candidate artifact or real founder receipt is used in AG1-B store probes.
+Use obviously synthetic delivery/receipt identities. No Kodac trust-root candidate artifact or real founder/review receipt is used.
 
 ---
 
 ## 20. Deployment health proof
 
-AG1-B may call only the service liveness endpoint for public deployment proof:
+AG1-B may call only:
 
 ```text
 GET /healthz
 ```
 
-Expected result:
+Expected:
 
 ```text
 HTTP 200
 BODY=ok
 ```
 
-`/healthz` proves only process liveness. It does not prove GitHub authentication, reviewer qualification, gate success, trust-root establishment, or protected-main readiness.
+`/healthz` proves liveness only. It does not prove database readiness, GitHub authentication, reviewer qualification, gate success, trust-root establishment, or protected-main readiness.
 
-AG1-B must not intentionally trigger a real `kodac/phase-b-gate` Check Run on a Kodac PR. End-to-end webhook/check qualification remains a later controlled proof stage.
+AG1-B must not intentionally trigger a real `kodac/phase-b-gate` Check Run or a GitHub webhook delivery.
 
 ---
 
@@ -619,9 +724,20 @@ APP_GITHUB_ID
 APP_CLIENT_ID_IF_PRESENT
 APP_SLUG
 APP_OWNER_LOGIN
+APP_VISIBILITY
+APP_INSTALLABILITY
+USER_AUTHORIZATION_FLOW
+OAUTH_USER_TOKENS
+DEVICE_FLOW
 APP_PERMISSION_SET_SHA256
 APP_WEBHOOK_EVENT_SET_SHA256
 APP_WEBHOOK_ACTIVE
+APP_WEBHOOK_ACTIVE_DURING_INSTALLATION
+APP_WEBHOOK_URL
+APP_WEBHOOK_URL_MATCH
+WEBHOOK_SECRET_BINDING_CONFIGURATION
+WEBHOOK_SECRET_BINDING_PROBE
+LATER_WEBHOOK_ACTIVATION_ALLOWED
 APP_INSTALLATION_ID
 APP_INSTALLATION_ACCOUNT
 APP_INSTALLATION_REPOSITORY_ID
@@ -632,6 +748,8 @@ APP_PACKAGING_EXACT_COMMIT
 APP_PACKAGING_EXACT_TREE
 APP_BUILD_BINARY_SHA256
 APP_BUILD_IMAGE_DIGEST
+APP_BUILD_IMAGE_PLATFORM
+APP_BUILD_IMAGE_PLATFORM_MATCH
 BASE_IMAGE_EXACT_REFERENCE
 BASE_IMAGE_DIGEST
 
@@ -645,6 +763,20 @@ APP_DEPLOYMENT_URL
 APP_DEPLOYMENT_IMAGE_DIGEST
 APP_DEPLOYMENT_ARTIFACT_DIGEST_MATCH
 APP_DEPLOYMENT_ENVIRONMENT_CONTRACT_SHA256
+CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT
+CLOUD_RUN_REVISION_SERVICE_ACCOUNT
+CLOUD_RUN_REVISION_SERVICE_ACCOUNT_MATCH
+CLOUD_RUN_CLOUD_SQL_INSTANCE_CONNECTION_NAME
+CLOUD_RUN_CLOUD_SQL_ATTACHMENT_MATCH
+RUNTIME_PROJECT_IAM_POLICY_CANONICAL_SHA256
+RUNTIME_PROJECT_IAM_EXCESS_ROLE_COUNT
+RUNTIME_SECRET_ACCESS_BINDINGS_MATCH
+
+SECRET_INJECTION_MODE
+SECRET_RESOURCE_NAME
+SECRET_VERSION_NUMBER
+SECRET_VERSION_RESOURCE_ID
+SECRET_NUMERIC_VERSION_PINNED
 
 STORE_ENGINE_EXACT_VERSION
 STORE_CLUSTER_OR_SERVICE_IDENTITY
@@ -653,11 +785,18 @@ STORE_SCHEMA_NAME
 STORE_MIGRATION_SOURCE_PROVENANCE
 STORE_MIGRATION_EXACT_REVISION
 STORE_SCHEMA_SHA256
+STORE_MIGRATION_ROLE_IDENTITY
 STORE_RUNTIME_ROLE_IDENTITY
+STORE_MIGRATION_RUNTIME_IDENTITY_DIFFERENT
+STORE_RUNTIME_DIRECT_ACL_SHA256
+STORE_RUNTIME_ROLE_MEMBERSHIP_CLOSURE_SHA256
+STORE_RUNTIME_UNAUTHORIZED_MEMBERSHIP_COUNT
 STORE_RUNTIME_ROLE_GRANTS_SHA256
 STORE_RUNTIME_ROLE_OWNS_DATABASE
 STORE_RUNTIME_ROLE_OWNS_SCHEMA
 STORE_RUNTIME_ROLE_OWNS_TABLES
+STORE_RUNTIME_ROLE_OWNS_TRIGGERS
+STORE_RUNTIME_ROLE_OWNS_FUNCTIONS
 STORE_TLS_REQUIRED
 STORE_UPDATE_PROBE
 STORE_DELETE_PROBE
@@ -669,7 +808,7 @@ STORE_DUPLICATE_DELIVERY_PROBE
 STORE_CONFLICTING_BYTES_PROBE
 ```
 
-No proof field may contain a credential, private key, webhook secret, database password, App JWT, installation token, Google OAuth token, or service-account private key.
+No proof field may contain a credential, private key, webhook secret, database password, App JWT, installation token, Google OAuth token, service-account private key, or hash of a secret payload.
 
 ---
 
@@ -679,26 +818,27 @@ The later execution must be fail-closed and ordered:
 
 ```text
 B0  verify live Kodac + App-source canonical truth
-B1  verify founder-controlled Google Cloud access and report cost-bearing resources
+B1  verify founder-controlled Google Cloud access and report project/region/machine/storage/availability/cost-bearing resources
 B2  obtain explicit founder approval for billable resource creation
-B3  resolve/freeze distroless base image digest
-B4  create + independently review the 2-path packaging amendment
+B3  resolve/freeze distroless base digest and linux/amd64 platform contract
+B4  create + independently review the exact 2-path packaging amendment
 B5  create/verify dedicated GCP project and required APIs
-B6  provision Artifact Registry, service account, Secret Manager resources, Cloud SQL
-B7  create database/schema/admin/runtime roles and run canonical migration
-B8  register GitHub App with exact permissions/events, webhook inactive
-B9  generate/import App private key + webhook secret directly into Secret Manager
+B6  provision Artifact Registry, runtime service account, exact Secret Manager resources, and Cloud SQL
+B7  create database/schema/migration/runtime roles and run the canonical migration
+B8  register GitHub App with exact visibility/permissions/events and webhook inactive
+B9  generate/import App private key + webhook secret directly into Secret Manager; keep webhook inactive
 B10 install App on exactly TheHalfMoon/Kodac while webhook remains inactive
-B11 build exact linux/amd64 binary and immutable OCI image
-B12 push image and capture registry digest
-B13 deploy Cloud Run by exact digest + exact secret versions
-B14 prove /healthz and exact deployment/image identity
-B15 run database privilege/append-only probes
-B16 capture sanitized registration/deployment/store evidence
-B17 stop with webhook inactive and AG1-C/AG2 still blocked
+B11 build exact linux/amd64 binary and OCI image; verify image platform
+B12 push image and capture Artifact Registry digest
+B13 deploy Cloud Run by exact digest, exact runtime SA, exact Cloud SQL attachment, and numeric secret versions
+B14 prove /healthz, revision/image/platform/runtime-SA/Cloud-SQL attachment, and IAM/secret bindings
+B15 configure exact GitHub webhook URL while webhook remains inactive; record URL match; leave secret-binding probe deferred
+B16 run database privilege/ACL/membership/ownership/append-only probes
+B17 capture sanitized registration/deployment/store evidence
+B18 stop with webhook inactive, secret-binding activation gate blocked, and AG1-C/AG2 still blocked
 ```
 
-If any step fails, do not compensate by widening permissions, adding repositories, enabling workflows, using PAT/OAuth user tokens, exposing secrets, changing source logic, bypassing exact digests, or granting database admin rights to the runtime.
+If any step fails, do not compensate by widening permissions, adding repositories, enabling workflows/webhooks, using PAT/OAuth user tokens, exposing secrets, changing App logic, bypassing exact digests/platforms, or granting database admin rights to the runtime.
 
 ---
 
@@ -718,6 +858,7 @@ GitHub Actions secret storage for App credentials
 App installation on additional repositories
 public App installability
 OAuth user authorization
+device-flow authorization
 founder PAT use by App
 real founder bootstrap receipt creation
 real independent-review receipt creation
@@ -734,23 +875,41 @@ No later step is implicitly authorized by successful AG1-B execution.
 
 ---
 
-## 24. Predecessor verdict
+## 24. Review-finding reconciliation requirements
+
+The AG1-B authorization predecessor is not merge-eligible until independent exact-head review verifies all of the following:
+
+```text
+AG1B-R01_OCI_PLATFORM_PINNED=PASS
+AG1B-R02_CLOUD_SQL_REVISION_ATTACHMENT_BOUND=PASS
+AG1B-R03_RUNTIME_SA_AND_IAM_PROOF_BOUND=PASS
+AG1B-R04_SECRET_INJECTION_NUMERIC_VERSION_BOUND=PASS
+AG1B-R05_GITHUB_APP_VISIBILITY_AUTH_SETTINGS_BOUND=PASS
+AG1B-R06_WEBHOOK_URL_BOUND_AND_SECRET_PROOF_FAIL_CLOSED=PASS
+AG1B-R07_WEBHOOK_INACTIVE_DURING_INSTALLATION=PASS
+AG1B-R08_DB_ACL_MEMBERSHIP_OWNERSHIP_PROOF_BOUND=PASS
+```
+
+---
+
+## 25. Predecessor verdict
 
 Current candidate result:
 
 ```text
 AG1A=CANONICAL
-AG1B_AUTHORIZATION_CANDIDATE=READY_FOR_EXACT_HEAD_REVIEW
+AG1B_AUTHORIZATION_CANDIDATE=REQUIRES_FRESH_EXACT_HEAD_REVIEW
 AG1B_EXECUTION=NOT_STARTED
 GITHUB_APP_CREATED=NO
 GCP_RESOURCES_CREATED=NO
 REAL_SECRETS_ACCESSED=NO
 APP_DEPLOYED=NO
 APP_INSTALLED=NO
+APP_WEBHOOK_ACTIVE=NO
 AG1C=BLOCKED
 AG2=BLOCKED
 TRUST_ROOT_ESTABLISHMENT=BLOCKED
 H4_COMPLETE=NO
 ```
 
-If and only if this exact authorization is reviewed and merged canonically, a separate AG1-B execution may start from the canonical merge. It must still stop before any billable resource creation until the founder explicitly approves the reported resources/cost-bearing operations.
+If and only if this exact authorization is independently reviewed and merged canonically, a separate AG1-B execution may start from that canonical merge. It must still stop before any cost-bearing resource creation until the founder explicitly approves the exact preflight resource/cost report.
