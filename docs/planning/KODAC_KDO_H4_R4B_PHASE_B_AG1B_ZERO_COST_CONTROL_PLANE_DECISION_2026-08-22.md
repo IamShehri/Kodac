@@ -212,37 +212,41 @@ TAILSCALE_PERSONAL_SELECTION_AUTHORIZED=NO
 
 No inference about KODAC's commercial or non-commercial status may be made merely from the repository being public or open source.
 
-#### Community on GitHub ineligibility under current ownership
+#### Community on GitHub evidence status
 
 Tailscale separately documents a `Community on GitHub` free plan for a **GitHub organization** using Tailscale for an open-source project with an OSI-approved license. It requires GitHub authentication and Tailscale Support involvement.
 
-KODAC carries Apache License 2.0, satisfying the OSI-license prerequisite, but the canonical repository owner `TheHalfMoon` is a GitHub **User**, not a GitHub Organization. Therefore the documented organization prerequisite is not met by the current repository topology.
+KODAC carries Apache License 2.0, satisfying the OSI-license prerequisite. Live GitHub metadata reports the canonical repository owner `TheHalfMoon` as a GitHub **User**, not an Organization. That fact does not, by itself, prove Tailscale would reject every possible Community-plan arrangement, because the public Tailscale documentation does not explicitly state that the open-source repository itself must be owned by the qualifying GitHub organization.
+
+No qualifying GitHub-organization binding, Tailscale Support confirmation, or Community-plan enrollment exists in the evidence set. Therefore eligibility is **unproven**, not inferred either way.
 
 ```text
 TAILSCALE_COMMUNITY_ON_GITHUB_DOCUMENTED=YES
 TAILSCALE_COMMUNITY_REQUIRES_GITHUB_ORGANIZATION=YES
-TAILSCALE_COMMUNITY_CURRENT_OWNER=TheHalfMoon
-TAILSCALE_COMMUNITY_CURRENT_OWNER_TYPE=User
+TAILSCALE_COMMUNITY_CURRENT_REPOSITORY_OWNER=TheHalfMoon
+TAILSCALE_COMMUNITY_CURRENT_REPOSITORY_OWNER_TYPE=User
 TAILSCALE_COMMUNITY_LICENSE=Apache-2.0
 TAILSCALE_COMMUNITY_OSI_LICENSE_PREREQUISITE=PASS
-TAILSCALE_COMMUNITY_GITHUB_ORGANIZATION_PREREQUISITE=FAIL
-TAILSCALE_COMMUNITY_ELIGIBILITY=CURRENTLY_INELIGIBLE
+TAILSCALE_COMMUNITY_QUALIFYING_GITHUB_ORG_BINDING=UNPROVEN
+TAILSCALE_COMMUNITY_SUPPORT_CONFIRMATION=ABSENT
+TAILSCALE_COMMUNITY_ENROLLMENT=ABSENT
+TAILSCALE_COMMUNITY_ELIGIBILITY=UNPROVEN
 TAILSCALE_COMMUNITY_SELECTION_AUTHORIZED=NO
 ```
 
 Creating a GitHub organization, transferring the repository, or changing repository ownership merely to obtain a free service plan is outside this decision and is not authorized.
 
-Because the Community path fails under current repository ownership and Personal eligibility is unproven, Tailscale remains a **conditional ingress candidate**, not an executable zero-cost selection.
+Because both Personal and Community zero-cost eligibility are unproven, Tailscale remains a **conditional ingress candidate**, not an executable zero-cost selection.
 
 ```text
 TAILSCALE_ZERO_COST_PLAN_ELIGIBILITY=UNPROVEN_BLOCKING
 TAILSCALE_ZERO_COST_ELIGIBLE_PATH_COUNT=0
 TAILSCALE_FUNNEL_ZERO_COST_SELECTION=CONDITIONAL
-IF_PERSONAL_NONCOMMERCIAL_ELIGIBILITY_NOT_PROVEN=REJECT_TAILSCALE
+IF_ZERO_COST_ELIGIBILITY_NOT_PROVEN=REJECT_TAILSCALE
 PAID_TAILSCALE_FALLBACK=FORBIDDEN
 ```
 
-Because Funnel remains Beta and the origin remains founder-hosted, even a successfully proven Personal-plan path authorizes only a bounded pilot, never production-equivalent infrastructure.
+Because Funnel remains Beta and the origin remains founder-hosted, even a successfully proven zero-cost plan path authorizes only a bounded pilot, never production-equivalent infrastructure.
 
 ---
 
@@ -263,7 +267,7 @@ AG1B_ZERO_COST_PRODUCTION_EQUIVALENCE=NO
 AG1B_ZERO_COST_H4_CLOSURE_AUTHORITY=NO
 ```
 
-Target topology applies only after Personal-plan non-commercial eligibility is proven and all other blockers are separately repaired:
+Target topology applies only after a zero-cost Tailscale plan path is proven eligible and all other blockers are separately repaired:
 
 ```text
 GitHub App webhook
@@ -296,21 +300,23 @@ The PostgreSQL container must not publish port 5432 to the LAN or public Interne
 
 ## 7. Blocking control ZC0-E01 — zero-cost plan eligibility
 
-No Tailscale account, installation, Funnel, or external endpoint may be created under this decision until a later execution authorization and non-secret evidence establish Personal-plan non-commercial eligibility for the intended pilot use.
+No Tailscale account, installation, Funnel, or external endpoint may be created under this decision until a later execution authorization and non-secret evidence establish at least one eligible zero-cost plan path.
 
 Current eligibility theorem:
 
 ```text
 ZC0_E01_ZERO_COST_PLAN_ELIGIBILITY=BLOCKING
 TAILSCALE_PERSONAL_ELIGIBILITY_PROOF=ABSENT
-TAILSCALE_COMMUNITY_PATH=CURRENTLY_INELIGIBLE_OWNER_NOT_ORGANIZATION
+TAILSCALE_COMMUNITY_QUALIFYING_GITHUB_ORG_BINDING_PROOF=ABSENT
+TAILSCALE_COMMUNITY_SUPPORT_CONFIRMATION=ABSENT
+TAILSCALE_COMMUNITY_ENROLLMENT_PROOF=ABSENT
 ZERO_COST_ELIGIBLE_PATH_COUNT=0
 TAILSCALE_INSTALLATION_ALLOWED=NO
 TAILSCALE_FUNNEL_ALLOWED=NO
 PAID_PLAN_ALLOWED=NO
 ```
 
-A future eligibility proof must contain no billing credentials or sensitive account tokens. If Personal-plan non-commercial eligibility cannot be proven, the Tailscale candidate is rejected and the architecture returns to `ZERO_COST_INGRESS=UNSELECTED`; the hard `$0` constraint is not relaxed automatically.
+A future eligibility proof must contain no billing credentials or sensitive account tokens. If no zero-cost plan path can be proven, the Tailscale candidate is rejected and the architecture returns to `ZERO_COST_INGRESS=UNSELECTED`; the hard `$0` constraint is not relaxed automatically.
 
 ---
 
@@ -411,12 +417,12 @@ This decision does not execute the following steps. If all blockers become canon
 
 ```text
 Z0  reverify exact Kodac and App source heads
-Z1  prove Tailscale Personal non-commercial eligibility; otherwise reject Tailscale
+Z1  prove at least one eligible zero-cost Tailscale plan path; otherwise reject Tailscale
 Z2  prove canonical packaging
 Z3  prove file-backed secret delivery
 Z4  prove persistent PostgreSQL 16 volume and recovery
 Z5  prove exact runtime DB role theorem on persistent store
-Z6  install/configure Tailscale under the proven zero-cost Personal plan without billing credentials
+Z6  install/configure Tailscale under the proven zero-cost plan without billing credentials
 Z7  establish stable Funnel hostname with synthetic local service only
 Z8  prove /healthz exact response through Funnel
 Z9  prove host restart / Funnel --bg recovery with synthetic service
