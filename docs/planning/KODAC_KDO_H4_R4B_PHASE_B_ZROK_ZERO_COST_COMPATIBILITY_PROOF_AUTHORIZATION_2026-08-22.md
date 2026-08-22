@@ -153,10 +153,12 @@ Provenance evidence must prefer, in this order:
 3. upstream release SBOM;
 4. upstream source/release workflow configuration.
 
-A third-party mirror may be used only to locate a likely asset name. It may not supply the canonical execution SHA-256 or replace upstream release evidence.
+A third-party mirror may be used only for **non-authoritative discovery** of a likely release-asset filename or the apparent presence/filename of a checksum artifact. It may not supply the canonical execution SHA-256, prove that the checksum artifact is authoritative, or replace upstream release evidence. Any asset or checksum-artifact identity used as execution authority must be confirmed directly from upstream evidence.
 
 ```text
 THIRD_PARTY_MIRROR_AS_CHECKSUM_AUTHORITY=FORBIDDEN
+THIRD_PARTY_MIRROR_AS_CHECKSUM_VALUE_SOURCE=FORBIDDEN
+THIRD_PARTY_MIRROR_NAME_ONLY_DISCOVERY=PERMITTED_NON_AUTHORITATIVELY
 SEARCH_SNIPPET_AS_CHECKSUM_AUTHORITY=FORBIDDEN
 FLOATING_LATEST_URL_AS_EXECUTION_AUTHORITY=FORBIDDEN
 UNPINNED_ASSET_DOWNLOAD=FORBIDDEN
@@ -344,28 +346,49 @@ AUTHENTICATION_BYPASS=FORBIDDEN
 
 GitHub recommends that a reverse proxy for private webhook systems forward only HTTPS POST requests originating from the GitHub `hooks` ranges returned by `GET /meta`.
 
-Before zrok can become the selected ingress, one of the following must be proven:
+The **request-surface requirements are common prerequisites** and cannot be waived by choosing a source-IP compensating control:
 
 ```text
-OPTION_A=ZROK_FRONTDOOR_ENFORCES_GITHUB_HOOKS_SOURCE_IP_PLUS_POST_PLUS_PATH
+COMMON_REQUIRED_PUBLIC_TRANSPORT=HTTPS_ONLY
+COMMON_REQUIRED_METHOD=POST_ONLY
+COMMON_REQUIRED_PATH=EXACT_WEBHOOK_PATH_ONLY
+COMMON_REQUIRED_ENFORCEMENT_BOUNDARY=IDENTIFIED_AND_PROVEN_REQUIRED
+```
+
+Before zrok can become the selected ingress, all common requirements above must pass and one source-provenance outcome below must be proven:
+
+```text
+OPTION_A=ZROK_FRONTDOOR_ENFORCES_GITHUB_HOOKS_SOURCE_IP
 OPTION_B=TRUSTWORTHY_COMPENSATING_FILTER_WITH_NON_SPOOFABLE_SOURCE_PROVENANCE
 OPTION_C=ZROK_REJECTED
 ```
+
+`OPTION_B` compensates **only** for source-IP provenance. It does not compensate for HTTPS, POST-only, or exact-path enforcement.
+
+The authoritative enforcement boundary must be identified before Z0S executes:
+
+- HTTPS must be proven at the public frontdoor. If HTTP is exposed, it must not be accepted as an equivalent webhook ingress path; redirect or rejection behavior must be explicitly characterized.
+- POST-only and exact-path controls may be enforced by the public frontdoor or by a separately reviewed filter immediately before the synthetic receiver, but the chosen boundary must be explicit and its behavior must be directly tested.
+- If method/path enforcement occurs behind the hosted frontdoor, the proof must first establish that the original method and path reach that filter without an attacker-controlled rewrite that defeats the restriction.
+- Source-IP compensation behind the hosted frontdoor is valid only if client-source provenance is non-spoofable and the trust boundary that produces it is identified.
 
 Current state:
 
 ```text
 ZROK_GITHUB_HOOKS_SOURCE_IP_RESTRICTION_CAPABILITY=UNPROVEN_BLOCKING
 ZROK_ORIGINAL_CLIENT_IP_TRUSTWORTHY_PRESERVATION=UNPROVEN_BLOCKING
-ZROK_HTTPS_POST_ONLY_FRONTDOOR_RESTRICTION=UNPROVEN_BLOCKING
-ZROK_WEBHOOK_PATH_ONLY_FRONTDOOR_RESTRICTION=UNPROVEN_BLOCKING
+ZROK_ORIGINAL_METHOD_PRESERVATION=UNPROVEN_BLOCKING
+ZROK_ORIGINAL_PATH_PRESERVATION=UNPROVEN_BLOCKING
+ZROK_HTTPS_ONLY_PUBLIC_FRONTDOOR=UNPROVEN_BLOCKING
+ZROK_POST_ONLY_ENFORCEMENT_BOUNDARY=UNPROVEN_BLOCKING
+ZROK_EXACT_PATH_ENFORCEMENT_BOUNDARY=UNPROVEN_BLOCKING
 ```
 
-Application HMAC validation remains mandatory and cannot be replaced by source-IP filtering.
+Application HMAC validation remains mandatory and cannot be replaced by source-IP filtering or request-surface restrictions.
 
 If a forwarded client-IP header is proposed as compensating evidence, the proof must establish that the hosted zrok frontdoor overwrites/sanitizes it and that arbitrary Internet clients cannot spoof the trusted source value.
 
-If neither A nor B is provable, zrok fails for this high-assurance pilot even if payload/HMAC transparency succeeds.
+If the common requirements cannot be proven, or neither source-provenance option A nor B is provable, zrok fails for this high-assurance pilot even if payload/HMAC transparency succeeds.
 
 ## 11. Z0R — reserved-name/restart and cleanup proof — separately gated
 
@@ -509,7 +532,7 @@ Current primary/upstream sources reviewed for this authorization include:
 - `https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries`
 - `https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/troubleshooting-webhooks`
 
-Secondary mirror evidence was used only to observe the probable Windows AMD64 release-archive filename and the presence/name of the checksum artifact. It is explicitly not checksum authority.
+Secondary mirror evidence was used only for non-authoritative observation of the probable Windows AMD64 release-archive filename and the apparent presence/name of the checksum artifact. The mirror is explicitly not checksum authority and cannot establish the checksum value or authoritative artifact identity.
 
 ## 17. Review and merge gate
 
