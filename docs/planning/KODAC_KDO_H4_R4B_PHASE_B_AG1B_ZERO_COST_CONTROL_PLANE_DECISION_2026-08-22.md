@@ -38,6 +38,10 @@ APP_BUILD_GO_VERSION=go1.26.6
 APP_BUILD_GOOS=linux
 APP_BUILD_GOARCH=amd64
 APP_BUILD_CGO_ENABLED=0
+
+KODAC_LICENSE_PATH=LICENSE
+KODAC_LICENSE=Apache-2.0
+KODAC_LICENSE_BLOB_SHA=261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64
 ```
 
 The canonical App source still consumes `DATABASE_DSN`, `WEBHOOK_SECRET`, and `APP_PRIVATE_KEY_PEM` as secret values in process configuration. No file-based secret source is currently implemented.
@@ -66,7 +70,7 @@ LOCAL_REAL_STORE_RECEIPT_COLLISION_FATAL=PASS
 LOCAL_REAL_STORE_COLLISION_ROLLBACK=PASS
 ```
 
-These observations prove local feasibility only. They do not satisfy provider-specific, production, secret-binding, public-ingress, uptime, or H4 closure requirements.
+These observations prove local feasibility only. They do not satisfy provider-specific, production, secret-binding, public-ingress, uptime, plan-eligibility, or H4 closure requirements.
 
 ---
 
@@ -96,6 +100,8 @@ WEBHOOK_HMAC_VERIFICATION=REQUIRED
 APP_PRIVATE_KEY_SECRET_BOUNDARY=REQUIRED
 WEBHOOK_SECRET_BOUNDARY=REQUIRED
 DATABASE_CREDENTIAL_SECRET_BOUNDARY=REQUIRED
+ZERO_COST_PLAN_ELIGIBILITY_MUST_BE_PROVEN=YES
+PAID_FALLBACK_IF_FREE_ELIGIBILITY_FAILS=FORBIDDEN
 ```
 
 GitHub does not automatically redeliver failed webhook deliveries. Therefore a sleeping or routinely unavailable endpoint cannot be treated as production-equivalent.
@@ -150,7 +156,7 @@ PRODUCTION_HOST=REJECT
 
 Cloudflare explicitly defines Quick Tunnels as testing/development only, assigns a random hostname, and provides no uptime guarantee.
 
-A named Cloudflare Tunnel is technically stronger, but a stable public hostname requires a zone/domain controlled by the founder and still depends on the availability of the founder-hosted origin. Free-plan support does not provide an SLA. It is therefore not selected as a production-equivalent control plane here.
+A named Cloudflare Tunnel is technically stronger, but a stable public hostname requires a zone/domain controlled by the founder and still depends on the availability of the founder-hosted origin. It is therefore not selected as the zero-new-domain path here.
 
 ### 5.4 Cloudflare Containers
 
@@ -171,14 +177,13 @@ LOCAL_INGRESS=YES
 PRODUCTION_HOST=REJECT
 ```
 
-The Free plan is development-oriented, has request/data limits and an HTTP/S interstitial, and production support/SLA is not part of the free offering. It is not selected for the load-bearing Phase-B webhook.
+The Free plan has strict request/data limits and an HTTP/S interstitial. It is not selected for the load-bearing Phase-B webhook.
 
 ### 5.6 Tailscale Funnel
 
 ```text
 CANDIDATE=Tailscale_Funnel
-PLAN_ELIGIBILITY=ALL_PLANS
-PERSONAL_PLAN_COST=0_USD
+FUNNEL_AVAILABLE_ON_ALL_PLANS=YES
 STABLE_TS_NET_DNS=YES
 AUTOMATIC_HTTPS=YES
 LOCAL_REVERSE_PROXY=YES
@@ -188,17 +193,60 @@ NONCONFIGURABLE_BANDWIDTH_LIMITS=YES
 PRODUCTION_SLA=NOT_PROVEN
 ```
 
-Tailscale Funnel can expose a local HTTP service to the public Internet through a stable `*.ts.net` hostname, automatically provisions HTTPS, is available on all plans, and can persist with `--bg` across device/Tailscale restarts.
+Tailscale Funnel can expose a local HTTP service to the public Internet through a predictable `*.ts.net` hostname, automatically provisions HTTPS, is available on all plans, and can persist with `--bg` across device/Tailscale restarts.
 
-Because Funnel remains Beta and the origin remains founder-hosted, it is selected only for a bounded zero-cost pilot, not as production-equivalent infrastructure.
+Funnel availability on all plans does **not** prove that this project is eligible for a zero-cost plan. Plan eligibility is a separate blocking theorem.
+
+#### Personal plan restriction
+
+Current Tailscale documentation states that the free Personal plan is intended for personal/non-commercial use and is not intended for commercial use.
+
+```text
+TAILSCALE_PERSONAL_PLAN_COST_USD=0
+TAILSCALE_PERSONAL_NONCOMMERCIAL_ONLY=YES
+TAILSCALE_PERSONAL_ELIGIBILITY_FOR_KODAC=UNPROVEN
+TAILSCALE_PERSONAL_SELECTION_AUTHORIZED=NO
+```
+
+No inference about KODAC's commercial or non-commercial status may be made merely from the repository being public or open source.
+
+#### Community on GitHub candidate
+
+Tailscale separately documents a `Community on GitHub` free plan for a GitHub organization using Tailscale for an open-source project with an OSI-approved license. It requires GitHub authentication and cannot be self-enrolled from the normal Billing page; Tailscale directs users to contact Support for the plan.
+
+KODAC currently carries Apache License 2.0, an OSI-approved license. That proves the repository-license prerequisite only; it does not prove Tailscale has accepted or enrolled this project.
+
+```text
+TAILSCALE_COMMUNITY_ON_GITHUB_CANDIDATE=YES
+TAILSCALE_COMMUNITY_GITHUB_ORG=TheHalfMoon
+TAILSCALE_COMMUNITY_PROJECT=TheHalfMoon/Kodac
+TAILSCALE_COMMUNITY_LICENSE=Apache-2.0
+TAILSCALE_COMMUNITY_OSI_LICENSE_PREREQUISITE=PASS
+TAILSCALE_COMMUNITY_GITHUB_AUTH_REQUIRED=YES
+TAILSCALE_COMMUNITY_SUPPORT_CONTACT_REQUIRED=YES
+TAILSCALE_COMMUNITY_ENROLLMENT=UNPROVEN
+TAILSCALE_COMMUNITY_SELECTION_AUTHORIZED=NO
+```
+
+Because both zero-cost eligibility paths are currently unproven, Tailscale remains a **conditional ingress candidate**, not an executable zero-cost selection.
+
+```text
+TAILSCALE_ZERO_COST_PLAN_ELIGIBILITY=UNPROVEN_BLOCKING
+TAILSCALE_FUNNEL_ZERO_COST_SELECTION=CONDITIONAL
+IF_ZERO_COST_ELIGIBILITY_NOT_PROVEN=REJECT_TAILSCALE
+PAID_TAILSCALE_FALLBACK=FORBIDDEN
+```
+
+Because Funnel remains Beta and the origin remains founder-hosted, even a successfully proven free-plan path authorizes only a bounded pilot, never production-equivalent infrastructure.
 
 ---
 
 ## 6. Decision
 
 ```text
-AG1B_ZERO_COST_DECISION=FOUNDER_HOSTED_PILOT_ONLY
-AG1B_ZERO_COST_INGRESS=Tailscale_Funnel
+AG1B_ZERO_COST_DECISION=FOUNDER_HOSTED_PILOT_ARCHITECTURE_CONDITIONAL
+AG1B_ZERO_COST_PREFERRED_INGRESS=Tailscale_Funnel
+AG1B_ZERO_COST_INGRESS_ELIGIBILITY=UNPROVEN_BLOCKING
 AG1B_ZERO_COST_ORIGIN=Founder_Windows_11_Docker_Desktop_WSL2
 AG1B_ZERO_COST_DATABASE=PostgreSQL_16_Docker
 AG1B_ZERO_COST_APP=Existing_Go_Business_Logic_Preserved
@@ -210,7 +258,7 @@ AG1B_ZERO_COST_PRODUCTION_EQUIVALENCE=NO
 AG1B_ZERO_COST_H4_CLOSURE_AUTHORITY=NO
 ```
 
-Target topology after all blockers are separately repaired:
+Target topology applies only after a zero-cost Tailscale plan is proven eligible and all other blockers are separately repaired:
 
 ```text
 GitHub App webhook
@@ -241,7 +289,34 @@ The PostgreSQL container must not publish port 5432 to the LAN or public Interne
 
 ---
 
-## 7. Blocking control ZC0-S01 — secret delivery
+## 7. Blocking control ZC0-E01 — zero-cost plan eligibility
+
+No Tailscale account, installation, Funnel, or external endpoint may be created under this decision until a later execution authorization and non-secret evidence establish one eligible zero-cost path.
+
+Accepted eligibility paths are:
+
+```text
+PATH_A=TAILSCALE_PERSONAL_NONCOMMERCIAL_ELIGIBILITY_PROVEN
+PATH_B=TAILSCALE_COMMUNITY_ON_GITHUB_ENROLLMENT_PROVEN
+```
+
+Fail-closed theorem:
+
+```text
+ZC0_E01_ZERO_COST_PLAN_ELIGIBILITY=BLOCKING
+TAILSCALE_PERSONAL_ELIGIBILITY_PROOF=ABSENT
+TAILSCALE_COMMUNITY_ENROLLMENT_PROOF=ABSENT
+ZERO_COST_ELIGIBLE_PATH_COUNT=0
+TAILSCALE_INSTALLATION_ALLOWED=NO
+TAILSCALE_FUNNEL_ALLOWED=NO
+PAID_PLAN_ALLOWED=NO
+```
+
+A future eligibility proof must contain no billing credentials or sensitive account tokens. If no eligible zero-cost path can be proven, the Tailscale candidate is rejected and the architecture returns to `ZERO_COST_INGRESS=UNSELECTED`; the hard `$0` constraint is not relaxed automatically.
+
+---
+
+## 8. Blocking control ZC0-S01 — secret delivery
 
 The selected pilot MUST NOT use real GitHub App, webhook, or database secrets while the application only accepts direct secret values through container/process environment configuration.
 
@@ -281,7 +356,7 @@ The exact implementation and file-permission theorem must be reviewed in the App
 
 ---
 
-## 8. Blocking control ZC0-P01 — canonical packaging
+## 9. Blocking control ZC0-P01 — canonical packaging
 
 The zero-cost pilot may not use an ad hoc unreviewed container recipe as authoritative deployment evidence.
 
@@ -295,7 +370,7 @@ APP_SOURCE_LOGIC_CHANGE_BY_PACKAGING=FORBIDDEN
 
 ---
 
-## 9. Blocking control ZC0-D01 — persistence and recovery
+## 10. Blocking control ZC0-D01 — persistence and recovery
 
 The ephemeral `tmpfs` database used for local theorem rehearsal is not acceptable for the pilot receipt store.
 
@@ -316,7 +391,7 @@ No production durability or SLA claim may be made from a single founder workstat
 
 ---
 
-## 10. Blocking control ZC0-U01 — founder-host availability
+## 11. Blocking control ZC0-U01 — founder-host availability
 
 ```text
 FOUNDER_HOST_POWER_DEPENDENCY=YES
@@ -332,39 +407,42 @@ GitHub's 10-second webhook response requirement remains load-bearing.
 
 ---
 
-## 11. Pilot activation order
+## 12. Pilot activation order
 
 This decision does not execute the following steps. If all blockers become canonical and a later execution authorization explicitly permits the pilot, the order is:
 
 ```text
 Z0  reverify exact Kodac and App source heads
-Z1  prove canonical packaging
-Z2  prove file-backed secret delivery
-Z3  prove persistent PostgreSQL 16 volume and recovery
-Z4  prove exact runtime DB role theorem on persistent store
-Z5  install/configure Tailscale without creating a paid subscription
-Z6  establish stable Funnel hostname with synthetic local service only
-Z7  prove /healthz exact response through Funnel
-Z8  prove host restart / Funnel --bg recovery with synthetic service
-Z9  founder reviews non-secret evidence
-Z10 separately authorize real GitHub App registration/secret loading
-Z11 register private GitHub App with webhook still inactive
-Z12 load real secrets through the approved secret-file boundary
-Z13 install App only on TheHalfMoon/Kodac with webhook inactive
-Z14 prove exact identities and configuration without event delivery
-Z15 separately authorize webhook activation
+Z1  prove one eligible zero-cost Tailscale plan path; otherwise reject Tailscale
+Z2  prove canonical packaging
+Z3  prove file-backed secret delivery
+Z4  prove persistent PostgreSQL 16 volume and recovery
+Z5  prove exact runtime DB role theorem on persistent store
+Z6  install/configure Tailscale under the proven zero-cost plan without billing credentials
+Z7  establish stable Funnel hostname with synthetic local service only
+Z8  prove /healthz exact response through Funnel
+Z9  prove host restart / Funnel --bg recovery with synthetic service
+Z10 founder reviews non-secret evidence
+Z11 separately authorize real GitHub App registration/secret loading
+Z12 register private GitHub App with webhook still inactive
+Z13 load real secrets through the approved secret-file boundary
+Z14 install App only on TheHalfMoon/Kodac with webhook inactive
+Z15 prove exact identities and configuration without event delivery
+Z16 separately authorize webhook activation
 ```
 
 No step may be skipped or reordered merely because the underlying software is free.
 
 ---
 
-## 12. Explicit non-grants
+## 13. Explicit non-grants
 
 Merging this decision alone does NOT authorize:
 
 ```text
 TAILSCALE_ACCOUNT_CREATION=NO
+TAILSCALE_PLAN_ENROLLMENT=NO
+TAILSCALE_SUPPORT_CONTACT=NO
 TAILSCALE_INSTALLATION=NO
 TAILSCALE_FUNNEL_CREATION=NO
 SUPABASE_PROJECT_CREATION=NO
@@ -388,7 +466,7 @@ H4_COMPLETE=NO
 
 ---
 
-## 13. Review and merge gate
+## 14. Review and merge gate
 
 This decision may become canonical only if the exact candidate head proves:
 
@@ -415,22 +493,25 @@ If merged, only the following becomes true:
 
 ```text
 AG1B_ZERO_COST_CONTROL_PLANE_DECISION=CANONICAL
-ZERO_COST_FOUNDER_HOSTED_PILOT=SELECTED_BUT_BLOCKED
+ZERO_COST_FOUNDER_HOSTED_PILOT_ARCHITECTURE=CONDITIONALLY_SELECTED_BUT_BLOCKED
+TAILSCALE_ZERO_COST_PLAN_ELIGIBILITY=UNPROVEN_BLOCKING
 ```
 
 The existing Google Cloud AG1-B authorization remains historical/canonical but is not executable while the founder's hard zero-provider-spend constraint remains in force.
 
 ---
 
-## 14. Primary-source research record
+## 15. Primary-source research record
 
 Research verified on 2026-08-22 against current primary documentation:
 
 - GitHub webhook timeout and failed-delivery behavior: https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/troubleshooting-webhooks and https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries
 - Tailscale Funnel behavior/limits: https://tailscale.com/docs/features/tailscale-funnel and https://tailscale.com/docs/reference/tailscale-cli/funnel
-- Tailscale Personal pricing: https://tailscale.com/pricing
+- Tailscale pricing and Personal non-commercial restriction: https://tailscale.com/pricing and https://tailscale.com/docs/account/manage-plans/downgrade-plan
+- Tailscale free-plan alternatives including Community on GitHub: https://tailscale.com/docs/account/manage-plans/free-plans-discounts
 - Supabase Free pausing/billing/production checklist: https://supabase.com/docs/guides/platform/free-project-pausing , https://supabase.com/docs/guides/platform/billing-on-supabase , https://supabase.com/docs/guides/deployment/going-into-prod
 - Oracle Always Free resources and idle reclamation: https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
 - Cloudflare Tunnel and Quick Tunnel limitations: https://developers.cloudflare.com/tunnel/ and https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/
 - Cloudflare Containers pricing: https://developers.cloudflare.com/containers/pricing/
 - ngrok current Free-plan limits: https://ngrok.com/pricing
+- KODAC repository license proof: canonical `LICENSE` blob `261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64` (Apache-2.0).
