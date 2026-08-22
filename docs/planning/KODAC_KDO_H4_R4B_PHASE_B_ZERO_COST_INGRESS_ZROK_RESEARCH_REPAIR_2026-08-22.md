@@ -6,7 +6,7 @@ Repository: `TheHalfMoon/Kodac`
 
 ## 1. Purpose
 
-Repair the canonical zero-cost ingress research after discovering a material omitted candidate: **zrok**.
+Repair the canonical zero-cost ingress research after discovering a material candidate omitted from the previous survey: **zrok**.
 
 GitHub's current official webhook documentation explicitly identifies zrok as a free, open-source ingress-management option for delivering webhooks to private systems. Therefore the canonical research statement that DuckDNS + Caddy was the only direct-ingress finalist must not be used as execution-selection authority until this repair is qualified and canonical.
 
@@ -108,7 +108,7 @@ ZROK_V1_RESERVE_COMMANDS_AS_EXECUTION_AUTHORITY=FORBIDDEN
 ZROK_V2_NAMESPACE_MODEL_REQUIRED=YES
 ZROK_V2_RESERVED_NAME_MODEL_REQUIRED=YES
 ZROK_STABLE_PUBLIC_NAME_CAPABILITY=SUPPORTED_BY_UPSTREAM_V2
-ZROK_STABLE_PUBLIC_NAME_ON_HOSTED_ZROKNET=PROOF_REQUIRED
+ZROK_STABLE_PUBLIC_NAME_ON_HOSTED_ZROKNET=UNPROVEN_BLOCKING
 ```
 
 No command in this research document is execution authorization. Any later installation/setup slice must pin exact release, asset, SHA-256, platform, configuration model, and hosted-service compatibility from fresh evidence.
@@ -139,29 +139,66 @@ The later proof must demonstrate the behavior on the current hosted zrokNET publ
 
 ## 7. Webhook transparency theorem required before selection
 
-GitHub requires proxies/load balancers not to alter payload bytes or the headers required for signature validation. The existing KODAC handler authenticates raw webhook bytes with `X-Hub-Signature-256` before processing.
+GitHub warns that a proxy or load balancer must not modify the webhook payload or headers before signature verification. The existing KODAC handler authenticates raw webhook bytes with `X-Hub-Signature-256` before processing.
 
-Before zrok can be selected for execution, a synthetic-only public-share proof must establish at least:
+The following values are **required future proof results**, not current PASS evidence:
 
 ```text
-ZROK_PUBLIC_HTTPS=PASS
-ZROK_PUBLIC_FRONTEND_TLS_TRUST=PASS
-ZROK_TARGET_LOOPBACK_ONLY=PASS
-ZROK_NO_INBOUND_ROUTER_PORT_REQUIRED=PASS
+REQUIRED_ZROK_PUBLIC_HTTPS=PASS
+REQUIRED_ZROK_PUBLIC_FRONTEND_TLS_TRUST=PASS
+REQUIRED_ZROK_TARGET_LOOPBACK_ONLY=PASS
+REQUIRED_ZROK_NO_INBOUND_ROUTER_PORT=PASS
 
-ZROK_RAW_BODY_BYTE_FOR_BYTE_PRESERVATION=PASS
-ZROK_CONTENT_TYPE_PRESERVATION=PASS
-ZROK_X_HUB_SIGNATURE_256_PRESERVATION=PASS
-ZROK_X_GITHUB_DELIVERY_PRESERVATION=PASS
-ZROK_X_GITHUB_EVENT_PRESERVATION=PASS
-ZROK_USER_AGENT_GITHUB_HOOKSHOT_PATH_NO_INTERSTITIAL=PASS
+REQUIRED_ZROK_RAW_BODY_BYTE_FOR_BYTE_PRESERVATION=PASS
+REQUIRED_ZROK_CONTENT_TYPE_PRESERVATION=PASS
+REQUIRED_ZROK_X_HUB_SIGNATURE_256_PRESERVATION=PASS
+REQUIRED_ZROK_X_GITHUB_DELIVERY_PRESERVATION=PASS
+REQUIRED_ZROK_X_GITHUB_EVENT_PRESERVATION=PASS
+REQUIRED_ZROK_USER_AGENT_GITHUB_HOOKSHOT_PATH_NO_INTERSTITIAL=PASS
 
-ZROK_SYNTHETIC_SIGNED_WEBHOOK_HTTP_STATUS=2XX
-ZROK_SYNTHETIC_SIGNED_WEBHOOK_ELAPSED_LT_10S=PASS
-ZROK_INVALID_SIGNATURE_REJECTED=PASS
+REQUIRED_ZROK_SYNTHETIC_SIGNED_WEBHOOK_HTTP_STATUS=2XX
+REQUIRED_ZROK_SYNTHETIC_SIGNED_WEBHOOK_ELAPSED_LT_10S=PASS
+REQUIRED_ZROK_INVALID_SIGNATURE_REJECTED=PASS
 ```
 
-No real GitHub delivery may be used for this initial theorem.
+Current state remains:
+
+```text
+ZROK_PUBLIC_HTTPS_RUNTIME_PROOF=UNPROVEN_BLOCKING
+ZROK_RAW_BODY_BYTE_FOR_BYTE_PRESERVATION=UNPROVEN_BLOCKING
+ZROK_CRITICAL_GITHUB_HEADER_PRESERVATION=UNPROVEN_BLOCKING
+ZROK_GITHUB_HOOKSHOT_INTERSTITIAL_BYPASS=UNPROVEN_BLOCKING
+ZROK_SYNTHETIC_SIGNED_WEBHOOK_ELAPSED_LT_10S=UNPROVEN_BLOCKING
+```
+
+No real GitHub delivery may be used for the initial synthetic theorem.
+
+### 7.1 GitHub-source and request-surface restriction
+
+GitHub's current private-system webhook guidance recommends configuring the reverse proxy so that it forwards only HTTPS `POST` requests from the GitHub `hooks` IP ranges returned by `GET /meta`.
+
+No current evidence proves that a user of the hosted zrokNET free public frontend can enforce that source-IP restriction at the public frontdoor. No current evidence also proves that original client IP information is preserved in a trustworthy, non-spoofable form that could safely support equivalent filtering behind the zrok frontdoor.
+
+Therefore:
+
+```text
+ZROK_GITHUB_HOOKS_SOURCE_IP_RESTRICTION_CAPABILITY=UNPROVEN_BLOCKING
+ZROK_ORIGINAL_CLIENT_IP_TRUSTWORTHY_PRESERVATION=UNPROVEN_BLOCKING
+ZROK_HTTPS_POST_ONLY_FRONTDOOR_RESTRICTION=UNPROVEN_BLOCKING
+ZROK_WEBHOOK_PATH_ONLY_FRONTDOOR_RESTRICTION=UNPROVEN_BLOCKING
+```
+
+A public share that forwards arbitrary Internet methods/paths to the application cannot silently be treated as satisfying GitHub's recommended reverse-proxy hardening merely because application-level HMAC validation exists.
+
+A later proof must establish one of these outcomes:
+
+```text
+A=HOSTED_ZROK_FRONTDOOR_ENFORCES_GITHUB_HOOKS_IP_PLUS_POST_PLUS_PATH
+B=SEPARATELY_REVIEWED_COMPENSATING_FILTER_WITH_TRUSTWORTHY_SOURCE_PROVENANCE
+C=ZROK_REJECTED_FOR_THIS_HIGH_ASSURANCE_PILOT
+```
+
+If source provenance is supplied through a forwarded header, the proof must establish that the hosted frontdoor overwrites/sanitizes the header and that an arbitrary Internet client cannot spoof the trusted source value. HMAC remains mandatory in every case and is never replaced by IP filtering.
 
 ## 8. Secret boundary
 
@@ -208,6 +245,7 @@ POSTGRES_PUBLIC_BIND_REQUIRED=NO
 THIRD_PARTY_INGRESS_DEPENDENCY=YES
 EXTERNAL_FRONTDOOR_TERMINATION=YES
 FREE_SLA=NO
+GITHUB_HOOKS_SOURCE_IP_FRONTDOOR_FILTER=UNPROVEN_BLOCKING
 ```
 
 ### Candidate B — DuckDNS + Caddy direct founder-host
@@ -222,9 +260,10 @@ POSTGRES_PUBLIC_BIND_REQUIRED=NO
 THIRD_PARTY_DNS_CA_DEPENDENCY=YES
 TLS_TERMINATION_ON_FOUNDER_HOST=YES
 FREE_SLA=NO
+GITHUB_HOOKS_SOURCE_IP_FILTER=CONFIGURABLE_IN_PRINCIPLE_PROOF_REQUIRED
 ```
 
-Both preserve the existing Go app and local PostgreSQL architecture in principle. zrok has the smaller founder-network exposure and avoids the CGNAT/router-port dependency, while direct Caddy reduces reliance on a hosted ingress frontdoor and keeps TLS termination on the founder host.
+Both preserve the existing Go app and local PostgreSQL architecture in principle. zrok has the smaller founder-network exposure and avoids the CGNAT/router-port dependency, while direct Caddy reduces reliance on a hosted ingress frontdoor and keeps TLS termination and request filtering under founder control.
 
 ## 11. Repaired finalist set
 
@@ -242,7 +281,7 @@ FINALIST_B_STATUS=NETWORK_PROOF_REQUIRED
 INGRESS_SELECTED_FOR_EXECUTION=NO
 ```
 
-The preferred **first proof target** is zrok, because a successful result would preserve loopback-only app hosting without opening router/firewall ingress or exposing the founder public IP through project DNS.
+The preferred **first proof target** is zrok because a successful result could preserve loopback-only app hosting without opening router/firewall ingress or exposing the founder public IP through project DNS. This proof-order preference remains conditional on satisfying the GitHub-source/request-surface hardening gate above.
 
 ```text
 FIRST_PROOF_TARGET=ZROKNET_FREE_PUBLIC_SHARE
@@ -252,27 +291,32 @@ FIRST_PROOF_TARGET_EXECUTION_AUTHORIZED=NO
 
 This preference is a proof-order decision only, not a final ingress selection.
 
-## 12. Required zrok compatibility gates
+## 12. Current zrok compatibility-gate state
 
-Before zrok may be selected:
+The following block records **current state**, not desired future results:
 
 ```text
 ZROK_FREE_COST_USD=0
 ZROK_PAYMENT_METHOD_REQUIRED=NO
-ZROK_NO_PAID_INTERSTITIAL_BYPASS=PASS
-ZROK_WINDOWS_CLIENT=PASS
-ZROK_PINNED_V2_RELEASE=PASS
-ZROK_PINNED_BINARY_SHA256=PASS
-ZROK_STABLE_RESERVED_NAME_V2=PASS
-ZROK_HOSTED_RESERVED_NAME_PERSISTENCE=PASS
-ZROK_GITHUB_HOOKSHOT_INTERSTITIAL_BYPASS=PASS
-ZROK_RAW_BODY_PRESERVATION=PASS
-ZROK_CRITICAL_GITHUB_HEADER_PRESERVATION=PASS
-ZROK_RESPONSE_DEADLINE_LT_10S=PASS
-ZROK_APP_LOOPBACK_ONLY=PASS
-ZROK_POSTGRES_NONPUBLIC=PASS
-ZROK_TOKEN_SECRET_BOUNDARY=PASS
-ZROK_DAILY_DATA_BUDGET_WITHIN_5_GB=PASS
+ZROK_PAID_INTERSTITIAL_BYPASS_ALLOWED=NO
+
+ZROK_WINDOWS_V2_ARTIFACT_PROVEN=UNPROVEN_BLOCKING
+ZROK_EXECUTION_RELEASE_PIN=UNPROVEN_BLOCKING
+ZROK_PINNED_BINARY_SHA256=UNPROVEN_BLOCKING
+ZROK_STABLE_RESERVED_NAME_V2_UPSTREAM_CAPABILITY=DOCUMENTED
+ZROK_HOSTED_RESERVED_NAME_PERSISTENCE=UNPROVEN_BLOCKING
+ZROK_GITHUB_HOOKSHOT_INTERSTITIAL_BYPASS=UNPROVEN_BLOCKING
+ZROK_RAW_BODY_PRESERVATION=UNPROVEN_BLOCKING
+ZROK_CRITICAL_GITHUB_HEADER_PRESERVATION=UNPROVEN_BLOCKING
+ZROK_GITHUB_HOOKS_SOURCE_IP_RESTRICTION_CAPABILITY=UNPROVEN_BLOCKING
+ZROK_ORIGINAL_CLIENT_IP_TRUSTWORTHY_PRESERVATION=UNPROVEN_BLOCKING
+ZROK_HTTPS_POST_ONLY_FRONTDOOR_RESTRICTION=UNPROVEN_BLOCKING
+ZROK_WEBHOOK_PATH_ONLY_FRONTDOOR_RESTRICTION=UNPROVEN_BLOCKING
+ZROK_RESPONSE_DEADLINE_LT_10S=UNPROVEN_BLOCKING
+ZROK_APP_LOOPBACK_ONLY=REQUIRED_NOT_EXECUTED
+ZROK_POSTGRES_NONPUBLIC=REQUIRED_NOT_EXECUTED
+ZROK_TOKEN_SECRET_BOUNDARY=UNPROVEN_BLOCKING
+ZROK_DAILY_DATA_BUDGET_WITHIN_5_GB=UNPROVEN_BLOCKING
 ZROK_PRODUCTION_EQUIVALENCE=NO
 ```
 
@@ -292,8 +336,11 @@ That next authorization must itself separate mutation levels. Before any account
 6. synthetic-only public ingress test data;
 7. exact raw-body/header preservation assertions;
 8. interstitial-bypass assertion for a `GitHub-Hookshot/` User-Agent without payment-card verification;
-9. `<10s` response-budget measurement;
-10. cleanup/revocation procedure that removes shares/names/environment authority.
+9. GitHub `hooks` source-IP restriction capability or an explicitly reviewed trustworthy compensating filter;
+10. HTTPS-POST-only and webhook-path-only request-surface restriction capability;
+11. `<10s` response-budget measurement;
+12. 5 GB/day bounded-data budget;
+13. cleanup/revocation procedure that removes shares/names/environment authority.
 
 This repair does **not** authorize those actions.
 
@@ -343,6 +390,7 @@ Public primary/upstream sources reviewed on 2026-08-22:
 - GitHub webhook headers/events: `https://docs.github.com/en/webhooks/webhook-events-and-payloads`
 - GitHub failed deliveries: `https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries`
 - GitHub webhook troubleshooting: `https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/troubleshooting-webhooks`
+- GitHub meta/IP ranges: `https://api.github.com/meta`
 - zrok pricing: `https://zrok.io/pricing/`
 - zrok homepage: `https://zrok.io/`
 - zrok/OpenZiti interstitial explanation: `https://blog.openziti.io/zrok-is-growing-up`
