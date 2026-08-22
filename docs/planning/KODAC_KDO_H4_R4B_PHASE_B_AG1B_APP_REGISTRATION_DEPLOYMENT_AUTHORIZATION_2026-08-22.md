@@ -328,17 +328,24 @@ Required proof:
 CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT
 CLOUD_RUN_REVISION_SERVICE_ACCOUNT
 CLOUD_RUN_REVISION_SERVICE_ACCOUNT_MATCH=PASS
+GCP_PROJECT_PARENT_RESOURCE
+GCP_RESOURCE_ANCESTRY_CANONICAL_SHA256
 RUNTIME_PROJECT_IAM_POLICY_CANONICAL_SHA256
 RUNTIME_PROJECT_IAM_REQUIRED_ROLE_SET=["roles/cloudsql.client"]
 RUNTIME_PROJECT_IAM_EXCESS_ROLE_COUNT=0
+RUNTIME_INHERITED_IAM_BINDINGS_CANONICAL_SHA256
+RUNTIME_INHERITED_UNAUTHORIZED_BINDING_COUNT=0
+RUNTIME_EFFECTIVE_PROJECT_ROLE_SET_SHA256
+RUNTIME_EFFECTIVE_PROJECT_ROLE_SET_MATCH=PASS
 SECRET_APP_PRIVATE_KEY_IAM_POLICY_SHA256
 SECRET_WEBHOOK_SECRET_IAM_POLICY_SHA256
 SECRET_DATABASE_DSN_IAM_POLICY_SHA256
 RUNTIME_SECRET_ACCESS_BINDINGS_MATCH=PASS
+RUNTIME_EFFECTIVE_IAM_VERIFICATION=PASS
 RUNTIME_SERVICE_ACCOUNT_ARTIFACT_REGISTRY_ACCESS=NO
 ```
 
-Proof must inspect both project-level IAM and each exact secret-resource IAM policy. Deployment/admin principals and Google-managed service agents remain distinct from the runtime identity.
+Proof must inspect the project policy, every organization/folder ancestor allow policy that can be inherited by the project, and each exact secret-resource policy. The effective role set for the runtime service account at project scope must contain no role beyond the authorized Cloud SQL role, and inherited ancestry must not grant additional access. The exact secret resources may additionally grant only the intended Secret Manager accessor binding. If ancestry cannot be enumerated with sufficient authority, or effective access cannot be proven, AG1-B fails closed. Deployment/admin principals and Google-managed service agents remain distinct from the runtime identity.
 
 ---
 
@@ -586,12 +593,16 @@ Primary references:
 
 ## 17. Database ownership, ACL, and role-membership theorem
 
-Migration/administrative identity and runtime identity must be different:
+Migration/administrative identity, runtime login user, and runtime privilege role must be explicitly bound:
 
 ```text
 STORE_MIGRATION_ROLE_IDENTITY=kodac_phase_b_gate_migrator
+STORE_RUNTIME_USER_IDENTITY=kodac_phase_b_gate_runtime
 STORE_RUNTIME_ROLE_IDENTITY=kodac_phase_b_gate_runtime_role
 STORE_MIGRATION_RUNTIME_IDENTITY_DIFFERENT=PASS
+STORE_RUNTIME_USER_ROLE_BINDING=kodac_phase_b_gate_runtime_role
+STORE_RUNTIME_USER_ROLE_BINDING_MATCH=PASS
+STORE_RUNTIME_USER_CLOUDSQLSUPERUSER_MEMBERSHIP=NO
 ```
 
 The running App identity must have exactly:
@@ -620,12 +631,17 @@ FUNCTIONS
 
 When creating a built-in Cloud SQL PostgreSQL runtime user, assign the pre-created custom runtime role during user creation so the user is not granted `cloudsqlsuperuser`.
 
-Required privilege proof must cover direct ACLs **and inherited/transitive role membership**, not behavior probes alone:
+Required privilege proof must cover the login user, direct ACLs, and inherited/transitive role membership, not behavior probes alone:
 
 ```text
 STORE_MIGRATION_ROLE_IDENTITY
+STORE_RUNTIME_USER_IDENTITY
 STORE_RUNTIME_ROLE_IDENTITY
 STORE_MIGRATION_RUNTIME_IDENTITY_DIFFERENT=PASS
+STORE_RUNTIME_USER_ROLE_BINDING_MATCH=PASS
+STORE_RUNTIME_USER_CLOUDSQLSUPERUSER_MEMBERSHIP=NO
+STORE_RUNTIME_USER_MEMBERSHIP_CLOSURE_SHA256
+STORE_RUNTIME_USER_UNAUTHORIZED_MEMBERSHIP_COUNT=0
 STORE_RUNTIME_DIRECT_ACL_SHA256
 STORE_RUNTIME_ROLE_MEMBERSHIP_CLOSURE_SHA256
 STORE_RUNTIME_UNAUTHORIZED_MEMBERSHIP_COUNT=0
@@ -669,7 +685,21 @@ No ad-hoc DDL outside the canonical migration and the minimum database/role boot
 
 ---
 
-## 19. Required live store probes
+## 19. DATABASE_DSN identity-binding proof and live store probes
+
+Before any live store probe, parse `DATABASE_DSN` inside the trusted deployment/preflight process without printing or persisting the raw DSN. Record only redacted identity fields and boolean match results:
+
+```text
+STORE_DSN_SOCKET_PATH_REDACTED=/cloudsql/<STORE_CLUSTER_OR_SERVICE_IDENTITY>
+STORE_DSN_SOCKET_MATCH=PASS
+STORE_DSN_DATABASE_REDACTED=kodac_phase_b_gate
+STORE_DSN_DATABASE_MATCH=PASS
+STORE_DSN_USER_REDACTED=kodac_phase_b_gate_runtime
+STORE_DSN_USER_MATCH=PASS
+STORE_DSN_CREDENTIALS_REDACTED=YES
+```
+
+The parsed socket must equal the exact Cloud SQL attachment identity already proven for the Cloud Run revision, the parsed database must equal `STORE_DATABASE_NAME`, and the parsed user must equal `STORE_RUNTIME_USER_IDENTITY`. Raw DSN text, password material, and credential-derived hashes are forbidden from evidence. Any mismatch fails closed before probes.
 
 Before AG1-B can be proven complete:
 
@@ -768,9 +798,16 @@ CLOUD_RUN_REVISION_SERVICE_ACCOUNT
 CLOUD_RUN_REVISION_SERVICE_ACCOUNT_MATCH
 CLOUD_RUN_CLOUD_SQL_INSTANCE_CONNECTION_NAME
 CLOUD_RUN_CLOUD_SQL_ATTACHMENT_MATCH
+GCP_PROJECT_PARENT_RESOURCE
+GCP_RESOURCE_ANCESTRY_CANONICAL_SHA256
 RUNTIME_PROJECT_IAM_POLICY_CANONICAL_SHA256
 RUNTIME_PROJECT_IAM_EXCESS_ROLE_COUNT
+RUNTIME_INHERITED_IAM_BINDINGS_CANONICAL_SHA256
+RUNTIME_INHERITED_UNAUTHORIZED_BINDING_COUNT
+RUNTIME_EFFECTIVE_PROJECT_ROLE_SET_SHA256
+RUNTIME_EFFECTIVE_PROJECT_ROLE_SET_MATCH
 RUNTIME_SECRET_ACCESS_BINDINGS_MATCH
+RUNTIME_EFFECTIVE_IAM_VERIFICATION
 
 SECRET_INJECTION_MODE
 SECRET_RESOURCE_NAME
@@ -786,8 +823,21 @@ STORE_MIGRATION_SOURCE_PROVENANCE
 STORE_MIGRATION_EXACT_REVISION
 STORE_SCHEMA_SHA256
 STORE_MIGRATION_ROLE_IDENTITY
+STORE_RUNTIME_USER_IDENTITY
 STORE_RUNTIME_ROLE_IDENTITY
 STORE_MIGRATION_RUNTIME_IDENTITY_DIFFERENT
+STORE_RUNTIME_USER_ROLE_BINDING
+STORE_RUNTIME_USER_ROLE_BINDING_MATCH
+STORE_RUNTIME_USER_CLOUDSQLSUPERUSER_MEMBERSHIP
+STORE_RUNTIME_USER_MEMBERSHIP_CLOSURE_SHA256
+STORE_RUNTIME_USER_UNAUTHORIZED_MEMBERSHIP_COUNT
+STORE_DSN_SOCKET_PATH_REDACTED
+STORE_DSN_SOCKET_MATCH
+STORE_DSN_DATABASE_REDACTED
+STORE_DSN_DATABASE_MATCH
+STORE_DSN_USER_REDACTED
+STORE_DSN_USER_MATCH
+STORE_DSN_CREDENTIALS_REDACTED
 STORE_RUNTIME_DIRECT_ACL_SHA256
 STORE_RUNTIME_ROLE_MEMBERSHIP_CLOSURE_SHA256
 STORE_RUNTIME_UNAUTHORIZED_MEMBERSHIP_COUNT
@@ -831,9 +881,9 @@ B10 install App on exactly TheHalfMoon/Kodac while webhook remains inactive
 B11 build exact linux/amd64 binary and OCI image; verify image platform
 B12 push image and capture Artifact Registry digest
 B13 deploy Cloud Run by exact digest, exact runtime SA, exact Cloud SQL attachment, and numeric secret versions
-B14 prove /healthz, revision/image/platform/runtime-SA/Cloud-SQL attachment, and IAM/secret bindings
+B14 prove /healthz, revision/image/platform/runtime-SA/Cloud-SQL attachment, effective ancestry-aware IAM, and secret bindings
 B15 configure exact GitHub webhook URL while webhook remains inactive; record URL match; leave secret-binding probe deferred
-B16 run database privilege/ACL/membership/ownership/append-only probes
+B16 parse DATABASE_DSN without disclosure; prove exact socket/database/runtime-user binding; prove runtime-user role/no-cloudsqlsuperuser state; then run database privilege/ACL/membership/ownership/append-only probes
 B17 capture sanitized registration/deployment/store evidence
 B18 stop with webhook inactive, secret-binding activation gate blocked, and AG1-C/AG2 still blocked
 ```
@@ -888,6 +938,9 @@ AG1B-R05_GITHUB_APP_VISIBILITY_AUTH_SETTINGS_BOUND=PASS
 AG1B-R06_WEBHOOK_URL_BOUND_AND_SECRET_PROOF_FAIL_CLOSED=PASS
 AG1B-R07_WEBHOOK_INACTIVE_DURING_INSTALLATION=PASS
 AG1B-R08_DB_ACL_MEMBERSHIP_OWNERSHIP_PROOF_BOUND=PASS
+AG1B-R09_EFFECTIVE_IAM_ANCESTRY_PROOF_BOUND=PASS
+AG1B-R10_RUNTIME_DB_USER_ROLE_BINDING_PROOF_BOUND=PASS
+AG1B-R11_DSN_SOCKET_DATABASE_USER_BINDING_PROOF_BOUND=PASS
 ```
 
 ---
