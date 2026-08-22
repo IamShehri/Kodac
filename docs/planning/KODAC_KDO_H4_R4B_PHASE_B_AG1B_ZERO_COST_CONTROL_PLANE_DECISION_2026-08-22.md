@@ -39,6 +39,8 @@ APP_BUILD_GOOS=linux
 APP_BUILD_GOARCH=amd64
 APP_BUILD_CGO_ENABLED=0
 
+KODAC_GITHUB_OWNER=TheHalfMoon
+KODAC_GITHUB_OWNER_TYPE=User
 KODAC_LICENSE_PATH=LICENSE
 KODAC_LICENSE=Apache-2.0
 KODAC_LICENSE_BLOB_SHA=261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64
@@ -210,34 +212,37 @@ TAILSCALE_PERSONAL_SELECTION_AUTHORIZED=NO
 
 No inference about KODAC's commercial or non-commercial status may be made merely from the repository being public or open source.
 
-#### Community on GitHub candidate
+#### Community on GitHub ineligibility under current ownership
 
-Tailscale separately documents a `Community on GitHub` free plan for a GitHub organization using Tailscale for an open-source project with an OSI-approved license. It requires GitHub authentication and cannot be self-enrolled from the normal Billing page; Tailscale directs users to contact Support for the plan.
+Tailscale separately documents a `Community on GitHub` free plan for a **GitHub organization** using Tailscale for an open-source project with an OSI-approved license. It requires GitHub authentication and Tailscale Support involvement.
 
-KODAC currently carries Apache License 2.0, an OSI-approved license. That proves the repository-license prerequisite only; it does not prove Tailscale has accepted or enrolled this project.
+KODAC carries Apache License 2.0, satisfying the OSI-license prerequisite, but the canonical repository owner `TheHalfMoon` is a GitHub **User**, not a GitHub Organization. Therefore the documented organization prerequisite is not met by the current repository topology.
 
 ```text
-TAILSCALE_COMMUNITY_ON_GITHUB_CANDIDATE=YES
-TAILSCALE_COMMUNITY_GITHUB_ORG=TheHalfMoon
-TAILSCALE_COMMUNITY_PROJECT=TheHalfMoon/Kodac
+TAILSCALE_COMMUNITY_ON_GITHUB_DOCUMENTED=YES
+TAILSCALE_COMMUNITY_REQUIRES_GITHUB_ORGANIZATION=YES
+TAILSCALE_COMMUNITY_CURRENT_OWNER=TheHalfMoon
+TAILSCALE_COMMUNITY_CURRENT_OWNER_TYPE=User
 TAILSCALE_COMMUNITY_LICENSE=Apache-2.0
 TAILSCALE_COMMUNITY_OSI_LICENSE_PREREQUISITE=PASS
-TAILSCALE_COMMUNITY_GITHUB_AUTH_REQUIRED=YES
-TAILSCALE_COMMUNITY_SUPPORT_CONTACT_REQUIRED=YES
-TAILSCALE_COMMUNITY_ENROLLMENT=UNPROVEN
+TAILSCALE_COMMUNITY_GITHUB_ORGANIZATION_PREREQUISITE=FAIL
+TAILSCALE_COMMUNITY_ELIGIBILITY=CURRENTLY_INELIGIBLE
 TAILSCALE_COMMUNITY_SELECTION_AUTHORIZED=NO
 ```
 
-Because both zero-cost eligibility paths are currently unproven, Tailscale remains a **conditional ingress candidate**, not an executable zero-cost selection.
+Creating a GitHub organization, transferring the repository, or changing repository ownership merely to obtain a free service plan is outside this decision and is not authorized.
+
+Because the Community path fails under current repository ownership and Personal eligibility is unproven, Tailscale remains a **conditional ingress candidate**, not an executable zero-cost selection.
 
 ```text
 TAILSCALE_ZERO_COST_PLAN_ELIGIBILITY=UNPROVEN_BLOCKING
+TAILSCALE_ZERO_COST_ELIGIBLE_PATH_COUNT=0
 TAILSCALE_FUNNEL_ZERO_COST_SELECTION=CONDITIONAL
-IF_ZERO_COST_ELIGIBILITY_NOT_PROVEN=REJECT_TAILSCALE
+IF_PERSONAL_NONCOMMERCIAL_ELIGIBILITY_NOT_PROVEN=REJECT_TAILSCALE
 PAID_TAILSCALE_FALLBACK=FORBIDDEN
 ```
 
-Because Funnel remains Beta and the origin remains founder-hosted, even a successfully proven free-plan path authorizes only a bounded pilot, never production-equivalent infrastructure.
+Because Funnel remains Beta and the origin remains founder-hosted, even a successfully proven Personal-plan path authorizes only a bounded pilot, never production-equivalent infrastructure.
 
 ---
 
@@ -258,7 +263,7 @@ AG1B_ZERO_COST_PRODUCTION_EQUIVALENCE=NO
 AG1B_ZERO_COST_H4_CLOSURE_AUTHORITY=NO
 ```
 
-Target topology applies only after a zero-cost Tailscale plan is proven eligible and all other blockers are separately repaired:
+Target topology applies only after Personal-plan non-commercial eligibility is proven and all other blockers are separately repaired:
 
 ```text
 GitHub App webhook
@@ -291,34 +296,27 @@ The PostgreSQL container must not publish port 5432 to the LAN or public Interne
 
 ## 7. Blocking control ZC0-E01 — zero-cost plan eligibility
 
-No Tailscale account, installation, Funnel, or external endpoint may be created under this decision until a later execution authorization and non-secret evidence establish one eligible zero-cost path.
+No Tailscale account, installation, Funnel, or external endpoint may be created under this decision until a later execution authorization and non-secret evidence establish Personal-plan non-commercial eligibility for the intended pilot use.
 
-Accepted eligibility paths are:
-
-```text
-PATH_A=TAILSCALE_PERSONAL_NONCOMMERCIAL_ELIGIBILITY_PROVEN
-PATH_B=TAILSCALE_COMMUNITY_ON_GITHUB_ENROLLMENT_PROVEN
-```
-
-Fail-closed theorem:
+Current eligibility theorem:
 
 ```text
 ZC0_E01_ZERO_COST_PLAN_ELIGIBILITY=BLOCKING
 TAILSCALE_PERSONAL_ELIGIBILITY_PROOF=ABSENT
-TAILSCALE_COMMUNITY_ENROLLMENT_PROOF=ABSENT
+TAILSCALE_COMMUNITY_PATH=CURRENTLY_INELIGIBLE_OWNER_NOT_ORGANIZATION
 ZERO_COST_ELIGIBLE_PATH_COUNT=0
 TAILSCALE_INSTALLATION_ALLOWED=NO
 TAILSCALE_FUNNEL_ALLOWED=NO
 PAID_PLAN_ALLOWED=NO
 ```
 
-A future eligibility proof must contain no billing credentials or sensitive account tokens. If no eligible zero-cost path can be proven, the Tailscale candidate is rejected and the architecture returns to `ZERO_COST_INGRESS=UNSELECTED`; the hard `$0` constraint is not relaxed automatically.
+A future eligibility proof must contain no billing credentials or sensitive account tokens. If Personal-plan non-commercial eligibility cannot be proven, the Tailscale candidate is rejected and the architecture returns to `ZERO_COST_INGRESS=UNSELECTED`; the hard `$0` constraint is not relaxed automatically.
 
 ---
 
 ## 8. Blocking control ZC0-S01 — secret delivery
 
-The selected pilot MUST NOT use real GitHub App, webhook, or database secrets while the application only accepts direct secret values through container/process environment configuration.
+The candidate pilot MUST NOT use real GitHub App, webhook, or database secrets while the application only accepts direct secret values through container/process environment configuration.
 
 ```text
 ZC0_S01_SECRET_DELIVERY=BLOCKING
@@ -413,12 +411,12 @@ This decision does not execute the following steps. If all blockers become canon
 
 ```text
 Z0  reverify exact Kodac and App source heads
-Z1  prove one eligible zero-cost Tailscale plan path; otherwise reject Tailscale
+Z1  prove Tailscale Personal non-commercial eligibility; otherwise reject Tailscale
 Z2  prove canonical packaging
 Z3  prove file-backed secret delivery
 Z4  prove persistent PostgreSQL 16 volume and recovery
 Z5  prove exact runtime DB role theorem on persistent store
-Z6  install/configure Tailscale under the proven zero-cost plan without billing credentials
+Z6  install/configure Tailscale under the proven zero-cost Personal plan without billing credentials
 Z7  establish stable Funnel hostname with synthetic local service only
 Z8  prove /healthz exact response through Funnel
 Z9  prove host restart / Funnel --bg recovery with synthetic service
@@ -440,6 +438,9 @@ No step may be skipped or reordered merely because the underlying software is fr
 Merging this decision alone does NOT authorize:
 
 ```text
+GITHUB_ORGANIZATION_CREATION=NO
+REPOSITORY_TRANSFER=NO
+REPOSITORY_OWNERSHIP_CHANGE=NO
 TAILSCALE_ACCOUNT_CREATION=NO
 TAILSCALE_PLAN_ENROLLMENT=NO
 TAILSCALE_SUPPORT_CONTACT=NO
@@ -503,7 +504,7 @@ The existing Google Cloud AG1-B authorization remains historical/canonical but i
 
 ## 15. Primary-source research record
 
-Research verified on 2026-08-22 against current primary documentation:
+Research verified on 2026-08-22 against current primary documentation and live GitHub repository metadata:
 
 - GitHub webhook timeout and failed-delivery behavior: https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/troubleshooting-webhooks and https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries
 - Tailscale Funnel behavior/limits: https://tailscale.com/docs/features/tailscale-funnel and https://tailscale.com/docs/reference/tailscale-cli/funnel
@@ -514,4 +515,5 @@ Research verified on 2026-08-22 against current primary documentation:
 - Cloudflare Tunnel and Quick Tunnel limitations: https://developers.cloudflare.com/tunnel/ and https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/
 - Cloudflare Containers pricing: https://developers.cloudflare.com/containers/pricing/
 - ngrok current Free-plan limits: https://ngrok.com/pricing
+- KODAC repository owner type: live GitHub metadata for `TheHalfMoon/Kodac` reports owner `TheHalfMoon` with `type=User`.
 - KODAC repository license proof: canonical `LICENSE` blob `261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64` (Apache-2.0).
