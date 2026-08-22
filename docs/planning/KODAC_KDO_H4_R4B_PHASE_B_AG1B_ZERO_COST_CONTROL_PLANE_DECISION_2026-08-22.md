@@ -454,22 +454,30 @@ W01A does **not** prove supported-event runtime latency.
 
 Use an ephemeral synthetic-only harness built from the pinned App source. The harness must instantiate the exact `server.Server.Handler()` and a synthetic-only `Processor` backed by the real `store.Postgres` adapter and a dedicated probe PostgreSQL 16 database/schema derived from the canonical migration and restricted runtime role.
 
+The synthetic Processor must call `store.Process` with a **non-nil ReceiptBuilder** that deterministically produces the same canonical synthetic receipt for cases intended to share receipt identity. The harness must validate both delivery-table persistence and receipt-table persistence; a delivery-only proof is insufficient.
+
 It must not call GitHub API, create check runs, receive a real GitHub delivery, or write to the authoritative pilot receipt store.
 
 Required replay/collision matrix:
 
 ```text
+ZC0_W01B_RECEIPT_BUILDER_NON_NIL=PASS
+
 FIRST_DELIVERY_GUID=probe-guid-a
 FIRST_DELIVERY_BODY_SHA256=<sha256-a>
 FIRST_DELIVERY_SIGNATURE_VALID=YES
 FIRST_DELIVERY_HTTP_STATUS=202
 FIRST_DELIVERY_STORE_OUTCOME=PROCESSED
+FIRST_DELIVERY_DELIVERY_ROW_COUNT=1
+FIRST_DELIVERY_RECEIPT_ROW_COUNT=1
 
 SAME_GUID_SAME_BYTES_GUID=probe-guid-a
 SAME_GUID_SAME_BYTES_BODY_SHA256=<sha256-a>
 SAME_GUID_SAME_BYTES_SIGNATURE_VALID=YES
 SAME_GUID_SAME_BYTES_HTTP_STATUS=202
 SAME_GUID_SAME_BYTES_STORE_OUTCOME=DUPLICATE
+SAME_GUID_SAME_BYTES_DELIVERY_ROW_COUNT=1
+SAME_GUID_SAME_BYTES_RECEIPT_ROW_COUNT=1
 
 DIFFERENT_GUID_SAME_BYTES_GUID=probe-guid-b
 DIFFERENT_GUID_SAME_BYTES_BODY_SHA256=<sha256-a>
@@ -486,6 +494,8 @@ SAME_GUID_DIFFERENT_BYTES_SIGNATURE_VALID=YES
 SAME_GUID_DIFFERENT_BYTES_HTTP_STATUS=500
 SAME_GUID_DIFFERENT_BYTES_STORE_OUTCOME=ERR_FATAL_SECURITY
 SAME_GUID_DIFFERENT_BYTES_TRANSACTION_ROLLBACK=PASS
+SAME_GUID_DIFFERENT_BYTES_DELIVERY_ROW_COUNT=1
+SAME_GUID_DIFFERENT_BYTES_RECEIPT_ROW_COUNT=1
 SAME_GUID_DIFFERENT_BYTES_ORIGINAL_DELIVERY_PRESERVED=PASS
 SAME_GUID_DIFFERENT_BYTES_ORIGINAL_RECEIPT_PRESERVED=PASS
 
