@@ -1,14 +1,14 @@
 # KODAC KDO H4-R4B Phase-B AG1-B — Zero-Cost Control-Plane Decision
 
-Date: 2026-08-22
-Status: **DECISION CANDIDATE — DOCS ONLY — NO EXTERNAL RESOURCE CREATION — NO PRODUCTION EXECUTION**
+Date: 2026-08-22  
+Status: **DECISION CANDIDATE — DOCS ONLY — NO EXTERNAL RESOURCE CREATION — NO PRODUCTION EXECUTION**  
 Repository: `TheHalfMoon/Kodac`
 
 ## 1. Purpose
 
 Define a fail-closed response to the founder constraint that Phase-B infrastructure must incur no new provider or cloud spend.
 
-This decision does not silently replace the canonical AG1-B Google Cloud authorization. It separates a zero-cost founder-hosted pilot from production-grade execution and prevents any provider, GitHub App, secret, or deployment mutation until the remaining blockers are repaired and reviewed.
+This decision does not silently replace the canonical AG1-B Google Cloud authorization. It separates a bounded zero-cost founder-hosted pilot from production-grade execution and prevents provider, GitHub App, secret, webhook, or deployment mutation until the relevant predecessor controls are separately proven and authorized.
 
 ```text
 NEW_PROVIDER_SPEND_USD=0.00
@@ -16,10 +16,12 @@ NEW_PAID_SUBSCRIPTION=NO
 NEW_DOMAIN_PURCHASE=NO
 CREDIT_BASED_HOSTING_AS_ZERO_COST=FORBIDDEN
 BILLING_ENABLED_RESOURCE_AS_ZERO_COST=FORBIDDEN
+PAID_FALLBACK_IF_FREE_ELIGIBILITY_FAILS=FORBIDDEN
 PRODUCTION_EQUIVALENCE_OF_FREE_PILOT=NO
+H4_CLOSURE_AUTHORITY=NO
 ```
 
-Existing founder-owned hardware, electricity, and Internet access are outside the provider-spend accounting boundary; this document makes no claim that those physical resources have zero economic cost.
+Existing founder-owned hardware, electricity, and Internet access are outside the provider-spend accounting boundary. This document makes no claim that those physical resources have zero economic cost.
 
 ---
 
@@ -34,6 +36,12 @@ AG1B_R12_HEALTH_PROOF_CONTRACT_REPAIR=CANONICAL
 APP_SOURCE_REPOSITORY=TheHalfMoon/kodac-phase-b-gate
 APP_SOURCE_CANONICAL_MAIN=79a5e3a5c3b0f4882e8c9c864e314c0fab3c9a40
 APP_SOURCE_CANONICAL_TREE=56350e47a524d5d1a798559259f4f2f4800a513f
+APP_SERVER_BLOB=352b342f859d22ad982f3e38736469198af41e1d
+APP_STORE_BLOB=e8100ef06d67d5e82c5a0e4c90a0af7682579aba
+APP_GITHUBAPI_BLOB=0fafdb97aa200b2dd896a2d6284e96f0fd1044d7
+APP_CONFIG_BLOB=fab8515ff8e9897f68b923443021275a6ed23b87
+APP_WEBHOOK_BLOB=77da1b32520ea265df627f4b97a7e5db514ced76
+
 APP_BUILD_GO_VERSION=go1.26.6
 APP_BUILD_GOOS=linux
 APP_BUILD_GOARCH=amd64
@@ -41,18 +49,16 @@ APP_BUILD_CGO_ENABLED=0
 
 KODAC_GITHUB_OWNER=TheHalfMoon
 KODAC_GITHUB_OWNER_TYPE=User
-KODAC_LICENSE_PATH=LICENSE
 KODAC_LICENSE=Apache-2.0
-KODAC_LICENSE_BLOB_SHA=261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64
 ```
 
-The canonical App source still consumes `DATABASE_DSN`, `WEBHOOK_SECRET`, and `APP_PRIVATE_KEY_PEM` as secret values in process configuration. No file-based secret source is currently implemented.
+The canonical App source still consumes `DATABASE_DSN`, `WEBHOOK_SECRET`, and `APP_PRIVATE_KEY_PEM` as direct process configuration values. No file-backed secret input is canonical yet.
 
 ---
 
-## 3. Non-production evidence already observed
+## 3. Non-authoritative local evidence already observed
 
-Founder-local rehearsal has produced the following non-authoritative evidence against the pinned App source:
+Earlier founder-local rehearsal established local feasibility only:
 
 ```text
 LOCAL_POSTGRESQL_MAJOR=16
@@ -72,13 +78,11 @@ LOCAL_REAL_STORE_RECEIPT_COLLISION_FATAL=PASS
 LOCAL_REAL_STORE_COLLISION_ROLLBACK=PASS
 ```
 
-These observations prove local feasibility only. They do not satisfy provider-specific, production, secret-binding, public-ingress, uptime, plan-eligibility, end-to-end webhook, or H4 closure requirements.
+These observations do not prove plan eligibility, public ingress, real secret handling, durable recovery, supported-event response time, production availability, or H4 completion.
 
 ---
 
-## 4. Hard external requirements
-
-Any zero-cost candidate must preserve all of the following unless a separately reviewed amendment explicitly changes one:
+## 4. Hard requirements preserved by this decision
 
 ```text
 CURRENT_APP_SOURCE_CHANGED_BY_THIS_DECISION=NO
@@ -103,16 +107,15 @@ APP_PRIVATE_KEY_SECRET_BOUNDARY=REQUIRED
 WEBHOOK_SECRET_BOUNDARY=REQUIRED
 DATABASE_CREDENTIAL_SECRET_BOUNDARY=REQUIRED
 ZERO_COST_PLAN_ELIGIBILITY_MUST_BE_PROVEN=YES
-PAID_FALLBACK_IF_FREE_ELIGIBILITY_FAILS=FORBIDDEN
 ```
 
-GitHub does not automatically redeliver failed webhook deliveries. Therefore a sleeping or routinely unavailable endpoint cannot be treated as production-equivalent.
+GitHub does not automatically redeliver failed webhook deliveries. A sleeping or routinely unavailable endpoint therefore cannot be treated as production-equivalent.
 
 ---
 
 ## 5. Candidate assessment
 
-### 5.1 Supabase Free
+### 5.1 Supabase Free — rejected as canonical receipt store
 
 ```text
 CANDIDATE=Supabase_Free
@@ -121,16 +124,9 @@ MANAGED_POSTGRES=YES
 PRODUCTION_RECEIPT_STORE=REJECT
 ```
 
-Reasons:
+Reasons: Free projects may pause after low activity; the free tier does not supply the desired production backup guarantees; and the previously observed founder project used PostgreSQL 17.6 while this contract pins PostgreSQL major 16.
 
-1. Free projects may be paused after a low-activity period of approximately seven days.
-2. Supabase explicitly recommends upgrading for a guarantee against inactivity pausing.
-3. Free projects do not include downloadable database backups in the production checklist.
-4. The previously inspected founder project used PostgreSQL 17.6, while the KODAC contract currently pins PostgreSQL major 16.
-
-Supabase remains useful for unrelated web work, but it is not selected as the canonical Phase-B receipt store under this decision.
-
-### 5.2 Oracle Cloud Always Free Compute
+### 5.2 Oracle Cloud Always Free Compute — rejected
 
 ```text
 CANDIDATE=OCI_Always_Free_Compute
@@ -138,16 +134,9 @@ COST=0_USD_WITHIN_ALWAYS_FREE_LIMITS
 PRODUCTION_HOST=REJECT
 ```
 
-Reasons:
+Reasons: documented idle-instance reclamation risk, possible free-capacity unavailability, and architecture mismatch between the canonical `linux/amd64` build and the more capable free Ampere A1 shape. Artificial traffic to evade reclamation policy is forbidden.
 
-1. Oracle documents that idle Always Free compute instances may be reclaimed.
-2. Low-traffic webhook infrastructure is structurally likely to look idle.
-3. Always Free capacity can be unavailable in a selected availability domain.
-4. Ampere A1 is ARM while the canonical App build is currently `linux/amd64`; the free AMD micro shape is substantially smaller.
-
-No artificial load may be generated merely to evade idle-reclamation policy.
-
-### 5.3 Cloudflare Quick Tunnel
+### 5.3 Cloudflare Quick Tunnel — rejected
 
 ```text
 CANDIDATE=Cloudflare_Quick_Tunnel
@@ -156,22 +145,19 @@ STABLE_PRODUCTION_ENDPOINT=NO
 PRODUCTION_HOST=REJECT
 ```
 
-Cloudflare explicitly defines Quick Tunnels as testing/development only, assigns a random hostname, and provides no uptime guarantee.
+Quick Tunnels are development/testing surfaces with random hostnames and no production uptime guarantee. A named tunnel would still require a controlled domain/zone and a founder-hosted origin.
 
-A named Cloudflare Tunnel is technically stronger, but a stable public hostname requires a zone/domain controlled by the founder and still depends on the availability of the founder-hosted origin. It is therefore not selected as the zero-new-domain path here.
-
-### 5.4 Cloudflare Containers
+### 5.4 Cloudflare Containers — rejected by cost
 
 ```text
 CANDIDATE=Cloudflare_Containers
-RUN_EXISTING_CONTAINER=YES
 HARD_ZERO_COST=FAIL
 PRODUCTION_HOST=REJECT_FOR_THIS_CONSTRAINT
 ```
 
-Cloudflare Containers require the Workers Paid plan, whose current minimum is USD 5/month. This directly violates the hard zero-provider-spend constraint.
+The product requires a paid Workers plan and therefore violates the hard `$0` provider-spend constraint.
 
-### 5.5 ngrok Free
+### 5.5 ngrok Free — rejected
 
 ```text
 CANDIDATE=ngrok_Free
@@ -179,9 +165,9 @@ LOCAL_INGRESS=YES
 PRODUCTION_HOST=REJECT
 ```
 
-The Free plan has strict request/data limits and an HTTP/S interstitial. It is not selected for the load-bearing Phase-B webhook.
+The free plan's request/data constraints and interstitial behavior are unsuitable for this load-bearing webhook boundary.
 
-### 5.6 Tailscale Funnel
+### 5.6 Tailscale Funnel — conditional pilot candidate only
 
 ```text
 CANDIDATE=Tailscale_Funnel
@@ -195,13 +181,9 @@ NONCONFIGURABLE_BANDWIDTH_LIMITS=YES
 PRODUCTION_SLA=NOT_PROVEN
 ```
 
-Tailscale Funnel can expose a local HTTP service to the public Internet through a predictable `*.ts.net` hostname, automatically provisions HTTPS, is available on all plans, and can persist with `--bg` across service restarts when the underlying Windows Tailscale node itself is available.
+Funnel availability does not prove zero-cost-plan eligibility.
 
-Funnel availability on all plans does **not** prove that this project is eligible for a zero-cost plan. Plan eligibility is a separate blocking theorem.
-
-#### Personal plan restriction
-
-Current Tailscale documentation states that the free Personal plan is intended for personal/non-commercial use and is not intended for commercial use.
+#### Personal eligibility
 
 ```text
 TAILSCALE_PERSONAL_PLAN_COST_USD=0
@@ -210,15 +192,11 @@ TAILSCALE_PERSONAL_ELIGIBILITY_FOR_KODAC=UNPROVEN
 TAILSCALE_PERSONAL_SELECTION_AUTHORIZED=NO
 ```
 
-No inference about KODAC's commercial or non-commercial status may be made merely from the repository being public or open source.
+No commercial/non-commercial status is inferred from the repository being public or open source.
 
-#### Community on GitHub evidence status
+#### Community on GitHub eligibility
 
-Tailscale separately documents a `Community on GitHub` free plan for a **GitHub organization** using Tailscale for an open-source project with an OSI-approved license. It requires GitHub authentication and Tailscale Support involvement.
-
-KODAC carries Apache License 2.0, satisfying the OSI-license prerequisite. Live GitHub metadata reports the canonical repository owner `TheHalfMoon` as a GitHub **User**, not an Organization. That fact does not, by itself, prove Tailscale would reject every possible Community-plan arrangement, because the public Tailscale documentation does not explicitly state that the open-source repository itself must be owned by the qualifying GitHub organization.
-
-No qualifying GitHub-organization binding, Tailscale Support confirmation, or Community-plan enrollment exists in the evidence set. Therefore eligibility is **unproven**, not inferred either way.
+Tailscale documents a `Community on GitHub` free plan for a GitHub organization using Tailscale for an open-source project with an OSI-approved license. KODAC is Apache-2.0, but the current canonical repository owner is a GitHub User. Public documentation does not establish a qualifying organization binding for this repository, and no Support confirmation or enrollment is in evidence.
 
 ```text
 TAILSCALE_COMMUNITY_ON_GITHUB_DOCUMENTED=YES
@@ -234,9 +212,7 @@ TAILSCALE_COMMUNITY_ELIGIBILITY=UNPROVEN
 TAILSCALE_COMMUNITY_SELECTION_AUTHORIZED=NO
 ```
 
-Creating a GitHub organization, transferring the repository, or changing repository ownership merely to obtain a free service plan is outside this decision and is not authorized.
-
-Because both Personal and Community zero-cost eligibility are unproven, Tailscale remains a **conditional ingress candidate**, not an executable zero-cost selection.
+Creating an organization, transferring the repository, or changing ownership merely to obtain a free plan is outside this decision and is not authorized.
 
 ```text
 TAILSCALE_ZERO_COST_PLAN_ELIGIBILITY=UNPROVEN_BLOCKING
@@ -246,11 +222,11 @@ IF_ZERO_COST_ELIGIBILITY_NOT_PROVEN=REJECT_TAILSCALE
 PAID_TAILSCALE_FALLBACK=FORBIDDEN
 ```
 
-Because Funnel remains Beta and the origin remains founder-hosted, even a successfully proven zero-cost plan path authorizes only a bounded pilot, never production-equivalent infrastructure.
+Even if a zero-cost path is later proven, Funnel remains a bounded pilot surface, not production-equivalent infrastructure.
 
 ---
 
-## 6. Decision
+## 6. Conditional zero-cost pilot architecture
 
 ```text
 AG1B_ZERO_COST_DECISION=FOUNDER_HOSTED_PILOT_ARCHITECTURE_CONDITIONAL
@@ -260,8 +236,6 @@ AG1B_ZERO_COST_ORIGIN=Founder_Windows_11_Docker_Desktop_WSL2
 AG1B_ZERO_COST_DATABASE=PostgreSQL_16_Docker
 AG1B_ZERO_COST_APP=Existing_Go_Business_Logic_Preserved
 AG1B_ZERO_COST_SECRET_INPUT_EXTENSION=SEPARATELY_REVIEWED_ADDITIVE_CHANGE_ALLOWED
-AG1B_ZERO_COST_PUBLIC_IP_REQUIRED=NO
-AG1B_ZERO_COST_DOMAIN_PURCHASE_REQUIRED=NO
 AG1B_ZERO_COST_PROVIDER_BILLING_REQUIRED=NO
 AG1B_ZERO_COST_PRODUCTION_EQUIVALENCE=NO
 AG1B_ZERO_COST_H4_CLOSURE_AUTHORITY=NO
@@ -274,45 +248,39 @@ TAILSCALE_IN_DOCKER_CONTAINER=FORBIDDEN
 APP_CONTAINER_HOST_BIND=127.0.0.1_ONLY
 ```
 
-Tailscale's Windows/WSL2 guidance recommends running Tailscale on the Windows host rather than simultaneously inside WSL2. This decision therefore fixes the Windows 11 host as the single Tailscale/Funnel node. WSL2 remains the development/container shell and Docker Desktop remains the container runtime, but neither becomes a second Tailscale node.
-
-Target topology applies only after a zero-cost Tailscale plan path is proven eligible and all other blockers are separately repaired:
+Target topology, only after all blockers and a later execution authorization:
 
 ```text
-GitHub App webhook
-        |
-        | HTTPS :443
-        v
-stable <windows-node>.<tailnet>.ts.net
-        |
-        v
+GitHub webhook
+    |
+    | HTTPS :443
+    v
+<windows-node>.<tailnet>.ts.net
+    |
+    v
 Tailscale Funnel on Windows 11 host only
-        |
-        | proxy to Windows loopback
-        v
+    |
+    | Windows loopback only
+    v
 127.0.0.1:<APP_HOST_PORT>
-        |
-        | Docker Desktop host-port bridge
-        v
+    |
+    | Docker Desktop host-port bridge
+    v
 KODAC Phase-B Go container
-        |
-        | private Docker network only
-        v
+    |
+    | private Docker network only
+    v
 PostgreSQL 16 container
-        |
-        v
+    |
+    v
 persistent Docker volume
 ```
 
-The App host port must bind to `127.0.0.1` only. The PostgreSQL container must not publish port 5432 to the LAN or public Internet.
+The App host port must bind to Windows loopback only. PostgreSQL port 5432 must not be published to the LAN or public Internet.
 
 ---
 
 ## 7. Blocking control ZC0-E01 — zero-cost plan eligibility
-
-No Tailscale account, installation, Funnel, or external endpoint may be created under this decision until a later execution authorization and non-secret evidence establish at least one eligible zero-cost plan path.
-
-Current eligibility theorem:
 
 ```text
 ZC0_E01_ZERO_COST_PLAN_ELIGIBILITY=BLOCKING
@@ -326,13 +294,13 @@ TAILSCALE_FUNNEL_ALLOWED=NO
 PAID_PLAN_ALLOWED=NO
 ```
 
-A future eligibility proof must contain no billing credentials or sensitive account tokens. If no zero-cost plan path can be proven, the Tailscale candidate is rejected and the architecture returns to `ZERO_COST_INGRESS=UNSELECTED`; the hard `$0` constraint is not relaxed automatically.
+A future proof may contain no billing credential or sensitive account token. If no eligible zero-cost path is proven, Tailscale is rejected and ingress returns to `UNSELECTED`.
 
 ---
 
 ## 8. Blocking control ZC0-S01 — secret delivery
 
-The candidate pilot MUST NOT use real GitHub App, webhook, or database secrets while the application only accepts direct secret values through container/process environment configuration.
+Real secrets remain forbidden while the App accepts direct values only.
 
 ```text
 ZC0_S01_SECRET_DELIVERY=BLOCKING
@@ -341,7 +309,7 @@ REAL_WEBHOOK_SECRET_ALLOWED=NO
 REAL_DATABASE_CREDENTIAL_ALLOWED=NO
 ```
 
-A future separately reviewed App-source amendment may add file-backed secret inputs such as:
+A future separately reviewed App-source amendment may add:
 
 ```text
 APP_PRIVATE_KEY_PEM_FILE
@@ -349,7 +317,7 @@ WEBHOOK_SECRET_FILE
 DATABASE_DSN_FILE
 ```
 
-If implemented, that amendment must satisfy at least:
+Minimum theorem:
 
 ```text
 DIRECT_VALUE_AND_FILE_SOURCE_MUTUALLY_EXCLUSIVE=YES
@@ -366,15 +334,11 @@ TESTS_FOR_DUAL_SOURCE_REJECTION=YES
 TESTS_FOR_SYMLINK_REJECTION=YES
 ```
 
-The exact implementation and file-permission theorem must be reviewed in the App source repository before any real secret is loaded.
+No real secret may be loaded before that App-source amendment is canonical.
 
 ---
 
 ## 9. Blocking control ZC0-P01 — canonical packaging
-
-The zero-cost pilot may not use an ad hoc unreviewed container recipe as authoritative deployment evidence.
-
-The existing AG1-B packaging contract remains applicable: a separately reviewed App-source packaging amendment must define the exact `linux/amd64` image recipe and provenance without rewriting runtime logic.
 
 ```text
 ZC0_P01_CANONICAL_PACKAGING=BLOCKING
@@ -382,13 +346,15 @@ AD_HOC_DOCKERFILE_AS_AUTHORITY=FORBIDDEN
 APP_SOURCE_LOGIC_CHANGE_BY_PACKAGING=FORBIDDEN
 ```
 
+A separately reviewed App-source packaging amendment must define the exact `linux/amd64` image recipe and provenance while preserving runtime logic and the canonical `go1.26.6` build contract.
+
 ---
 
 ## 10. Blocking control ZC0-D01 — persistence and recovery
 
-The ephemeral `tmpfs` database used for local theorem rehearsal is not acceptable for the pilot receipt store.
+The earlier tmpfs rehearsal store is not acceptable for a pilot receipt store.
 
-Before any webhook activation, a separate non-secret proof must establish:
+Before webhook activation, later evidence must establish:
 
 ```text
 POSTGRES_DATA_STORAGE=DURABLE_LOCAL_DOCKER_VOLUME
@@ -405,9 +371,10 @@ No production durability or SLA claim may be made from a single founder workstat
 
 ---
 
-## 11. Blocking control ZC0-U01 — founder-host availability and single-node ingress boundary
+## 11. Blocking control ZC0-U01 — Windows-only Tailscale and loopback boundary
 
 ```text
+ZC0_U01_SINGLE_NODE_INGRESS_BOUNDARY=BLOCKING
 FOUNDER_HOST_POWER_DEPENDENCY=YES
 FOUNDER_HOST_INTERNET_DEPENDENCY=YES
 DOCKER_DESKTOP_DEPENDENCY=YES
@@ -417,14 +384,9 @@ NO_PROVIDER_SLA=YES
 TAILSCALE_NODE=WINDOWS_HOST_ONLY
 TAILSCALE_WSL2_NODE=FORBIDDEN
 TAILSCALE_DOCKER_NODE=FORBIDDEN
-TAILSCALE_WINDOWS_RUN_UNATTENDED_REQUIRED=YES
 ```
 
-The pilot endpoint may be used only while host availability is explicitly observed. A failed or unavailable endpoint is fail-closed and must not be reclassified as successful authority.
-
-On Windows, future pilot execution must enable and prove Tailscale's Run Unattended mode before claiming restart continuity. `tailscale funnel --bg` persists the Funnel configuration, but restart continuity is not proven unless the Windows Tailscale service/node itself returns without an interactive user login.
-
-Before creating a Funnel, a later separately authorized preflight must prove all of the following without real GitHub delivery:
+Before Funnel creation, later non-secret evidence must prove:
 
 ```text
 ZC0_U01_WINDOWS_TAILSCALE_NODE_ONLY=PASS
@@ -443,98 +405,184 @@ ZC0_U01_LOCAL_HEALTH_BODY_EXACT={"status":"live"}
 ZC0_U01_WINDOWS_LOOPBACK_TO_CONTAINER=PASS
 ```
 
-The loopback health proof must be performed from the Windows host, not only from inside WSL2 or inside the container. This proves that the exact origin address supplied to Funnel reaches the intended Docker-published App port without exposing that port on a non-loopback interface.
-
-GitHub's 10-second webhook response requirement remains load-bearing.
+`/healthz` proves liveness only; it does not prove webhook authentication, transaction behavior, or response-budget compliance.
 
 ---
 
-## 12. Blocking control ZC0-W01 — pre-activation webhook proof
+## 12. Blocking control ZC0-W01 — complete pre-activation webhook proof
 
-`/healthz` proves liveness only. It is not sufficient to authorize webhook activation.
+```text
+ZC0_W01_PRE_ACTIVATION_WEBHOOK_PROOF=BLOCKING
+REAL_GITHUB_WEBHOOK_ACTIVE_DURING_PROBE=NO
+REAL_GITHUB_WEBHOOK_DELIVERY_DURING_PROBE=NO
+REAL_GITHUB_API_NETWORK_DURING_SYNTHETIC_FIXTURE=NO
+AUTHORITATIVE_RECEIPT_STORE_USED_BY_PROBE=NO
+```
 
-Before any real GitHub webhook delivery is enabled, a later execution authorization must require a two-part synthetic proof through the selected founder-hosted topology. The real GitHub webhook remains inactive for both parts.
+The proof is deliberately split into three complementary parts. No individual part substitutes for the others.
 
-### 12.1 Exact production-binary ingress and response-budget probe
+### 12.1 W01A — exact production-binary ingress, HMAC, and basic response budget
 
-Run the exact qualified production binary/container behind the selected Funnel endpoint. Send a locally generated synthetic HMAC-signed `POST /github/webhook` over the public Funnel URL using the configured webhook-secret boundary, but choose an intentionally unsupported synthetic event/action pair so the canonical handler authenticates the raw request and returns before invoking `Processor`.
+Run the exact qualified production binary/container behind the selected Funnel endpoint. Send a locally generated synthetic HMAC-signed `POST /github/webhook` over the public Funnel URL with an intentionally unsupported event/action pair.
 
-This is load-bearing because the canonical handler performs HMAC authentication before the `webhook.Supported(...)` early return. It therefore proves public ingress, TLS termination, raw-byte HMAC validation, `X-Hub-Signature-256` handling, routing, and end-to-end response time without GitHub API calls or receipt-store mutation.
+The pinned handler authenticates the raw body before `webhook.Supported(...)`; an unsupported event therefore proves public HTTPS routing and raw-byte signature validation while returning before `Processor`, GitHub API, or database mutation.
 
 Required evidence:
 
 ```text
-ZC0_W01A_EXACT_BINARY=PASS
-ZC0_W01A_FUNNEL_HTTPS=PASS
-ZC0_W01A_GITHUB_WEBHOOK_ACTIVE=NO
+ZC0_W01A_EXACT_BINARY_MATCH=PASS
+ZC0_W01A_PUBLIC_PATH=POST /github/webhook
 ZC0_W01A_REAL_GITHUB_DELIVERY=NO
-ZC0_W01A_EVENT_SUPPORT=INTENTIONALLY_UNSUPPORTED
+ZC0_W01A_EVENT_SUPPORTED=NO
+ZC0_W01A_SIGNATURE_HEADER=X-Hub-Signature-256
+ZC0_W01A_RAW_BODY_HMAC_MATCH=PASS
+ZC0_W01A_VALID_REQUEST_HTTP_STATUS=202
+ZC0_W01A_VALID_REQUEST_ELAPSED_MS=<integer>
+ZC0_W01A_VALID_REQUEST_UNDER_10000_MS=PASS
 ZC0_W01A_PROCESSOR_CALLED=NO
-ZC0_W01A_GITHUB_API_CALLS=0
+ZC0_W01A_GITHUB_API_CALLED=NO
 ZC0_W01A_DATABASE_MUTATION=NO
-ZC0_W01A_VALID_SIGNATURE_HTTP_STATUS=202
-ZC0_W01A_VALID_SIGNATURE_ELAPSED_MS=<10000
-ZC0_W01A_VALID_SIGNATURE_RESPONSE_BUDGET=PASS
-ZC0_W01A_MUTATED_RAW_BODY_WITH_STALE_SIGNATURE_HTTP_STATUS=401
-ZC0_W01A_INVALID_SIGNATURE_PROCESSOR_CALLED=NO
-ZC0_W01A_INVALID_SIGNATURE_DATABASE_MUTATION=NO
+
+ZC0_W01A_BODY_MUTATED_AFTER_SIGNATURE=YES
+ZC0_W01A_STALE_SIGNATURE_HTTP_STATUS=401
+ZC0_W01A_STALE_SIGNATURE_PROCESSOR_CALLED=NO
 ```
 
-The probe must sign the exact raw body bytes that are transmitted. A one-byte body mutation with the original signature must fail authentication. No secret value, full request signature, private key, DSN, or raw sensitive payload may be written to evidence; record only non-secret digests, status codes, elapsed time, and booleans.
+W01A does **not** prove supported-event runtime latency.
 
-### 12.2 Exact-handler + real-Postgres synthetic transaction/replay probe
+### 12.2 W01B — exact handler + real PostgreSQL replay/collision theorem
 
-A second probe must use an ephemeral, reviewable harness compiled from the exact pinned App source revision. The harness must instantiate the canonical `server.Server.Handler()` and the real `store.Postgres` adapter, but replace the production `Runtime` processor with a synthetic-only processor whose sole action is to map the authenticated delivery to `store.Process` against a dedicated synthetic probe database/schema in the same PostgreSQL 16 container.
+Use an ephemeral synthetic-only harness built from the pinned App source. The harness must instantiate the exact `server.Server.Handler()` and a synthetic-only `Processor` backed by the real `store.Postgres` adapter and a dedicated probe PostgreSQL 16 database/schema derived from the canonical migration and restricted runtime role.
 
-The harness MUST NOT call GitHub APIs, create Check Runs, use real GitHub deliveries, or write synthetic rows into the authoritative receipt database. Its purpose is to connect the exact HMAC handler path to the exact transaction adapter without requiring GitHub App credentials.
+It must not call GitHub API, create check runs, receive a real GitHub delivery, or write to the authoritative pilot receipt store.
 
-The dedicated probe database/schema must be created from the exact canonical migration and equivalent restricted runtime-role theorem, contain synthetic data only, and be destroyed after evidence is captured.
-
-Send requests through the Funnel endpoint to the harness and prove:
+Required replay/collision matrix:
 
 ```text
-ZC0_W01B_PINNED_APP_SOURCE_REVISION=PASS
-ZC0_W01B_EXACT_SERVER_HANDLER=PASS
-ZC0_W01B_REAL_STORE_POSTGRES=PASS
-ZC0_W01B_SYNTHETIC_PROBE_DATABASE_ONLY=YES
-ZC0_W01B_REAL_GITHUB_DELIVERY=NO
-ZC0_W01B_GITHUB_API_CALLS=0
+FIRST_DELIVERY_GUID=probe-guid-a
+FIRST_DELIVERY_BODY_SHA256=<sha256-a>
+FIRST_DELIVERY_SIGNATURE_VALID=YES
+FIRST_DELIVERY_HTTP_STATUS=202
+FIRST_DELIVERY_STORE_OUTCOME=PROCESSED
 
-ZC0_W01B_FIRST_SIGNED_DELIVERY_HTTP_STATUS=202
-ZC0_W01B_FIRST_SIGNED_DELIVERY_ELAPSED_MS=<10000
-ZC0_W01B_FIRST_STORE_OUTCOME=PROCESSED
-ZC0_W01B_FIRST_ROW_COUNT=1
+SAME_GUID_SAME_BYTES_GUID=probe-guid-a
+SAME_GUID_SAME_BYTES_BODY_SHA256=<sha256-a>
+SAME_GUID_SAME_BYTES_SIGNATURE_VALID=YES
+SAME_GUID_SAME_BYTES_HTTP_STATUS=202
+SAME_GUID_SAME_BYTES_STORE_OUTCOME=DUPLICATE
 
-ZC0_W01B_REPLAY_SAME_GUID_SAME_BYTES_HTTP_STATUS=202
-ZC0_W01B_REPLAY_ELAPSED_MS=<10000
-ZC0_W01B_REPLAY_STORE_OUTCOME=DUPLICATE
-ZC0_W01B_REPLAY_ROW_COUNT=1
+DIFFERENT_GUID_SAME_BYTES_GUID=probe-guid-b
+DIFFERENT_GUID_SAME_BYTES_BODY_SHA256=<sha256-a>
+DIFFERENT_GUID_SAME_BYTES_SIGNATURE_VALID=YES
+DIFFERENT_GUID_SAME_BYTES_HTTP_STATUS=202
+DIFFERENT_GUID_SAME_BYTES_STORE_OUTCOME=PROCESSED
+DIFFERENT_GUID_SAME_BYTES_DELIVERY_ROW_COUNT=2
+DIFFERENT_GUID_SAME_BYTES_RECEIPT_ROW_COUNT=1
 
-ZC0_W01B_SAME_GUID_DIFFERENT_BYTES_STORE_OUTCOME=ERR_FATAL_SECURITY
-ZC0_W01B_COLLISION_ORIGINAL_ROW_PRESERVED=YES
-ZC0_W01B_COLLISION_ROW_COUNT=1
-ZC0_W01B_COLLISION_TRANSACTION_ROLLED_BACK=YES
+SAME_GUID_DIFFERENT_BYTES_GUID=probe-guid-a
+SAME_GUID_DIFFERENT_BYTES_BODY_SHA256=<sha256-b>
+SAME_GUID_DIFFERENT_BYTES_SIGNATURE_RECOMPUTED_FOR_CHANGED_BODY=YES
+SAME_GUID_DIFFERENT_BYTES_SIGNATURE_VALID=YES
+SAME_GUID_DIFFERENT_BYTES_HTTP_STATUS=500
+SAME_GUID_DIFFERENT_BYTES_STORE_OUTCOME=ERR_FATAL_SECURITY
+SAME_GUID_DIFFERENT_BYTES_TRANSACTION_ROLLBACK=PASS
+SAME_GUID_DIFFERENT_BYTES_ORIGINAL_DELIVERY_PRESERVED=PASS
+SAME_GUID_DIFFERENT_BYTES_ORIGINAL_RECEIPT_PRESERVED=PASS
 
-ZC0_W01B_INVALID_SIGNATURE_HTTP_STATUS=401
-ZC0_W01B_INVALID_SIGNATURE_DATABASE_MUTATION=NO
+INVALID_SIGNATURE_HTTP_STATUS=401
+INVALID_SIGNATURE_PROCESSOR_CALLED=NO
+INVALID_SIGNATURE_DATABASE_MUTATION=NO
+```
+
+The different-GUID/same-body case is load-bearing: delivery deduplication is by `delivery_guid`, while receipt identity is separately constrained. The collision case is also load-bearing: the changed body must receive its **own valid HMAC** while retaining the original GUID so the request passes authentication and actually reaches `store.Process`; reusing the stale signature would test only HMAC rejection and is insufficient.
+
+Additional evidence:
+
+```text
+ZC0_W01B_FIRST_DELIVERY_UNDER_10000_MS=PASS
+ZC0_W01B_DUPLICATE_DELIVERY_UNDER_10000_MS=PASS
+ZC0_W01B_GITHUB_API_CALLED=NO
+ZC0_W01B_REAL_CHECK_RUN_CREATED=NO
+ZC0_W01B_AUTHORITATIVE_STORE_MUTATION=NO
 ZC0_W01B_PROBE_DATABASE_DESTROYED=YES
 ```
 
-A collision is expected to fail closed rather than return 2XX. The 10-second 2XX response budget applies to valid first-delivery and valid duplicate/replay requests. Invalid signatures must return 401; conflicting-byte collisions must fail closed while preserving the original row.
+### 12.3 W01C — supported-event exact Runtime response-budget theorem
 
-The probe harness is evidence tooling only and must not be shipped in the production image. If creating that harness requires persistent App-source files rather than an ephemeral exact-source test harness, those files require their own reviewed source amendment first.
+W01A returns before the production processor, and W01B substitutes a synthetic processor. Neither measures the pinned supported-event production path, where `server.Runtime.Process` performs GitHub App JWT bootstrap, installation-token acquisition, `GetPull`, `ListFiles`, `store.Process`, gate evaluation, and `CreateCheckRun`.
+
+Therefore webhook activation remains blocked until a third synthetic proof runs the **exact pinned `server.Runtime`** with the exact `server.Server.Handler()` and real `store.Postgres` while replacing only external GitHub network I/O with a deterministic, network-isolated HTTP transport fixture.
+
+The fixture contract is:
 
 ```text
-ZC0_W01_PRE_ACTIVATION_WEBHOOK_PROOF=BLOCKING
-HEALTHZ_AS_WEBHOOK_PROOF=FORBIDDEN
-REAL_WEBHOOK_ACTIVATION_BEFORE_W01=FORBIDDEN
+ZC0_W01C_EVENT=pull_request
+ZC0_W01C_ACTION=synchronize
+ZC0_W01C_EVENT_SUPPORTED=YES
+ZC0_W01C_EXACT_SERVER_HANDLER=YES
+ZC0_W01C_EXACT_RUNTIME_PROCESS=YES
+ZC0_W01C_REAL_STORE_POSTGRES=YES
+ZC0_W01C_GITHUB_API_BASE_URL=https://api.github.com
+ZC0_W01C_GITHUB_API_BASE_URL_CHANGED=NO
+ZC0_W01C_HTTP_CLIENT_INJECTED=YES
+ZC0_W01C_CUSTOM_ROUND_TRIPPER=NETWORK_BLOCKING_DETERMINISTIC_FIXTURE
+ZC0_W01C_DNS_OR_SOCKET_NETWORK_EGRESS=NO
+ZC0_W01C_REAL_GITHUB_API_REQUEST=NO
+ZC0_W01C_REAL_GITHUB_CREDENTIAL=NO
+ZC0_W01C_REAL_GITHUB_APP_PRIVATE_KEY=NO
+ZC0_W01C_SYNTHETIC_EPHEMERAL_RSA_KEY=YES
+ZC0_W01C_SYNTHETIC_POSITIVE_APP_ID=YES
+ZC0_W01C_SYNTHETIC_POSITIVE_INSTALLATION_ID=YES
+ZC0_W01C_SYNTHETIC_WEBHOOK_SECRET=YES
+ZC0_W01C_DEDICATED_PROBE_DATABASE=YES
+```
+
+The injected `http.Client`/`RoundTripper` must fail closed for any unexpected scheme, host, method, path, query, or call count and must return deterministic fixture responses only for the exact production calls:
+
+```text
+POST /app/installations/<synthetic-installation-id>/access_tokens
+GET  /repos/TheHalfMoon/Kodac/pulls/<probe-pr-number>
+GET  /repos/TheHalfMoon/Kodac/pulls/<probe-pr-number>/files?per_page=100&page=1
+POST /repos/TheHalfMoon/Kodac/check-runs
+```
+
+The fixture must return a deterministic synthetic installation token, exact pull metadata, an exact finite file list, and a synthetic positive check-run ID. The check-run response is fixture data only; no real check run is created.
+
+Send the signed supported synthetic event through the same selected Funnel/Windows-loopback topology to the harness and record the full handler elapsed time.
+
+Required evidence:
+
+```text
+ZC0_W01C_RAW_BODY_HMAC_MATCH=PASS
+ZC0_W01C_INSTALLATION_TOKEN_BOOTSTRAP_FIXTURE_CALL=PASS
+ZC0_W01C_GET_PULL_FIXTURE_CALL=PASS
+ZC0_W01C_LIST_FILES_FIXTURE_CALL=PASS
+ZC0_W01C_STORE_PROCESS=PASS
+ZC0_W01C_GATE_EVALUATION_REACHED=PASS
+ZC0_W01C_CREATE_CHECK_RUN_FIXTURE_CALL=PASS
+ZC0_W01C_UNEXPECTED_FIXTURE_CALL_COUNT=0
+ZC0_W01C_NETWORK_EGRESS_ATTEMPT_COUNT=0
+ZC0_W01C_HTTP_STATUS=202
+ZC0_W01C_FULL_HANDLER_ELAPSED_MS=<integer>
+ZC0_W01C_FULL_HANDLER_UNDER_10000_MS=PASS
+ZC0_W01C_AUTHORITATIVE_STORE_MUTATION=NO
+ZC0_W01C_PROBE_DATABASE_DESTROYED=YES
+```
+
+A deterministic W01C PASS proves the exact supported code path under the bounded synthetic fixture; it does not make a production SLA claim. Until W01A, W01B, and W01C are all executed under a later authorization and pass, the real GitHub webhook activation property remains `UNPROVEN_BLOCKING`.
+
+```text
+ZC0_W01A_STATUS=DEFINED_NOT_EXECUTED
+ZC0_W01B_STATUS=DEFINED_NOT_EXECUTED
+ZC0_W01C_STATUS=DEFINED_NOT_EXECUTED
+REAL_WEBHOOK_ACTIVATION_RESPONSE_DEADLINE=UNPROVEN_BLOCKING
 ```
 
 ---
 
 ## 13. Pilot activation order
 
-This decision does not execute the following steps. If all blockers become canonical and a later execution authorization explicitly permits the pilot, the order is:
+Merging this decision does not execute any step. A later execution authorization must preserve this order:
 
 ```text
 Z0  reverify exact Kodac and App source heads
@@ -543,21 +591,22 @@ Z2  prove canonical packaging
 Z3  prove file-backed secret delivery
 Z4  prove persistent PostgreSQL 16 volume and recovery
 Z5  prove exact runtime DB role theorem on persistent store
-Z6  install/configure Tailscale on the Windows 11 host only under the proven zero-cost plan; enable Run Unattended; do not install/run Tailscale in WSL2 or Docker; use no billing credentials
-Z7  prove single-node ingress preflight: Windows-only Tailscale node, MagicDNS, HTTPS certificates, funnel node attribute, Run Unattended, Docker App port bound to 127.0.0.1 only, Windows-loopback /healthz exact match, and no public PostgreSQL bind
-Z8  establish stable Funnel hostname to the proven Windows-loopback App origin with synthetic local service only
+Z6  install/configure Tailscale on Windows 11 host only under the proven zero-cost plan; Run Unattended; no WSL2/Docker Tailscale; no billing credentials
+Z7  prove Windows-only node, MagicDNS, HTTPS certificates, funnel node attribute, loopback-only App bind, exact Windows-loopback /healthz response, and no public PostgreSQL bind
+Z8  establish stable Funnel hostname to the Windows-loopback App origin with synthetic local service only
 Z9  prove /healthz exact response through Funnel
-Z10 prove host restart + Windows Run Unattended + Funnel --bg recovery with synthetic service
+Z10 prove host restart + Run Unattended + Funnel background recovery with synthetic service
 Z11 founder reviews non-secret pre-App evidence
-Z12 separately authorize real GitHub App registration/secret loading
-Z13 register private GitHub App with webhook still inactive
-Z14 load real secrets through the approved secret-file boundary
+Z12 separately authorize real GitHub App registration and real-secret loading
+Z13 register private GitHub App with webhook inactive
+Z14 load real secrets only through the approved secret-file boundary
 Z15 install App only on TheHalfMoon/Kodac with webhook inactive
-Z16 prove exact identities and configuration with real webhook still inactive
-Z17 execute ZC0-W01A exact-binary signed ingress/response-budget proof with no real GitHub delivery
-Z18 execute ZC0-W01B exact-handler/store synthetic transaction/replay proof with no GitHub API
-Z19 founder reviews the complete non-secret pre-activation evidence
-Z20 separately authorize real webhook activation
+Z16 prove exact identities and configuration with real webhook inactive
+Z17 execute W01A exact-binary signed ingress/HMAC/basic response-budget proof with no real GitHub delivery
+Z18 execute W01B exact-handler/PostgreSQL replay/collision theorem with no GitHub API
+Z19 execute W01C exact supported Runtime response-budget theorem with network-blocking deterministic GitHub API fixture
+Z20 founder reviews the complete non-secret pre-activation evidence
+Z21 separately authorize real webhook activation
 ```
 
 No step may be skipped or reordered merely because the underlying software is free.
@@ -566,7 +615,7 @@ No step may be skipped or reordered merely because the underlying software is fr
 
 ## 14. Explicit non-grants
 
-Merging this decision alone does NOT authorize:
+Merging this decision alone authorizes none of the following:
 
 ```text
 GITHUB_ORGANIZATION_CREATION=NO
@@ -591,11 +640,16 @@ REAL_GITHUB_WEBHOOK_DELIVERY=NO
 REAL_SECRET_ACCESS=NO
 REAL_SECRET_LOADING=NO
 ZC0_U01_EXECUTION=NO
-ZC0_W01_EXECUTION=NO
+ZC0_W01A_EXECUTION=NO
+ZC0_W01B_EXECUTION=NO
+ZC0_W01C_EXECUTION=NO
 AG1B_PRODUCTION_EXECUTION=NO
 AG1C_START=NO
 AG2_START=NO
 TRUST_ROOT_ESTABLISHMENT=NO
+B1_V2_START=NO
+B2A_V2_START=NO
+B2B_START=NO
 H4_COMPLETE=NO
 ```
 
@@ -614,7 +668,7 @@ INDEPENDENT_EXACT_HEAD_REVIEW=PASS
 UNRESOLVED_MATERIAL_FINDINGS=0
 ```
 
-For a docs-only candidate, the repository runtime workflow may legitimately skip its runtime-execution job only when all of the following are true on the same exact head:
+For a docs-only head, the repository runtime workflow satisfies the gate only under this exact shape:
 
 ```text
 RUNTIME_CHANGE_CLASSIFIER=NON_RUNTIME
@@ -624,9 +678,7 @@ GOVERNANCE_GATE=PASS
 DOCS_ONLY_RUNTIME_SKIP_COUNTS_AS_GATE_PASS=YES
 ```
 
-A skipped runtime job by itself is not a pass. The classifier result and the terminal `k2-runtime-gate=PASS` are required.
-
-Exact-head workflow run IDs and check results are immutable **PR qualification evidence**, not self-referential content of this candidate document. They must be posted in the PR immediately before merge and reverified after every head change. Embedding a workflow run ID generated for commit `H` into a new commit would create `H+1` and invalidate the claim that the embedded run proves the new exact head.
+Immutable exact-head workflow IDs belong in the final PR qualification evidence, not inside this document. Embedding a run ID generated for head H into the document would create H+1 and invalidate H as exact-head evidence.
 
 ```text
 EXACT_HEAD_WORKFLOW_RUN_IDS_LOCATION=PR_QUALIFICATION_EVIDENCE
@@ -635,7 +687,7 @@ HEAD_CHANGE_REQUIRES_FRESH_WORKFLOWS=YES
 HEAD_CHANGE_REQUIRES_FRESH_INDEPENDENT_REVIEW=YES
 ```
 
-PR-state semantics are:
+PR-state semantics:
 
 ```text
 PR_DRAFT_DURING_CONSTRUCTION_AND_INTERNAL_GATES=YES
@@ -645,37 +697,39 @@ READY_TRANSITION_AUTHORIZES_EXTERNAL_MUTATION=NO
 MERGE_REMAINS_BLOCKED_UNTIL_REVIEW_AND_FINDING_RECONCILIATION=YES
 ```
 
-If merged, only the following becomes true:
+If merged, only this decision state becomes canonical:
 
 ```text
 AG1B_ZERO_COST_CONTROL_PLANE_DECISION=CANONICAL
 ZERO_COST_FOUNDER_HOSTED_PILOT_ARCHITECTURE=CONDITIONALLY_SELECTED_BUT_BLOCKED
 TAILSCALE_ZERO_COST_PLAN_ELIGIBILITY=UNPROVEN_BLOCKING
 ZC0_U01_SINGLE_NODE_INGRESS_BOUNDARY=DEFINED_BUT_NOT_EXECUTED
-ZC0_W01_PRE_ACTIVATION_WEBHOOK_PROOF=DEFINED_BUT_NOT_EXECUTED
+ZC0_W01A_EXACT_BINARY_PROOF=DEFINED_BUT_NOT_EXECUTED
+ZC0_W01B_REPLAY_COLLISION_PROOF=DEFINED_BUT_NOT_EXECUTED
+ZC0_W01C_SUPPORTED_RUNTIME_PROOF=DEFINED_BUT_NOT_EXECUTED
+REAL_WEBHOOK_ACTIVATION_RESPONSE_DEADLINE=UNPROVEN_BLOCKING
 ```
 
 The existing Google Cloud AG1-B authorization remains historical/canonical but is not executable while the founder's hard zero-provider-spend constraint remains in force.
 
 ---
 
-## 16. Primary-source and source-code research record
+## 16. Primary-source and pinned-source research record
 
-Research verified on 2026-08-22 against current primary documentation, live GitHub repository metadata, and the pinned canonical App source:
+Research verified on 2026-08-22 against current primary documentation, live GitHub metadata, and the pinned canonical App source:
 
-- GitHub webhook timeout and failed-delivery behavior: https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/troubleshooting-webhooks and https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries
-- Tailscale Funnel behavior/limits: https://tailscale.com/docs/features/tailscale-funnel and https://tailscale.com/docs/reference/tailscale-cli/funnel
-- Tailscale Windows/WSL2 boundary: https://tailscale.com/docs/install/windows/wsl2
-- Tailscale Windows restart continuity / Run Unattended: https://tailscale.com/docs/how-to/run-unattended
-- Tailscale MagicDNS: https://tailscale.com/docs/features/magicdns
-- Tailscale HTTPS certificates: https://tailscale.com/docs/how-to/set-up-https-certificates
-- Tailscale pricing and Personal non-commercial restriction: https://tailscale.com/pricing and https://tailscale.com/docs/account/manage-plans/downgrade-plan
-- Tailscale free-plan alternatives including Community on GitHub: https://tailscale.com/docs/account/manage-plans/free-plans-discounts
-- Supabase Free pausing/billing/production checklist: https://supabase.com/docs/guides/platform/free-project-pausing , https://supabase.com/docs/guides/platform/billing-on-supabase , https://supabase.com/docs/guides/deployment/going-into-prod
-- Oracle Always Free resources and idle reclamation: https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
-- Cloudflare Tunnel and Quick Tunnel limitations: https://developers.cloudflare.com/tunnel/ and https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/
-- Cloudflare Containers pricing: https://developers.cloudflare.com/containers/pricing/
-- ngrok current Free-plan limits: https://ngrok.com/pricing
-- KODAC repository owner type: live GitHub metadata for `TheHalfMoon/Kodac` reports owner `TheHalfMoon` with `type=User`.
-- KODAC repository license proof: canonical `LICENSE` blob `261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64` (Apache-2.0).
-- Canonical App handler/runtime: `TheHalfMoon/kodac-phase-b-gate` commit `79a5e3a5c3b0f4882e8c9c864e314c0fab3c9a40`, `internal/server/server.go` blob `352b342f859d22ad982f3e38736469198af41e1d`; HMAC authentication occurs before unsupported-event early return, while supported-event `Runtime.Process` reaches GitHub API bootstrap before completing receipt/gate processing.
+- GitHub webhook timeout and failed-delivery behavior: `https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/troubleshooting-webhooks` and `https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries`
+- Tailscale Funnel behavior and limits: `https://tailscale.com/docs/features/tailscale-funnel` and `https://tailscale.com/docs/reference/tailscale-cli/funnel`
+- Tailscale Windows/WSL2 boundary: `https://tailscale.com/docs/install/windows/wsl2`
+- Tailscale Windows restart continuity / Run Unattended: `https://tailscale.com/docs/how-to/run-unattended`
+- Tailscale MagicDNS and HTTPS certificates: `https://tailscale.com/docs/features/magicdns` and `https://tailscale.com/docs/how-to/set-up-https-certificates`
+- Tailscale pricing, Personal restrictions, and Community on GitHub: `https://tailscale.com/pricing`, `https://tailscale.com/docs/account/manage-plans/downgrade-plan`, and `https://tailscale.com/docs/account/manage-plans/free-plans-discounts`
+- Supabase Free pausing/billing/production guidance: `https://supabase.com/docs/guides/platform/free-project-pausing`, `https://supabase.com/docs/guides/platform/billing-on-supabase`, and `https://supabase.com/docs/guides/deployment/going-into-prod`
+- Oracle Always Free resources: `https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm`
+- Cloudflare Tunnel/Quick Tunnel and Containers pricing: `https://developers.cloudflare.com/tunnel/`, `https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/`, and `https://developers.cloudflare.com/containers/pricing/`
+- ngrok pricing: `https://ngrok.com/pricing`
+- Canonical App handler/runtime: `internal/server/server.go` at App source `79a5e3a5c3b0f4882e8c9c864e314c0fab3c9a40`; HMAC authentication precedes unsupported-event early return, while supported-event `Runtime.Process` performs GitHub API bootstrap and repository reads before store processing.
+- Canonical store contract: `internal/store/store.go` at the same App source; delivery duplicate/collision identity is keyed by `delivery_guid`, with raw-payload hash collision detection, while receipt identity is separately verified.
+- Canonical GitHub API client: `internal/githubapi/client.go`; API base URL remains `https://api.github.com`, and `Runtime.HTTP` permits an injected HTTP client for a deterministic no-network fixture without rewriting production logic.
+- Canonical config: `internal/config/config.go`; production validation requires `https://api.github.com`, therefore W01C must preserve that BaseURL and isolate external I/O at the injected transport layer rather than changing configuration semantics.
+- Canonical supported-event set: `internal/webhook/payload.go`; supported events include `pull_request/synchronize`, which is selected for W01C because it exercises the production supported-event path without requiring an authority-receipt-producing founder comment.
