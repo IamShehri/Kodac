@@ -195,7 +195,7 @@ NONCONFIGURABLE_BANDWIDTH_LIMITS=YES
 PRODUCTION_SLA=NOT_PROVEN
 ```
 
-Tailscale Funnel can expose a local HTTP service to the public Internet through a predictable `*.ts.net` hostname, automatically provisions HTTPS, is available on all plans, and can persist with `--bg` across device/Tailscale restarts.
+Tailscale Funnel can expose a local HTTP service to the public Internet through a predictable `*.ts.net` hostname, automatically provisions HTTPS, is available on all plans, and can persist with `--bg` across service restarts when the underlying Windows Tailscale node itself is available.
 
 Funnel availability on all plans does **not** prove that this project is eligible for a zero-cost plan. Plan eligibility is a separate blocking theorem.
 
@@ -265,7 +265,16 @@ AG1B_ZERO_COST_DOMAIN_PURCHASE_REQUIRED=NO
 AG1B_ZERO_COST_PROVIDER_BILLING_REQUIRED=NO
 AG1B_ZERO_COST_PRODUCTION_EQUIVALENCE=NO
 AG1B_ZERO_COST_H4_CLOSURE_AUTHORITY=NO
+
+TAILSCALE_PILOT_NODE_OS=Windows_11
+TAILSCALE_INSTALLATION_BOUNDARY=WINDOWS_HOST_ONLY
+TAILSCALE_FUNNEL_OWNER=WINDOWS_HOST_TAILSCALE_NODE
+TAILSCALE_IN_WSL2=FORBIDDEN
+TAILSCALE_IN_DOCKER_CONTAINER=FORBIDDEN
+APP_CONTAINER_HOST_BIND=127.0.0.1_ONLY
 ```
+
+Tailscale's Windows/WSL2 guidance recommends running Tailscale on the Windows host rather than simultaneously inside WSL2. This decision therefore fixes the Windows 11 host as the single Tailscale/Funnel node. WSL2 remains the development/container shell and Docker Desktop remains the container runtime, but neither becomes a second Tailscale node.
 
 Target topology applies only after a zero-cost Tailscale plan path is proven eligible and all other blockers are separately repaired:
 
@@ -274,15 +283,16 @@ GitHub App webhook
         |
         | HTTPS :443
         v
-stable <node>.<tailnet>.ts.net
+stable <windows-node>.<tailnet>.ts.net
         |
         v
-Tailscale Funnel on founder host
+Tailscale Funnel on Windows 11 host only
         |
-        | localhost only
+        | proxy to Windows loopback
         v
 127.0.0.1:<APP_HOST_PORT>
         |
+        | Docker Desktop host-port bridge
         v
 KODAC Phase-B Go container
         |
@@ -294,7 +304,7 @@ PostgreSQL 16 container
 persistent Docker volume
 ```
 
-The PostgreSQL container must not publish port 5432 to the LAN or public Internet.
+The App host port must bind to `127.0.0.1` only. The PostgreSQL container must not publish port 5432 to the LAN or public Internet.
 
 ---
 
@@ -395,7 +405,7 @@ No production durability or SLA claim may be made from a single founder workstat
 
 ---
 
-## 11. Blocking control ZC0-U01 — founder-host availability
+## 11. Blocking control ZC0-U01 — founder-host availability and single-node ingress boundary
 
 ```text
 FOUNDER_HOST_POWER_DEPENDENCY=YES
@@ -403,9 +413,37 @@ FOUNDER_HOST_INTERNET_DEPENDENCY=YES
 DOCKER_DESKTOP_DEPENDENCY=YES
 TAILSCALE_DAEMON_DEPENDENCY=YES
 NO_PROVIDER_SLA=YES
+
+TAILSCALE_NODE=WINDOWS_HOST_ONLY
+TAILSCALE_WSL2_NODE=FORBIDDEN
+TAILSCALE_DOCKER_NODE=FORBIDDEN
+TAILSCALE_WINDOWS_RUN_UNATTENDED_REQUIRED=YES
 ```
 
 The pilot endpoint may be used only while host availability is explicitly observed. A failed or unavailable endpoint is fail-closed and must not be reclassified as successful authority.
+
+On Windows, future pilot execution must enable and prove Tailscale's Run Unattended mode before claiming restart continuity. `tailscale funnel --bg` persists the Funnel configuration, but restart continuity is not proven unless the Windows Tailscale service/node itself returns without an interactive user login.
+
+Before creating a Funnel, a later separately authorized preflight must prove all of the following without real GitHub delivery:
+
+```text
+ZC0_U01_WINDOWS_TAILSCALE_NODE_ONLY=PASS
+ZC0_U01_WSL2_TAILSCALE_RUNNING=NO
+ZC0_U01_DOCKER_TAILSCALE_RUNNING=NO
+ZC0_U01_MAGICDNS_ENABLED=PASS
+ZC0_U01_HTTPS_CERTIFICATES_ENABLED=PASS
+ZC0_U01_FUNNEL_NODE_ATTRIBUTE=PASS
+ZC0_U01_WINDOWS_RUN_UNATTENDED=PASS
+ZC0_U01_APP_HOST_BIND=127.0.0.1_ONLY
+ZC0_U01_POSTGRES_PUBLIC_BIND=NO
+ZC0_U01_LOCAL_HEALTH_URL=http://127.0.0.1:<APP_HOST_PORT>/healthz
+ZC0_U01_LOCAL_HEALTH_HTTP_STATUS=200
+ZC0_U01_LOCAL_HEALTH_CONTENT_TYPE=application/json
+ZC0_U01_LOCAL_HEALTH_BODY_EXACT={"status":"live"}
+ZC0_U01_WINDOWS_LOOPBACK_TO_CONTAINER=PASS
+```
+
+The loopback health proof must be performed from the Windows host, not only from inside WSL2 or inside the container. This proves that the exact origin address supplied to Funnel reaches the intended Docker-published App port without exposing that port on a non-loopback interface.
 
 GitHub's 10-second webhook response requirement remains load-bearing.
 
@@ -505,20 +543,21 @@ Z2  prove canonical packaging
 Z3  prove file-backed secret delivery
 Z4  prove persistent PostgreSQL 16 volume and recovery
 Z5  prove exact runtime DB role theorem on persistent store
-Z6  install/configure Tailscale under the proven zero-cost plan without billing credentials
-Z7  establish stable Funnel hostname with synthetic local service only
-Z8  prove /healthz exact response through Funnel
-Z9  prove host restart / Funnel --bg recovery with synthetic service
-Z10 founder reviews non-secret pre-App evidence
-Z11 separately authorize real GitHub App registration/secret loading
-Z12 register private GitHub App with webhook still inactive
-Z13 load real secrets through the approved secret-file boundary
-Z14 install App only on TheHalfMoon/Kodac with webhook inactive
-Z15 prove exact identities and configuration with real webhook still inactive
-Z16 execute ZC0-W01A exact-binary signed ingress/response-budget proof with no real GitHub delivery
-Z17 execute ZC0-W01B exact-handler/store synthetic transaction/replay proof with no GitHub API
-Z18 founder reviews the complete non-secret pre-activation evidence
-Z19 separately authorize real webhook activation
+Z6  install/configure Tailscale on the Windows 11 host only under the proven zero-cost plan; enable Run Unattended; do not install/run Tailscale in WSL2 or Docker; use no billing credentials
+Z7  prove single-node ingress preflight: Windows-only Tailscale node, MagicDNS, HTTPS certificates, funnel node attribute, Run Unattended, Docker App port bound to 127.0.0.1 only, Windows-loopback /healthz exact match, and no public PostgreSQL bind
+Z8  establish stable Funnel hostname to the proven Windows-loopback App origin with synthetic local service only
+Z9  prove /healthz exact response through Funnel
+Z10 prove host restart + Windows Run Unattended + Funnel --bg recovery with synthetic service
+Z11 founder reviews non-secret pre-App evidence
+Z12 separately authorize real GitHub App registration/secret loading
+Z13 register private GitHub App with webhook still inactive
+Z14 load real secrets through the approved secret-file boundary
+Z15 install App only on TheHalfMoon/Kodac with webhook inactive
+Z16 prove exact identities and configuration with real webhook still inactive
+Z17 execute ZC0-W01A exact-binary signed ingress/response-budget proof with no real GitHub delivery
+Z18 execute ZC0-W01B exact-handler/store synthetic transaction/replay proof with no GitHub API
+Z19 founder reviews the complete non-secret pre-activation evidence
+Z20 separately authorize real webhook activation
 ```
 
 No step may be skipped or reordered merely because the underlying software is free.
@@ -551,6 +590,7 @@ APP_WEBHOOK_ACTIVATION=NO
 REAL_GITHUB_WEBHOOK_DELIVERY=NO
 REAL_SECRET_ACCESS=NO
 REAL_SECRET_LOADING=NO
+ZC0_U01_EXECUTION=NO
 ZC0_W01_EXECUTION=NO
 AG1B_PRODUCTION_EXECUTION=NO
 AG1C_START=NO
@@ -611,6 +651,7 @@ If merged, only the following becomes true:
 AG1B_ZERO_COST_CONTROL_PLANE_DECISION=CANONICAL
 ZERO_COST_FOUNDER_HOSTED_PILOT_ARCHITECTURE=CONDITIONALLY_SELECTED_BUT_BLOCKED
 TAILSCALE_ZERO_COST_PLAN_ELIGIBILITY=UNPROVEN_BLOCKING
+ZC0_U01_SINGLE_NODE_INGRESS_BOUNDARY=DEFINED_BUT_NOT_EXECUTED
 ZC0_W01_PRE_ACTIVATION_WEBHOOK_PROOF=DEFINED_BUT_NOT_EXECUTED
 ```
 
@@ -624,6 +665,10 @@ Research verified on 2026-08-22 against current primary documentation, live GitH
 
 - GitHub webhook timeout and failed-delivery behavior: https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/troubleshooting-webhooks and https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries
 - Tailscale Funnel behavior/limits: https://tailscale.com/docs/features/tailscale-funnel and https://tailscale.com/docs/reference/tailscale-cli/funnel
+- Tailscale Windows/WSL2 boundary: https://tailscale.com/docs/install/windows/wsl2
+- Tailscale Windows restart continuity / Run Unattended: https://tailscale.com/docs/how-to/run-unattended
+- Tailscale MagicDNS: https://tailscale.com/docs/features/magicdns
+- Tailscale HTTPS certificates: https://tailscale.com/docs/how-to/set-up-https-certificates
 - Tailscale pricing and Personal non-commercial restriction: https://tailscale.com/pricing and https://tailscale.com/docs/account/manage-plans/downgrade-plan
 - Tailscale free-plan alternatives including Community on GitHub: https://tailscale.com/docs/account/manage-plans/free-plans-discounts
 - Supabase Free pausing/billing/production checklist: https://supabase.com/docs/guides/platform/free-project-pausing , https://supabase.com/docs/guides/platform/billing-on-supabase , https://supabase.com/docs/guides/deployment/going-into-prod
